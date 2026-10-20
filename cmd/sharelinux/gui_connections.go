@@ -40,6 +40,7 @@ type connectionsPage struct {
 	hint         *gtk.Box
 
 	savedRows []*adw.ActionRow
+	popovers  []*gtk.PopoverMenu
 	foundRows []*adw.ActionRow
 	statuses  map[string]rowStatus
 
@@ -284,6 +285,10 @@ func matchesQuery(query string, fields ...string) bool {
 
 // rebuild redraws both lists from the saved and found data and the search text.
 func (p *connectionsPage) rebuild() {
+	for _, popover := range p.popovers {
+		popover.Unparent()
+	}
+	p.popovers = nil
 	for _, row := range p.savedRows {
 		p.savedGroup.Remove(row)
 	}
@@ -383,6 +388,7 @@ func (p *connectionsPage) addContextMenu(row *adw.ActionRow, connection savedCon
 	popover.SetParent(row)
 	popover.SetHasArrow(false)
 	popover.SetHAlign(gtk.AlignStart)
+	p.popovers = append(p.popovers, popover)
 	show := func(x, y float64) {
 		rect := gdkRect(int(x), int(y))
 		popover.SetPointingTo(rect)

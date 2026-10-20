@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"sync"
 
@@ -102,7 +103,7 @@ func (b *clipboardBridge) toMac() {
 	formats := b.clipboard.Formats()
 	switch {
 	case formats.ContainGType(coreglib.TypeString):
-		b.clipboard.ReadTextAsync(nil, func(result gio.AsyncResulter) {
+		b.clipboard.ReadTextAsync(context.Background(), func(result gio.AsyncResulter) {
 			text, err := b.clipboard.ReadTextFinish(result)
 			if err != nil || text == "" || text == b.last || b.isClosed() {
 				return
@@ -114,7 +115,7 @@ func (b *clipboardBridge) toMac() {
 			}
 		})
 	case formats.ContainMIMEType(mimePNG) || formats.ContainGType(gdk.GTypeTexture):
-		b.clipboard.ReadTextureAsync(nil, func(result gio.AsyncResulter) {
+		b.clipboard.ReadTextureAsync(context.Background(), func(result gio.AsyncResulter) {
 			texture, err := b.clipboard.ReadTextureFinish(result)
 			if err != nil || texture == nil || b.isClosed() {
 				return

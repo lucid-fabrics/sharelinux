@@ -805,11 +805,7 @@ func (v *sessionView) keyRuneFor(controller *gtk.EventControllerKey, keyval, key
 	if state&modAltGr != 0 {
 		return rune(gdk.KeyvalToUnicode(keyval))
 	}
-	group := 0
-	if key, ok := controller.CurrentEvent().(*gdk.KeyEvent); ok {
-		group = int(key.Layout())
-	}
-	base, _, _, _, ok := v.screen.Display().TranslateKey(keycode, 0, group)
+	base, _, _, _, ok := v.screen.Display().TranslateKey(keycode, 0, int(controller.Group()))
 	if !ok {
 		base = gdk.KeyvalToLower(keyval)
 	}
