@@ -7,6 +7,7 @@ import (
 	"syscall"
 
 	E "github.com/sagernet/sing/common/exceptions"
+	"golang.org/x/sys/unix"
 )
 
 // ScreensharingAgent writes the same UDP port into both endpoint sockaddrs
@@ -26,9 +27,9 @@ func dialLeg(local netip.Addr, remote netip.AddrPort, receiveBuffer int) (*net.U
 		Control: func(network string, address string, raw syscall.RawConn) error {
 			var optionErr error
 			err := raw.Control(func(fd uintptr) {
-				optionErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+				optionErr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEADDR, 1)
 				if optionErr == nil {
-					optionErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEPORT, 1)
+					optionErr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEPORT, 1)
 				}
 			})
 			return E.Errors(err, optionErr)
