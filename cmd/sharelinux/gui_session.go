@@ -24,6 +24,8 @@ import (
 const (
 	sessionPageTag = "session"
 	statsInterval  = 250 * time.Millisecond
+	// pollInterval is how often a session collects what the network goroutines have for it, in milliseconds.
+	pollInterval = 8
 	// modAltGr is the Mod5 bit GDK reports for the third level key.
 	modAltGr gdk.ModifierType = 1 << 7
 	// revealZone is how far from the top edge the pointer wakes the header in fullscreen.
@@ -83,15 +85,15 @@ type sessionView struct {
 	pointerHeld        bool
 	fetching           bool
 
-	transfer *transfers
-	clip     *clipboardBridge
-	meter    meter
-	frames   uint64
-	fps      float64
-	statsAt  time.Time
-	loggedAt time.Time
-	tickID   uint
-	ended    bool
+	transfer  *transfers
+	clip      *clipboardBridge
+	meter     meter
+	frames    uint64
+	fps       float64
+	statsAt   time.Time
+	loggedAt  time.Time
+	pollTimer coreglib.SourceHandle
+	ended     bool
 
 	layoutSeen   bool
 	lastWidth    int
@@ -211,6 +213,14 @@ func (v *sessionView) buildHeader(name string) *adw.HeaderBar {
 	header.PackEnd(v.qualityButton)
 	v.displayButton, v.displayText = menuButtonWithLabel("video-display-symbolic", "All displays")
 	header.PackEnd(v.displayButton)
+	// A closed menu hands the keyboard back to the picture, so the next key goes to the Mac.
+	for _, button := range []*gtk.MenuButton{v.sessionMenu, v.qualityButton, v.displayButton} {
+		button.NotifyProperty("active", func() {
+			if !button.Active() && v.controlling() {
+				v.screen.GrabFocus()
+			}
+		})
+	}
 	return header
 }
 
@@ -412,12 +422,14 @@ func (v *sessionView) start() {
 	if !v.live.req.opts.NoClipboard {
 		v.clip = newClipboardBridge(v.client, v.screen, func(message string) { v.notify(message) })
 	}
-	v.tickID = v.screen.AddTickCallback(func(gtk.Widgetter, gdk.FrameClocker) bool {
+	// A frame clock tick would stop while the picture is still, and with it the
+	// check for a connection that ended, so a timer drives the polling instead.
+	v.pollTimer = coreglib.TimeoutAdd(pollInterval, func() bool {
 		if v.ended {
 			return false
 		}
 		v.poll()
-		return true
+		return !v.ended
 	})
 	v.applyMode(v.mode, false)
 	v.setStats(v.showStats)
@@ -441,7 +453,7 @@ func (v *sessionView) end() {
 	}
 	v.screen.inhibitShortcuts(false)
 	v.screen.confinePointer(false)
-	v.screen.RemoveTickCallback(v.tickID)
+	coreglib.SourceRemove(v.pollTimer)
 	live := v.live
 	go func() {
 		live.cancel()
@@ -940,6 +952,7 @@ func (v *sessionView) onButton(gesture *gtk.GestureSingle, x, y float64, down bo
 		return
 	}
 	if down {
+		v.screen.GrabFocus()
 		fx, fy, inside := v.toFramebuffer(x, y)
 		if v.mode == rfb.ModeExclusiveControl {
 			fx, fy, inside = v.pointerX, v.pointerY, true
@@ -950,7 +963,6 @@ func (v *sessionView) onButton(gesture *gtk.GestureSingle, x, y float64, down bo
 		if !inside {
 			return
 		}
-		v.screen.GrabFocus()
 		v.buttons |= bit
 		v.sendPointer(fx, fy)
 		return
