@@ -137,6 +137,9 @@ func (v *view) run() error {
 }
 
 // release hands back everything the view took: grabs, held keys and SDL objects.
+	if v.clip != nil {
+		v.clip.close()
+	}
 func (v *view) release() {
 	v.releaseInput()
 	_ = v.canvas.window.SetKeyboardGrab(false)

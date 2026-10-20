@@ -2,6 +2,7 @@ package main
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/Zyko0/go-sdl3/sdl"
 	"github.com/nekohasekai/open-screen-sharing/internal/rfb"
@@ -20,17 +21,44 @@ type clipboardBridge struct {
 	// last is the text both sides last agreed on. It stops a copy from bouncing back.
 	last string
 
-	access   sync.Mutex
-	offer    map[string][]byte
-	callback sdl.ClipboardDataCallback
-	cleanup  sdl.ClipboardCleanupCallback
+	access sync.Mutex
+	offer  map[string][]byte
+}
+
+// purego can create only about 2000 callbacks for the life of the process and
+// never frees them, so the two SDL callbacks are made once and serve whichever
+// bridge is active.
+var (
+	callbackOnce    sync.Once
+	dataCallback    sdl.ClipboardDataCallback
+	cleanupCallback sdl.ClipboardCleanupCallback
+	activeBridge    atomic.Pointer[clipboardBridge]
+)
+
+func clipboardCallbacks() (sdl.ClipboardDataCallback, sdl.ClipboardCleanupCallback) {
+	callbackOnce.Do(func() {
+		dataCallback = sdl.NewClipboardDataCallback(func(mime string) []byte {
+			bridge := activeBridge.Load()
+			if bridge == nil {
+				return nil
+			}
+			return bridge.data(mime)
+		})
+		cleanupCallback = sdl.NewClipboardCleanupCallback(func() {})
+	})
+	return dataCallback, cleanupCallback
 }
 
 func newClipboardBridge(client *rfb.Client) *clipboardBridge {
 	bridge := &clipboardBridge{client: client}
-	bridge.callback = sdl.NewClipboardDataCallback(bridge.data)
-	bridge.cleanup = sdl.NewClipboardCleanupCallback(func() {})
+	clipboardCallbacks()
+	activeBridge.Store(bridge)
 	return bridge
+}
+
+// close stops the shared callbacks from reading this bridge.
+func (b *clipboardBridge) close() {
+	activeBridge.CompareAndSwap(b, nil)
 }
 
 func (b *clipboardBridge) data(mime string) []byte {
@@ -62,7 +90,8 @@ func (b *clipboardBridge) fromMac(clipboard *rfb.Clipboard) error {
 		b.offer = offer
 		b.access.Unlock()
 		b.last = text
-		return sdl.SetClipboardData(b.callback, b.cleanup, mimes)
+		callback, cleanup := clipboardCallbacks()
+		return sdl.SetClipboardData(callback, cleanup, mimes)
 	case hasText && text != "" && text != b.last:
 		b.last = text
 		return sdl.SetClipboardText(text)
