@@ -201,4 +201,3 @@ func (g *gui) displaysPage(prefs settings, change func(func(*settings))) *adw.Pr
 	page.Add(virtual)
 	return page
 }
-

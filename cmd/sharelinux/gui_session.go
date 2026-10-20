@@ -93,6 +93,8 @@ type sessionView struct {
 	ended    bool
 
 	layoutSeen   bool
+	lastWidth    int
+	lastHeight   int
 	virtualAsked bool
 	fullscreen   bool
 	hideTimer    coreglib.SourceHandle
@@ -129,6 +131,7 @@ func (v *sessionView) build() {
 	}
 
 	v.screen = newScreenView()
+	v.g.window.SetTitle(name)
 	v.im = gtk.NewIMMulticontext()
 	v.im.SetClientWidget(v.screen)
 	v.scroll = gtk.NewScrolledWindow()
@@ -436,6 +439,7 @@ func (v *sessionView) end() {
 		v.clip.close()
 	}
 	v.screen.inhibitShortcuts(false)
+	v.screen.confinePointer(false)
 	v.screen.RemoveTickCallback(v.tickID)
 	live := v.live
 	go func() {
@@ -462,6 +466,12 @@ func (v *sessionView) poll() {
 		v.sendPointer(v.pointerX, v.pointerY)
 	}
 	v.syncPicture()
+	if width, height := v.screen.Width(), v.screen.Height(); width != v.lastWidth || height != v.lastHeight {
+		v.lastWidth, v.lastHeight = width, height
+		if v.mode == rfb.ModeExclusiveControl {
+			v.applyGrabs()
+		}
+	}
 	if cursor, changed := v.h.takeCursor(); changed {
 		v.screen.setCursor(cursor)
 		v.updateSystemCursor()
@@ -685,10 +695,15 @@ func (v *sessionView) applyMode(mode rfb.Mode, announce bool) {
 	}
 }
 
-// applyGrabs hands the system's shortcuts to the window while controlling.
+// applyGrabs hands the system's shortcuts to the window while controlling, and
+// in exclusive mode also keeps the pointer inside the window where the display
+// server allows it (X11). Wayland has no pointer confinement in GTK 4, so there
+// the pointer can still leave the window; Ctrl+Alt+Esc works either way.
 func (v *sessionView) applyGrabs() {
 	grab := v.focused && v.controlling() && !v.g.app.opts.NoGrab
 	v.screen.inhibitShortcuts(grab)
+	exclusive := v.focused && v.mode == rfb.ModeExclusiveControl && !v.g.app.opts.NoGrab
+	v.screen.confinePointer(exclusive)
 }
 
 // updateSystemCursor hides the local arrow while the Mac's own cursor is drawn over the picture.
@@ -762,6 +777,7 @@ func (v *sessionView) installInput() {
 		v.im.FocusOut()
 		v.releaseInput()
 		v.screen.inhibitShortcuts(false)
+		v.screen.confinePointer(false)
 	})
 	v.screen.AddController(focus)
 
@@ -1163,6 +1179,11 @@ func (v *sessionView) installFullscreenReveal() {
 	v.g.window.NotifyProperty("fullscreened", func() {
 		v.fullscreen = v.g.window.IsFullscreen()
 		v.toolbar.SetExtendContentToTopEdge(v.fullscreen)
+		if v.fullscreen {
+			v.toolbar.SetTopBarStyle(adw.ToolbarRaised)
+		} else {
+			v.toolbar.SetTopBarStyle(adw.ToolbarFlat)
+		}
 		v.toolbar.SetRevealTopBars(!v.fullscreen)
 	})
 	motion := gtk.NewEventControllerMotion()

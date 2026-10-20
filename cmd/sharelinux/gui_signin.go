@@ -227,7 +227,9 @@ func (s *signInDialog) build() {
 			s.g.signIn = nil
 		}
 	})
-	for _, row := range []interface{ ConnectEntryActivated(func()) coreglib.SignalHandle }{s.address, s.account, s.password} {
+	for _, row := range []interface {
+		ConnectEntryActivated(func()) coreglib.SignalHandle
+	}{s.address, s.account, s.password} {
 		row.ConnectEntryActivated(s.connect)
 	}
 }
@@ -360,10 +362,11 @@ func (s *signInDialog) finished(live *liveSession, failure error) {
 		if kind == problemCancelled || errors.Is(failure, context.Canceled) {
 			return
 		}
-		s.fail(message, true)
 		if kind == problemPassword {
+			message = passwordProblem(s.vnc)
 			s.password.GrabFocus()
 		}
+		s.fail(message, true)
 		return
 	}
 	if s.done {
@@ -382,4 +385,12 @@ func (s *signInDialog) finished(live *liveSession, failure error) {
 	s.g.signIn = nil
 	s.g.list.reload()
 	s.g.startSession(live)
+}
+
+// passwordProblem is what the dialog says about a login the Mac turned down.
+func passwordProblem(vnc bool) string {
+	if vnc {
+		return "That VNC password was not accepted. It is the one set under Screen Sharing options on the Mac."
+	}
+	return "The account name or password was not accepted. Use the name and password you would type at the Mac's login screen."
 }

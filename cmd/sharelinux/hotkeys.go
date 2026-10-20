@@ -34,18 +34,18 @@ const (
 // them also have a menu entry; the chord is the keyboard route for a session
 // that has the keyboard grabbed.
 var chordKeys = map[uint32]command{
-	16: commandCycleMode,        // M
-	11: commandToggleStats,      // H
-	9:  commandFullscreen,       // F
-	24: commandCycleQuality,     // U
-	7:  commandCycleDisplay,     // D
-	25: commandVirtualDisplay,   // V
-	27: commandToggleHDR,        // X
-	21: commandRefresh,          // R
-	23: commandTypeClipboard,    // T
-	10: commandFetchDrag,        // G
-	22: commandScreenshot,       // S
-	20: commandQuit,             // Q
+	16: commandCycleMode,      // M
+	11: commandToggleStats,    // H
+	9:  commandFullscreen,     // F
+	24: commandCycleQuality,   // U
+	7:  commandCycleDisplay,   // D
+	25: commandVirtualDisplay, // V
+	27: commandToggleHDR,      // X
+	21: commandRefresh,        // R
+	23: commandTypeClipboard,  // T
+	10: commandFetchDrag,      // G
+	22: commandScreenshot,     // S
+	20: commandQuit,           // Q
 }
 
 // leaderHeld reports whether Ctrl, Alt and Shift are all down.

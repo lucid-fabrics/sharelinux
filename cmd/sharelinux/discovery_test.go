@@ -98,13 +98,13 @@ func TestUnsavedHidesKnownMacsAndSorts(t *testing.T) {
 
 func TestUnescapeLabel(t *testing.T) {
 	cases := map[string]string{
-		"Mac mini":                 "Mac mini",
-		`Mac\ mini`:                "Mac mini",
-		`cicd\226\128\153s iMac`:   "cicd\u2019s iMac",
-		`a\.b\\c`:                 `a.b\c`,
-		`trailing\`:                `trailing\`,
-		`bad\999x`:                 "bad999x",
-		`two\04`:                   "two04",
+		"Mac mini":               "Mac mini",
+		`Mac\ mini`:              "Mac mini",
+		`cicd\226\128\153s iMac`: "cicd\u2019s iMac",
+		`a\.b\\c`:                `a.b\c`,
+		`trailing\`:              `trailing\`,
+		`bad\999x`:               "bad999x",
+		`two\04`:                 "two04",
 	}
 	for in, want := range cases {
 		if got := unescapeLabel(in); got != want {
