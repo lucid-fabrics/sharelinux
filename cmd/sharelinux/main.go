@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
+
+	E "github.com/sagernet/sing/common/exceptions"
 )
 
 func main() {
@@ -60,7 +63,7 @@ func listConnections(connections *store) {
 func forgetConnection(connections *store, query string) {
 	connection, found := connections.Find(query)
 	if !found {
-		fatal(fmt.Errorf("no saved connection %q", query))
+		fatal(E.New("no saved connection ", strconv.Quote(query)))
 	}
 	err := connections.Remove(connection)
 	if err != nil {

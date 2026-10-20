@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"image"
 	"image/color"
 	"image/png"
@@ -14,7 +13,7 @@ import (
 	E "github.com/sagernet/sing/common/exceptions"
 )
 
-var errQuit = errors.New("quit")
+var errQuit = E.New("quit")
 
 // libraryCandidates are tried in order when SDL3 is not in the loader's path.
 func libraryCandidates() []string {
@@ -38,7 +37,7 @@ func loadSDL() error {
 			failure = nil
 			break
 		}
-		failure = errors.Join(failure, err)
+		failure = E.Errors(failure, err)
 	}
 	if failure != nil {
 		return E.Cause(failure, "load SDL3 (install libsdl3 or set SDL3_LIBRARY)")
@@ -141,5 +140,5 @@ func (c *canvas) savePNG(directory string) (string, error) {
 	}
 	err = png.Encode(file, picture)
 	closeErr := file.Close()
-	return path, errors.Join(err, closeErr)
+	return path, E.Errors(err, closeErr)
 }

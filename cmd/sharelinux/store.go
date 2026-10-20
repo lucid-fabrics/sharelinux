@@ -39,7 +39,7 @@ type secretStore interface {
 	Delete(id string) error
 }
 
-var errNoSecret = errors.New("no saved password")
+var errNoSecret = E.New("no saved password")
 
 // keyringSecrets uses the Secret Service (GNOME Keyring, KWallet) on Linux and
 // the Keychain on macOS.
@@ -127,7 +127,7 @@ func (s *store) write(connections []savedConnection) error {
 		err = temporary.Chmod(0o600)
 	}
 	closeErr := temporary.Close()
-	if err = errors.Join(err, closeErr); err != nil {
+	if err = E.Errors(err, closeErr); err != nil {
 		return E.Cause(err, "write saved connections")
 	}
 	return os.Rename(temporary.Name(), s.path)
