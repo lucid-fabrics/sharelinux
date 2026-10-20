@@ -1,0 +1,169 @@
+package main
+
+import (
+	"context"
+	"net"
+	"slices"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/libp2p/zeroconf/v2"
+	E "github.com/sagernet/sing/common/exceptions"
+)
+
+// rfbService is what a Mac with Screen Sharing turned on announces on the network.
+const rfbService = "_rfb._tcp"
+
+// scanWindow is how long one browse listens for answers.
+const scanWindow = 4 * time.Second
+
+// discoveredMac is a Mac found on the local network.
+type discoveredMac struct {
+	Name string
+	// Host is the .local name, Addresses the IPv4 then IPv6 addresses it announced.
+	Host      string
+	Addresses []string
+	Port      int
+}
+
+// newDiscoveredMac reads one mDNS answer. It returns false for an answer
+// without a name or a usable address.
+func newDiscoveredMac(entry *zeroconf.ServiceEntry) (discoveredMac, bool) {
+	if entry == nil || entry.Port <= 0 || entry.Port > 65535 {
+		return discoveredMac{}, false
+	}
+	mac := discoveredMac{
+		Name: strings.TrimSpace(entry.Instance),
+		Host: strings.TrimSuffix(entry.HostName, "."),
+		Port: entry.Port,
+	}
+	for _, ip := range entry.AddrIPv4 {
+		mac.Addresses = append(mac.Addresses, ip.String())
+	}
+	for _, ip := range entry.AddrIPv6 {
+		if ip.IsLinkLocalUnicast() {
+			continue
+		}
+		mac.Addresses = append(mac.Addresses, ip.String())
+	}
+	if mac.Name == "" {
+		mac.Name = strings.TrimSuffix(mac.Host, ".local")
+	}
+	if mac.Name == "" || (mac.Host == "" && len(mac.Addresses) == 0) {
+		return discoveredMac{}, false
+	}
+	return mac, true
+}
+
+// key identifies a Mac across scans.
+func (m discoveredMac) key() string {
+	return strings.ToLower(m.Name) + "|" + m.Host
+}
+
+// dialHost is the name to connect to. A numeric address works without mDNS
+// resolution in the system resolver, so it is preferred over the .local name.
+func (m discoveredMac) dialHost() string {
+	if len(m.Addresses) > 0 {
+		return m.Addresses[0]
+	}
+	return m.Host
+}
+
+// target is the connection a "Connect" on this Mac starts. The account is
+// asked for in the sign-in dialog.
+func (m discoveredMac) target() target {
+	return target{Host: m.dialHost(), Port: m.Port}
+}
+
+// subtitle is the second line of the "On this network" row.
+func (m discoveredMac) subtitle() string {
+	host := m.Host
+	if host == "" {
+		host = m.dialHost()
+	}
+	return host + " · Screen Sharing is on"
+}
+
+// matches reports whether a saved connection is this Mac.
+func (m discoveredMac) matches(saved savedConnection) bool {
+	if saved.Port != m.Port {
+		return false
+	}
+	if m.Host != "" && strings.EqualFold(saved.Host, m.Host) {
+		return true
+	}
+	return slices.Contains(m.Addresses, saved.Host)
+}
+
+// unsaved drops the Macs that are already in the saved list and sorts by name.
+func unsaved(found []discoveredMac, saved []savedConnection) []discoveredMac {
+	var result []discoveredMac
+	for _, mac := range found {
+		known := slices.ContainsFunc(saved, mac.matches)
+		if !known {
+			result = append(result, mac)
+		}
+	}
+	sort.SliceStable(result, func(i, j int) bool {
+		return strings.ToLower(result[i].Name) < strings.ToLower(result[j].Name)
+	})
+	return result
+}
+
+// mergeScan folds the answers of one scan into a list without repeats. Answers
+// from several network interfaces repeat; the first one with addresses wins and
+// later ones only add addresses.
+func mergeScan(into []discoveredMac, mac discoveredMac) []discoveredMac {
+	for index := range into {
+		if into[index].key() != mac.key() {
+			continue
+		}
+		for _, address := range mac.Addresses {
+			if !slices.Contains(into[index].Addresses, address) {
+				into[index].Addresses = append(into[index].Addresses, address)
+			}
+		}
+		// IPv4 first, so dialHost prefers it.
+		sort.SliceStable(into[index].Addresses, func(i, j int) bool {
+			return isIPv4(into[index].Addresses[i]) && !isIPv4(into[index].Addresses[j])
+		})
+		return into
+	}
+	return append(into, mac)
+}
+
+func isIPv4(address string) bool {
+	ip := net.ParseIP(address)
+	return ip != nil && ip.To4() != nil
+}
+
+// scanMacs browses once and returns what answered within scanWindow, calling
+// onFound for each new Mac as soon as it answers.
+func scanMacs(ctx context.Context, onFound func(discoveredMac)) ([]discoveredMac, error) {
+	ctx, cancel := context.WithTimeout(ctx, scanWindow)
+	defer cancel()
+	entries := make(chan *zeroconf.ServiceEntry)
+	var found []discoveredMac
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for entry := range entries {
+			mac, ok := newDiscoveredMac(entry)
+			if !ok {
+				continue
+			}
+			before := len(found)
+			found = mergeScan(found, mac)
+			if len(found) > before && onFound != nil {
+				onFound(mac)
+			}
+		}
+	}()
+	err := zeroconf.Browse(ctx, rfbService, "local.", entries)
+	<-done
+	if err != nil && ctx.Err() == nil {
+		return found, E.Cause(err, "look for Macs on the network")
+	}
+	return found, nil
+}

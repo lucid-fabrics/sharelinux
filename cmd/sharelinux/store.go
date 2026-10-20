@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/nekohasekai/open-screen-sharing/internal/rfb"
 	E "github.com/sagernet/sing/common/exceptions"
@@ -26,6 +27,9 @@ type savedConnection struct {
 	Mode     string `json:"mode,omitempty"`
 	Quality  string `json:"quality,omitempty"`
 	Keyboard string `json:"keyboard,omitempty"`
+	// LastUsed is when a session to this Mac last connected. It is zero for a
+	// connection saved by an older version.
+	LastUsed time.Time `json:"last_used,omitempty"`
 }
 
 func (c savedConnection) target() target {
