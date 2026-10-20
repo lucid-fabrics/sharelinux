@@ -79,7 +79,7 @@ func TestDialNeverFallsBackToVNCPassword(t *testing.T) {
 	if got := accepted.Load(); got != 1 {
 		t.Fatalf("connected %d times, want 1", got)
 	}
-	kind, _ := describeError(err, "x")
+	kind, _ := describeError(err, "x", false)
 	if kind != problemUnsupported {
 		t.Fatalf("kind %d: %v", kind, err)
 	}

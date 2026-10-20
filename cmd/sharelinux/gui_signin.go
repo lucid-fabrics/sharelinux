@@ -48,11 +48,8 @@ func (g *gui) openSaved(connection savedConnection) {
 		g.showError("This Mac's settings could not be read", err.Error())
 		return
 	}
-	password, err := g.app.store.Password(connection)
-	if err == nil {
-		req.password = password
-	}
-	g.openSignInNamed(req, connection.displayName(), req.password != "")
+	g.app.loadSavedPassword(req, connection)
+	g.openSignInNamed(req, connection.displayName(), req.dialPassword() != "")
 }
 
 // openDiscovered starts the sign-in for a Mac found on the network.
@@ -174,7 +171,10 @@ func (s *signInDialog) build() {
 	s.switchLogin.AddCSSClass("link")
 	s.switchLogin.SetHAlign(gtk.AlignCenter)
 	s.switchLogin.ConnectClicked(func() {
+		// The password typed or loaded belonged to the other kind of login.
 		s.vnc = !s.vnc
+		s.req.switchLogin(s.vnc)
+		s.password.SetText("")
 		s.applyLoginKind()
 		s.password.GrabFocus()
 	})
@@ -215,7 +215,7 @@ func (s *signInDialog) build() {
 		}
 	}
 	s.account.SetText(s.req.target.User)
-	s.password.SetText(s.req.password)
+	s.password.SetText(s.req.dialPassword())
 	s.applyLoginKind()
 
 	s.dialog.ConnectClosed(func() {
@@ -313,7 +313,7 @@ func (s *signInDialog) connect() {
 	}
 	req := *s.req
 	req.target = goal
-	req.password = s.password.Text()
+	req.setPassword(s.password.Text(), s.vnc)
 	req.remember = s.remember.Active()
 	req.opts.VNC = s.vnc
 	s.req = &req
@@ -357,13 +357,12 @@ func (s *signInDialog) finished(live *liveSession, failure error) {
 			return
 		}
 		address := s.req.target.Address()
-		kind, message := describeError(failure, address)
+		kind, message := describeError(failure, address, s.vnc)
 		s.g.app.logger.Warn("connect failed", "address", address, "kind", int(kind), "error", failure)
 		if kind == problemCancelled || errors.Is(failure, context.Canceled) {
 			return
 		}
 		if kind == problemPassword {
-			message = passwordProblem(s.vnc)
 			s.password.GrabFocus()
 		}
 		s.fail(message, true)
@@ -385,12 +384,4 @@ func (s *signInDialog) finished(live *liveSession, failure error) {
 	s.g.signIn = nil
 	s.g.list.reload()
 	s.g.startSession(live)
-}
-
-// passwordProblem is what the dialog says about a login the Mac turned down.
-func passwordProblem(vnc bool) string {
-	if vnc {
-		return "That VNC password was not accepted. It is the one set under Screen Sharing options on the Mac."
-	}
-	return "The account name or password was not accepted. Use the name and password you would type at the Mac's login screen."
 }

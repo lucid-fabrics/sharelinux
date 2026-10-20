@@ -28,7 +28,8 @@ const (
 
 // describeError turns a connection error into a message for the person at the
 // keyboard and a kind the caller can act on. The raw error stays in the log.
-func describeError(err error, address string) (problemKind, string) {
+// vnc says which login was tried, so a refused password is named for what it was.
+func describeError(err error, address string, vnc bool) (problemKind, string) {
 	var dns *net.DNSError
 	var netError net.Error
 	switch {
@@ -37,7 +38,7 @@ func describeError(err error, address string) (problemKind, string) {
 	case E.IsMulti(err, context.Canceled, rfb.ErrSessionCancelled):
 		return problemCancelled, "Connection cancelled."
 	case errors.Is(err, rfb.ErrAuthenticationFailed):
-		return problemPassword, "The user name or password was not accepted. Check the Mac account's name and password, or the VNC password when no user is given."
+		return problemPassword, passwordProblem(vnc)
 	case errors.Is(err, rfb.ErrPermissionDenied):
 		return problemDenied, "The person at the Mac declined the request to share the screen."
 	case errors.Is(err, rfb.ErrUnverifiedServer):
@@ -63,4 +64,13 @@ func pluralize(count int, word string) string {
 		return "1 " + word
 	}
 	return strconv.Itoa(count) + " " + word + "s"
+}
+
+// passwordProblem is what is said about a login the Mac turned down. It names
+// the kind of login that was tried and nothing else.
+func passwordProblem(vnc bool) string {
+	if vnc {
+		return "That VNC password was not accepted."
+	}
+	return "The account name or password was not accepted."
 }

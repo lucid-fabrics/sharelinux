@@ -17,8 +17,58 @@ var now = time.Now
 type request struct {
 	target   target
 	password string
-	remember bool
-	opts     options
+	// passwordVNC says which kind of login password belongs to: true for a VNC
+	// password, false for a Mac account password. The two are never mixed.
+	passwordVNC bool
+	remember    bool
+	opts        options
+}
+
+// vncLogin reports whether the request logs in with a VNC password instead of
+// a Mac account.
+func (r *request) vncLogin() bool {
+	return r.opts.VNC || r.target.User == ""
+}
+
+// setPassword records a password together with the kind of login it was
+// entered or saved for.
+func (r *request) setPassword(password string, vnc bool) {
+	r.password, r.passwordVNC = password, vnc
+}
+
+// dialPassword is the only password a dial may send: one that belongs to the
+// kind of login the request makes. An account password must never go out as a
+// VNC password, because that challenge can be cracked offline.
+func (r *request) dialPassword() string {
+	if r.passwordVNC != r.vncLogin() {
+		return ""
+	}
+	return r.password
+}
+
+// switchLogin changes between an account login and a VNC password. The
+// password belonged to the other kind, so it is dropped.
+func (r *request) switchLogin(vnc bool) {
+	r.opts.VNC = vnc
+	r.setPassword("", vnc)
+}
+
+// vncLogin reports whether the saved connection logs in with a VNC password.
+func (c savedConnection) vncLogin() bool {
+	return c.VNC || c.User == ""
+}
+
+// loadSavedPassword puts the keyring password of a saved connection into the
+// request, but only when the request makes the same kind of login. The keyring
+// is not even read otherwise.
+func (a *app) loadSavedPassword(req *request, saved savedConnection) {
+	if saved.vncLogin() != req.vncLogin() {
+		return
+	}
+	password, err := a.store.Password(saved)
+	if err == nil {
+		req.setPassword(password, saved.vncLogin())
+	}
 }
 
 // app is the state every window shares.
@@ -80,10 +130,7 @@ func (a *app) startRequest() (*request, error) {
 		if err != nil {
 			return nil, err
 		}
-		password, err := a.store.Password(saved)
-		if err == nil {
-			req.password = password
-		}
+		a.loadSavedPassword(req, saved)
 	} else {
 		parsed, err := parseTarget(a.opts.Target)
 		if err != nil {
@@ -99,7 +146,7 @@ func (a *app) startRequest() (*request, error) {
 		return nil, err
 	}
 	if external != "" {
-		req.password = external
+		req.setPassword(external, req.vncLogin())
 	}
 	req.remember = req.remember || a.opts.Save
 	return req, nil
@@ -125,7 +172,7 @@ func (a *app) remember(req *request, name string) {
 	if existing, found := a.store.Lookup(req.target); found && existing.Name != "" {
 		connection.Name = existing.Name
 	}
-	err := a.store.Save(connection, req.password)
+	err := a.store.Save(connection, req.dialPassword())
 	if err != nil {
 		a.logger.Warn("save connection", "error", err)
 	}
@@ -145,7 +192,7 @@ func (a *app) touch(req *request) {
 }
 
 func securityTypes(req *request) []rfb.SecurityType {
-	if req.opts.VNC || req.target.User == "" {
+	if req.vncLogin() {
 		return []rfb.SecurityType{rfb.SecurityVNCPassword, rfb.SecurityNone}
 	}
 	return nil

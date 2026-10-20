@@ -20,7 +20,7 @@ func TestDescribeError(t *testing.T) {
 		kind problemKind
 		text string
 	}{
-		{fmt.Errorf("wrap: %w", rfb.ErrAuthenticationFailed), problemPassword, "password"},
+		{fmt.Errorf("wrap: %w", rfb.ErrAuthenticationFailed), problemPassword, "account name or password"},
 		{rfb.ErrPermissionDenied, problemDenied, "declined"},
 		{rfb.ErrUnverifiedServer, problemUnsupported, "-allow-unverified"},
 		{rfb.ErrUnsupportedServer, problemUnsupported, "does not offer"},
@@ -32,22 +32,32 @@ func TestDescribeError(t *testing.T) {
 		{fmt.Errorf("odd"), problemOther, "odd"},
 	}
 	for _, c := range cases {
-		kind, text := describeError(c.err, "mac:5900")
+		kind, text := describeError(c.err, "mac:5900", false)
 		if kind != c.kind || !strings.Contains(text, c.text) {
 			t.Errorf("%v: got %d %q", c.err, kind, text)
 		}
 	}
-	if kind, _ := describeError(nil, "x"); kind != problemOther {
+	if kind, _ := describeError(nil, "x", false); kind != problemOther {
 		t.Fatal("nil is no problem")
 	}
 }
 
-func TestDescribeErrorWrongVNCPassword(t *testing.T) {
-	kind, text := describeError(rfb.ErrAuthenticationFailed, "mac:5900")
-	if kind != problemPassword || !strings.Contains(text, "VNC password") {
+// A refused login is named for the kind that was tried, with no wording that
+// covers both.
+func TestDescribeErrorWrongPasswordMatchesLoginKind(t *testing.T) {
+	failure := fmt.Errorf("wrap: %w", rfb.ErrAuthenticationFailed)
+	kind, text := describeError(failure, "mac:5900", true)
+	if kind != problemPassword || text != "That VNC password was not accepted." {
 		t.Fatalf("%d %q", kind, text)
 	}
-	_, text = describeError(rfb.ErrUnsupportedServer, "mac:5900")
+	kind, text = describeError(failure, "mac:5900", false)
+	if kind != problemPassword || text != "The account name or password was not accepted." {
+		t.Fatalf("%d %q", kind, text)
+	}
+}
+
+func TestDescribeErrorUnsupportedPointsAtVNC(t *testing.T) {
+	_, text := describeError(rfb.ErrUnsupportedServer, "mac:5900", false)
 	if !strings.Contains(text, "-vnc") {
 		t.Fatalf("unsupported servers should point at -vnc: %q", text)
 	}

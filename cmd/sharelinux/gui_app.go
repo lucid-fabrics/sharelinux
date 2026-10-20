@@ -112,7 +112,7 @@ func (g *gui) activate() {
 	g.list.start()
 
 	if g.startup != nil {
-		g.openSignIn(g.startup, g.startup.password != "")
+		g.openSignIn(g.startup, g.startup.dialPassword() != "")
 	}
 }
 

@@ -84,8 +84,3 @@ func TestMatchesQuery(t *testing.T) {
 	}
 }
 
-func TestPasswordProblemWording(t *testing.T) {
-	if passwordProblem(true) == passwordProblem(false) {
-		t.Fatal("a VNC password and an account login fail with different advice")
-	}
-}

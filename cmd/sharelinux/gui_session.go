@@ -661,7 +661,7 @@ func (v *sessionView) connectionLost() {
 	address := v.live.req.target.Address()
 	message := "The connection to " + address + " ended."
 	if err != nil {
-		_, message = describeError(err, address)
+		_, message = describeError(err, address, v.live.req.vncLogin())
 	}
 	req := v.live.req
 	v.g.nav.Pop()
@@ -673,7 +673,7 @@ func (v *sessionView) connectionLost() {
 	dialog.SetCloseResponse("close")
 	dialog.ConnectResponse(func(response string) {
 		if response == "reconnect" {
-			v.g.openSignIn(req, req.password != "")
+			v.g.openSignIn(req, req.dialPassword() != "")
 		}
 	})
 	dialog.Present(v.g.window)

@@ -35,7 +35,7 @@ func (a *app) rfbOptions(req *request, h *handler) rfb.Options {
 	options := rfb.Options{
 		Address:              req.target.Address(),
 		Username:             req.target.User,
-		Password:             req.password,
+		Password:             req.dialPassword(),
 		ClientName:           req.opts.ClientName,
 		AllowUnverifiedLogin: req.opts.AllowUnverified,
 		Quality:              req.opts.Quality,
