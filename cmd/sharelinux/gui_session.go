@@ -1083,9 +1083,7 @@ func (v *sessionView) dropHover(x, y float64) gdk.DragAction {
 	if inside {
 		v.pointerX, v.pointerY = fx, fy
 		v.pointerInside = true
-		if !v.transfer.gesture.Blocked() {
-			_ = v.client.SendPointer(fx, fy, 0)
-		}
+		hoverPointer(&v.transfer.gesture, v.client.SendPointer, fx, fy)
 	}
 	return gdk.ActionCopy
 }

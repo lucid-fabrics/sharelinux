@@ -137,6 +137,16 @@ func (g *pointerGate) Begin()        { g.held.Store(true) }
 func (g *pointerGate) End()          { g.held.Store(false) }
 func (g *pointerGate) Blocked() bool { return g.held.Load() }
 
+// hoverPointer moves the Mac's pointer under a file drag with no button down,
+// unless a drop is playing its own presses. The Mac picks the folder from where
+// its pointer is when the drag starts, so this runs on every hover before the drop.
+func hoverPointer(gate *pointerGate, send func(x, y int, buttons uint8) error, x, y int) {
+	if gate.Blocked() {
+		return
+	}
+	_ = send(x, y, 0)
+}
+
 // dropGesture presses, drags a pixel and releases the left button at x, y, which
 // is how the Mac learns where the dropped files should land.
 func dropGesture(send func(x, y int, buttons uint8) error, wait func(time.Duration), x, y int) {
