@@ -7,20 +7,28 @@ import (
 )
 
 func TestChordNeedsFullLeader(t *testing.T) {
-	const all = modLeftCtrl | modLeftAlt | modLeftShift
-	if chordCommand(11, all) != commandToggleHUD {
-		t.Fatal("leader+H is the HUD")
+	const all = modCtrl | modAlt | modShift
+	if chordCommand(11, all) != commandToggleStats {
+		t.Fatal("leader+H is the stats overlay")
 	}
-	if chordCommand(41, modRightCtrl|modRightAlt|modRightShift) != commandReleaseExclusive {
-		t.Fatal("either side of each modifier counts")
-	}
-	for _, mod := range []uint16{0, modLeftCtrl, modLeftCtrl | modLeftAlt, modLeftAlt | modLeftShift, modLeftGUI} {
+	for _, mod := range []uint16{0, modCtrl, modCtrl | modAlt, modAlt | modShift, modGUI} {
 		if chordCommand(11, mod) != commandNone {
 			t.Errorf("modifiers %#x must not trigger a command", mod)
 		}
 	}
 	if chordCommand(4, all) != commandNone {
 		t.Fatal("leader+A is not a command")
+	}
+}
+
+func TestReleaseChordIsCtrlAltEscape(t *testing.T) {
+	if chordCommand(hidEscape, modCtrl|modAlt) != commandReleaseExclusive {
+		t.Fatal("Ctrl+Alt+Esc releases exclusive mode")
+	}
+	for _, mod := range []uint16{0, modCtrl, modAlt, modCtrl | modAlt | modShift, modCtrl | modAlt | modGUI} {
+		if chordCommand(hidEscape, mod) != commandNone {
+			t.Errorf("modifiers %#x must not release", mod)
+		}
 	}
 }
 

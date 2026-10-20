@@ -8,7 +8,7 @@ const (
 	commandNone command = iota
 	commandReleaseExclusive
 	commandCycleMode
-	commandToggleHUD
+	commandToggleStats
 	commandFullscreen
 	commandCycleQuality
 	commandCycleDisplay
@@ -21,26 +21,21 @@ const (
 	commandQuit
 )
 
-// SDL modifier bits, repeated here so the table needs no SDL import.
+// Modifier bits. The GTK layer folds GDK's modifier state into these, so the
+// table needs no GTK import and is testable anywhere.
 const (
-	modLeftShift  = 0x0001
-	modRightShift = 0x0002
-	modLeftCtrl   = 0x0040
-	modRightCtrl  = 0x0080
-	modLeftAlt    = 0x0100
-	modRightAlt   = 0x0200
-	modShift      = modLeftShift | modRightShift
-	modCtrl       = modLeftCtrl | modRightCtrl
-	modAlt        = modLeftAlt | modRightAlt
-	modLeftGUI    = 0x0400
-	modRightGUI   = 0x0800
-	modGUI        = modLeftGUI | modRightGUI
+	modShift uint16 = 1 << iota
+	modCtrl
+	modAlt
+	modGUI
 )
 
+// chordKeys are the viewer commands behind the Ctrl+Alt+Shift leader. Most of
+// them also have a menu entry; the chord is the keyboard route for a session
+// that has the keyboard grabbed.
 var chordKeys = map[uint32]command{
-	41: commandReleaseExclusive, // Escape
 	16: commandCycleMode,        // M
-	11: commandToggleHUD,        // H
+	11: commandToggleStats,      // H
 	9:  commandFullscreen,       // F
 	24: commandCycleQuality,     // U
 	7:  commandCycleDisplay,     // D
@@ -58,8 +53,15 @@ func leaderHeld(mod uint16) bool {
 	return mod&modCtrl != 0 && mod&modAlt != 0 && mod&modShift != 0
 }
 
-// chordCommand maps a key press to a viewer command; it is commandNone unless the leader is held.
+// hidEscape is the HID usage of the Escape key.
+const hidEscape = 41
+
+// chordCommand maps a key press to a viewer command. Ctrl+Alt+Esc releases
+// exclusive mode; every other command needs the whole Ctrl+Alt+Shift leader.
 func chordCommand(scancode uint32, mod uint16) command {
+	if scancode == hidEscape && mod&modCtrl != 0 && mod&modAlt != 0 && mod&(modShift|modGUI) == 0 {
+		return commandReleaseExclusive
+	}
 	if !leaderHeld(mod) {
 		return commandNone
 	}

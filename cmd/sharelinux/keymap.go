@@ -231,3 +231,62 @@ func (l *keyboardLearner) Learn(scancode uint32) {
 		}
 	}
 }
+
+// evdevToHID converts a Linux evdev key code (GDK's hardware keycode minus 8,
+// on X11 and Wayland alike) to the USB HID usage the tables above are keyed by.
+var evdevToHID = map[uint32]uint32{
+	1: 41, 2: 30, 3: 31, 4: 32, 5: 33, 6: 34, 7: 35, 8: 36, 9: 37, 10: 38, 11: 39,
+	12: 45, 13: 46, 14: 42, 15: 43,
+	16: 20, 17: 26, 18: 8, 19: 21, 20: 23, 21: 28, 22: 24, 23: 12, 24: 18, 25: 19,
+	26: 47, 27: 48, 28: 40, 29: 224,
+	30: 4, 31: 22, 32: 7, 33: 9, 34: 10, 35: 11, 36: 13, 37: 14, 38: 15,
+	39: 51, 40: 52, 41: 53, 42: 225, 43: 49,
+	44: 29, 45: 27, 46: 6, 47: 25, 48: 5, 49: 17, 50: 16,
+	51: 54, 52: 55, 53: 56, 54: 229, 55: 85, 56: 226, 57: 44, 58: 57,
+	59: 58, 60: 59, 61: 60, 62: 61, 63: 62, 64: 63, 65: 64, 66: 65, 67: 66, 68: 67,
+	69: 83, 70: 71,
+	71: 95, 72: 96, 73: 97, 74: 86, 75: 92, 76: 93, 77: 94, 78: 87, 79: 89, 80: 90, 81: 91, 82: 98, 83: 99,
+	86: 100, 87: 68, 88: 69,
+	89: 135, 90: 136, 91: 136, 92: 138, 93: 136, 94: 139,
+	96: 88, 97: 228, 98: 84, 99: 70, 100: 230,
+	102: 74, 103: 82, 104: 75, 105: 80, 106: 79, 107: 77, 108: 81, 109: 78, 110: 73, 111: 76,
+	117: 103, 119: 72, 121: 133, 122: 144, 123: 145, 124: 137,
+	125: 227, 126: 231, 127: 101, 138: 117, 139: 101,
+	183: 104, 184: 105, 185: 106, 186: 107, 187: 108, 188: 109, 189: 110, 190: 111,
+}
+
+// evdevOffset is what X11 and GDK Wayland add to an evdev code.
+const evdevOffset = 8
+
+// hidFromKeycode turns a GDK hardware keycode into a HID usage, or 0 when the key is unknown.
+func hidFromKeycode(keycode uint32) uint32 {
+	if keycode < evdevOffset {
+		return 0
+	}
+	return evdevToHID[keycode-evdevOffset]
+}
+
+// Command key choices of the preferences.
+const (
+	commandKeySuper = "super"
+	commandKeyAlt   = "alt"
+)
+
+// remapCommandKey swaps the Super and Alt keys when Alt is the Command key, so
+// the key next to the space bar acts as Command like on a Mac keyboard.
+func remapCommandKey(scancode uint32, setting string) uint32 {
+	if setting != commandKeyAlt {
+		return scancode
+	}
+	switch scancode {
+	case 226:
+		return 227
+	case 227:
+		return 226
+	case 230:
+		return 231
+	case 231:
+		return 230
+	}
+	return scancode
+}

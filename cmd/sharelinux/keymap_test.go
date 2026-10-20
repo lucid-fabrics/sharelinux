@@ -150,7 +150,7 @@ func TestTextFilter(t *testing.T) {
 	if f.Consume("a") {
 		t.Fatal("only once")
 	}
-	f.KeyDown(4, modLeftCtrl)
+	f.KeyDown(4, modCtrl)
 	if f.Consume("a") {
 		t.Fatal("ctrl+a types nothing, so no expectation")
 	}
@@ -185,8 +185,8 @@ func TestTextFilterNonASCIIIsTypedOnce(t *testing.T) {
 	}{
 		{"o with diaeresis", 51, 0, "ö"},
 		{"e with acute", 8, 0, "é"},
-		{"AltGr+Q", 20, modRightAlt, "@"},
-		{"shifted umlaut", 52, modLeftShift, "Ä"},
+		{"AltGr+Q", 20, modAlt, "@"},
+		{"shifted umlaut", 52, modShift, "Ä"},
 	}
 	for _, c := range cases {
 		if got := typedCharacters(c.scancode, c.mod, c.text); got != 1 {
@@ -197,7 +197,7 @@ func TestTextFilterNonASCIIIsTypedOnce(t *testing.T) {
 
 func TestTextFilterTypesInputMethodText(t *testing.T) {
 	var f textFilter
-	f.KeyDown(44, modLeftCtrl)
+	f.KeyDown(44, modCtrl)
 	if f.Consume("こんにちは") {
 		t.Fatal("composition text no key explains is typed")
 	}
@@ -218,6 +218,53 @@ func TestMuhenkanHenkanKatakana(t *testing.T) {
 		learner.Learn(scancode)
 		if learner.Type() != rfb.KeyboardJIS {
 			t.Errorf("HID %d should mark the keyboard JIS", scancode)
+		}
+	}
+}
+
+func TestEvdevMapsToHID(t *testing.T) {
+	cases := map[uint32]uint32{
+		9: 41, 10: 30, 38: 4, 24: 20, 65: 44, 36: 40, 22: 42, 50: 225, 37: 224, 64: 226, 133: 227, 134: 231,
+		119: 76, 113: 80, 114: 79, 116: 81, 111: 82, 67: 58, 76: 67, 95: 68, 96: 69, 94: 100, 90: 98,
+	}
+	for keycode, want := range cases {
+		if got := hidFromKeycode(keycode); got != want {
+			t.Errorf("keycode %d: HID %d, want %d", keycode, got, want)
+		}
+	}
+	if hidFromKeycode(3) != 0 || hidFromKeycode(255) != 0 {
+		t.Fatal("unknown keycodes have no HID usage")
+	}
+}
+
+func TestEveryEvdevKeyReachesAMacKey(t *testing.T) {
+	for evdev, hid := range evdevToHID {
+		if _, found := lookupScancode(hid, rfb.KeyboardANSI); !found {
+			t.Errorf("evdev %d maps to HID %d, which has no Mac key", evdev, hid)
+		}
+	}
+}
+
+func TestEvdevTableIsInjective(t *testing.T) {
+	// Several Japanese keys share a HID usage on purpose; no other key may.
+	allowed := map[uint32]bool{136: true, 101: true}
+	seen := map[uint32]uint32{}
+	for evdev, hid := range evdevToHID {
+		if other, found := seen[hid]; found && !allowed[hid] {
+			t.Errorf("HID %d for both evdev %d and %d", hid, evdev, other)
+		}
+		seen[hid] = evdev
+	}
+}
+
+func TestRemapCommandKey(t *testing.T) {
+	if remapCommandKey(227, commandKeySuper) != 227 || remapCommandKey(226, commandKeySuper) != 226 {
+		t.Fatal("Super as Command changes nothing")
+	}
+	cases := map[uint32]uint32{226: 227, 227: 226, 230: 231, 231: 230, 4: 4, 224: 224}
+	for in, want := range cases {
+		if got := remapCommandKey(in, commandKeyAlt); got != want {
+			t.Errorf("%d: %d, want %d", in, got, want)
 		}
 	}
 }

@@ -655,7 +655,7 @@ func (v *view) runCommand(command command) bool {
 	case commandCycleMode:
 		next := rfb.Mode(nextCycle(int(v.mode), int(rfb.ModeExclusiveControl)+1))
 		v.applyMode(next, true)
-	case commandToggleHUD:
+	case commandToggleStats:
 		v.hud = !v.hud
 		v.redraw = true
 	case commandFullscreen:
