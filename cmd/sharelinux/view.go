@@ -54,6 +54,7 @@ type view struct {
 
 	hud      bool
 	meter    meter
+	clicks   clickFilter
 	frames   int
 	hudAt    time.Time
 	toasts   []toast
@@ -494,6 +495,9 @@ func (v *view) onButton(button *sdl.MouseButtonEvent) {
 	case 3:
 		bit = rfb.ButtonRight
 	default:
+		return
+	}
+	if !v.clicks.allow(button.Button, button.Down, button.Timestamp) {
 		return
 	}
 	if button.Down {
