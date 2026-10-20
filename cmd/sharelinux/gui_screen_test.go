@@ -6,15 +6,12 @@ import (
 	"image"
 	"testing"
 
-	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 	"github.com/nekohasekai/open-screen-sharing/internal/bgra"
 )
 
 func newTestScreen(t *testing.T) *screenView {
 	t.Helper()
-	if !gtk.InitCheck() {
-		t.Skip("GTK needs a display (run under Xvfb)")
-	}
+	requireDisplay(t)
 	return newScreenView()
 }
 

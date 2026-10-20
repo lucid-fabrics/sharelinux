@@ -14,9 +14,7 @@ import (
 // A handler a session leaves on the window fires for every later change, and
 // keeps the dead session reachable.
 func TestSignalScopeReleaseStopsHandlers(t *testing.T) {
-	if !gtk.InitCheck() {
-		t.Skip("GTK needs a display (run under Xvfb)")
-	}
+	requireDisplay(t)
 	window := gtk.NewWindow()
 	calls := 0
 	var scope signalScope
@@ -45,9 +43,7 @@ type heavy struct{ pixels [1 << 20]byte }
 // stand-in for the session and its framebuffer. Destroying the tree is what lets
 // that be collected once the widgets are not used any more.
 func TestDestroyTreeLetsCapturedStateGo(t *testing.T) {
-	if !gtk.InitCheck() {
-		t.Skip("GTK needs a display (run under Xvfb)")
-	}
+	requireDisplay(t)
 	state := &heavy{}
 	watch := weak.Make(state)
 	build := func() gtk.Widgetter {

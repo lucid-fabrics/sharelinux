@@ -11,6 +11,16 @@ import (
 	"github.com/nekohasekai/open-screen-sharing/internal/rfb"
 )
 
+// requireDisplay skips a test that needs GTK when there is no display to open.
+// A second gtk.InitCheck after a failed one reports success, so the default
+// display is checked as well.
+func requireDisplay(t *testing.T) {
+	t.Helper()
+	if !gtk.InitCheck() || gdk.DisplayGetDefault() == nil {
+		t.Skip("GTK needs a display (run under Xvfb)")
+	}
+}
+
 func TestModifiersFoldGDKState(t *testing.T) {
 	cases := []struct {
 		state gdk.ModifierType
@@ -89,9 +99,7 @@ func TestMatchesQuery(t *testing.T) {
 // A toast reads Pango markup unless told not to. Folder names, Mac names and
 // error texts reach toasts, and "<" or "&" in one made the title fail to parse.
 func TestToastShowsExternalTextAsWritten(t *testing.T) {
-	if !gtk.InitCheck() {
-		t.Skip("GTK needs a display (run under Xvfb)")
-	}
+	requireDisplay(t)
 	adw.Init()
 	for _, text := range []string{"Saved 1 item to <b>Reports</b> & more", "a < b", "Bob's <Mac>"} {
 		toast := newToast(text)
