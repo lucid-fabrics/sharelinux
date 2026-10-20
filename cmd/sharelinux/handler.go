@@ -35,6 +35,8 @@ type handler struct {
 	updates      uint64
 	encoding     rfb.Encoding
 	states       chan rfb.State
+	transfer     transferState
+	transferNew  bool
 }
 
 type dropDestination struct {
@@ -197,6 +199,21 @@ func (h *handler) ChooseSession(request rfb.SessionRequest) (rfb.SessionChoice, 
 		return rfb.SessionCancel, E.New("the Mac asks which session to share")
 	}
 	return h.choose(request)
+}
+
+// setTransfer records the state of the running file copy for the copy card.
+func (h *handler) setTransfer(state transferState) {
+	h.access.Lock()
+	h.transfer, h.transferNew = state, true
+	h.access.Unlock()
+}
+
+func (h *handler) takeTransfer() (transferState, bool) {
+	h.access.Lock()
+	defer h.access.Unlock()
+	changed := h.transferNew
+	h.transferNew = false
+	return h.transfer, changed
 }
 
 // toast queues a short message for the overlay.

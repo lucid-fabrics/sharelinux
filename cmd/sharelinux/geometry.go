@@ -108,3 +108,37 @@ func scrollPoints(info rfb.ServerInfo, x, y float32) (float64, float64) {
 	}
 	return -float64(x) * wheelPoints, float64(y) * wheelPoints
 }
+
+// actualViewport is the picture at its real size: one framebuffer pixel per
+// device pixel, centered when the window is larger than the picture. Sizes are
+// in logical units; scaleFactor is the device pixels per logical unit.
+func actualViewport(windowWidth, windowHeight, frameWidth, frameHeight int, scaleFactor float64) viewport {
+	if windowWidth <= 0 || windowHeight <= 0 || frameWidth <= 0 || frameHeight <= 0 {
+		return viewport{}
+	}
+	if scaleFactor < 1 {
+		scaleFactor = 1
+	}
+	width := float32(float64(frameWidth) / scaleFactor)
+	height := float32(float64(frameHeight) / scaleFactor)
+	port := viewport{W: width, H: height}
+	if float32(windowWidth) > width {
+		port.X = (float32(windowWidth) - width) / 2
+	}
+	if float32(windowHeight) > height {
+		port.Y = (float32(windowHeight) - height) / 2
+	}
+	return port
+}
+
+// gtkScrollPoints converts the deltas of a GTK scroll event to the points
+// SendScroll takes. GTK counts a step down as positive where scrollPoints'
+// wheel units count a step up as positive, so the vertical axis flips. With
+// natural scrolling off, both axes are reversed.
+func gtkScrollPoints(info rfb.ServerInfo, dx, dy float64, natural bool) (float64, float64) {
+	x, y := dx, -dy
+	if !natural {
+		x, y = -x, -y
+	}
+	return scrollPoints(info, float32(x), float32(y))
+}

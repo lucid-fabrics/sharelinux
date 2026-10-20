@@ -134,3 +134,37 @@ func TestScrollPointsHorizontalSign(t *testing.T) {
 		}
 	}
 }
+
+func TestActualViewport(t *testing.T) {
+	port := actualViewport(1000, 800, 2000, 1200, 2)
+	if port.W != 1000 || port.H != 600 || port.X != 0 || port.Y != 100 {
+		t.Fatalf("%+v", port)
+	}
+	port = actualViewport(3000, 2000, 2000, 1200, 1)
+	if port.X != 500 || port.Y != 400 || port.W != 2000 {
+		t.Fatalf("a small picture is centered: %+v", port)
+	}
+	if !actualViewport(0, 10, 10, 10, 1).empty() || !actualViewport(10, 10, 0, 10, 1).empty() {
+		t.Fatal("empty sizes")
+	}
+	if actualViewport(100, 100, 200, 200, 0).W != 200 {
+		t.Fatal("a bad scale factor counts as 1")
+	}
+}
+
+func TestGTKScrollPoints(t *testing.T) {
+	apple := rfb.ServerInfo{Dialect: rfb.DialectApple}
+	dx, dy := gtkScrollPoints(apple, 0, 1, true)
+	if dx != 0 || dy != -wheelPoints {
+		t.Fatalf("a GTK step down scrolls the Mac down: %v %v", dx, dy)
+	}
+	dx, dy = gtkScrollPoints(apple, 1, 0, true)
+	if dx != -wheelPoints || dy != 0 {
+		t.Fatalf("a step right: %v %v", dx, dy)
+	}
+	rdx, rdy := gtkScrollPoints(apple, 1, 1, false)
+	ndx, ndy := gtkScrollPoints(apple, 1, 1, true)
+	if rdx != -ndx || rdy != -ndy {
+		t.Fatal("natural off reverses both axes")
+	}
+}
