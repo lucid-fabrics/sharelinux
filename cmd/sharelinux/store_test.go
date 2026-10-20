@@ -135,3 +135,29 @@ func TestApplyKeepsExplicitFlags(t *testing.T) {
 		t.Fatal("bad saved mode must fail")
 	}
 }
+
+func TestConfigDirectoryMigratesTheOldName(t *testing.T) {
+	base := t.TempDir()
+	old := filepath.Join(base, legacyConfigName)
+	if err := os.MkdirAll(old, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(old, "connections.json"), []byte("[]"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	directory := configDirectoryIn(base)
+	if directory != filepath.Join(base, configName) {
+		t.Fatalf("%q", directory)
+	}
+	if _, err := os.Stat(filepath.Join(directory, "connections.json")); err != nil {
+		t.Fatal("the saved Macs moved to the new folder")
+	}
+	if _, err := os.Stat(old); err == nil {
+		t.Fatal("the old folder is gone")
+	}
+	// A second call changes nothing, and an existing new folder is never overwritten.
+	configDirectoryIn(base)
+	if _, err := os.Stat(filepath.Join(directory, "connections.json")); err != nil {
+		t.Fatal("a second call keeps the folder")
+	}
+}

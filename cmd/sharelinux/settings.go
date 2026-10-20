@@ -113,11 +113,11 @@ type settingsStore struct {
 }
 
 func defaultSettingsPath() (string, error) {
-	directory, err := os.UserConfigDir()
+	directory, err := configDirectory()
 	if err != nil {
-		return "", E.Cause(err, "find the config directory")
+		return "", err
 	}
-	return filepath.Join(directory, "open-screen-sharing", "settings.json"), nil
+	return filepath.Join(directory, "settings.json"), nil
 }
 
 // Load returns the saved preferences, or the defaults when there is no file or it cannot be read.

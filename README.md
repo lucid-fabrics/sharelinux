@@ -57,24 +57,26 @@ You can also switch to the Nightly track in the App settings of the macOS app an
 * It can be connected to using the native macOS ScreenSharing.app (note: due to an Apple bug, you must go to Settings > Quality and disable "Full Quality" before adding the configuration)
 * Our client is optimized for it
 
-### Linux (and a cross-platform SDL viewer)
+### Linux
 
-`cmd/sharelinux` is a Go + SDL3 viewer for the built-in macOS Screen Sharing server. It also builds and runs on macOS.
+`cmd/sharelinux` is a native GNOME app (GTK 4 and libadwaita) for the built-in macOS Screen Sharing server. It lists your saved Macs and the Macs it finds on the network, signs in with an account on the Mac (or a VNC password), and shows the Mac's screen with keyboard, mouse, clipboard (text and images) and file transfer.
 
 Build dependencies:
 
-* Go 1.26.8 or newer, no cgo needed (the SDL3 binding loads the library at run time)
-* SDL3 **3.4 or newer** as a shared library: Ubuntu 26.04 and Debian 14 `libsdl3-0` (`libsdl3-dev` to build the Docker image), Homebrew `sdl3` on macOS, or point `SDL3_LIBRARY` at `libSDL3.so.0`
+* Go 1.26.8 or newer and a C compiler (the GTK binding uses cgo)
+* GTK **4.14** or newer and libadwaita **1.7** or newer, with their development files and `libx11-dev`, `libxfixes-dev`, `pkg-config`. Ubuntu 26.04 and Debian 14: `apt install libgtk-4-dev libadwaita-1-dev libx11-dev libxfixes-dev`
 * A Secret Service (GNOME Keyring, KWallet) if you want saved passwords; without one connections still save, the password is typed each time
+* Avahi or any mDNS-capable network for the "On this network" list (the viewer browses `_rfb._tcp` itself, it does not need the Avahi daemon)
 
 ```
 go build -o sharelinux ./cmd/sharelinux
-./sharelinux user@mac.local            # or: ./sharelinux for the picker of saved Macs
+./sharelinux user@mac.local            # or: ./sharelinux for the list of Macs
+make install-linux                        # icon and desktop entry under ~/.local/share
 ```
 
-Hold Ctrl+Alt+Shift and press Esc (leave exclusive mode), M (observe, control, exclusive), H (debug HUD), F (fullscreen), U (quality), D (display), V (virtual display at window size), X (HDR), R (refresh), T (type the local clipboard on the Mac), G (fetch files the Mac is dragging), S (screenshot), Q (quit). Super is Command and Alt is Option. Run `sharelinux -h` for all flags.
+Open **Preferences** (Ctrl+comma) for quality, the Command key (Super or Alt), natural scrolling, the clipboard and the download folder. In a session, **Exclusive** mode gives the keyboard (including Super and Alt+Tab) to the Mac and, on X11, keeps the pointer inside the window; press Ctrl+Alt+Esc to get them back. On Wayland GTK 4 cannot confine the pointer, so Exclusive grabs the keyboard shortcuts only. Hold Ctrl+Alt+Shift and press M (view, control, exclusive), H (stats), F (fullscreen), U (quality), D (display), V (virtual display at window size), X (HDR), R (refresh), T (type the local clipboard on the Mac), G (fetch files the Mac is dragging), S (screenshot) or Q (quit). Run `sharelinux -h` for all flags.
 
-`cmd/sharelinux/Dockerfile` builds the viewer on Debian 14 and runs it under Xvfb; `cmd/sharelinux/internal/mockrfb` is a tiny RFB server for checking it without a Mac.
+`cmd/sharelinux/Dockerfile` builds the viewer on Debian 14 and runs a check under Xvfb; `cmd/sharelinux/internal/mockrfb` is a tiny RFB server (`-size WxH`, `-damage N`) for checking it without a Mac.
 
 ## Roadmap
 

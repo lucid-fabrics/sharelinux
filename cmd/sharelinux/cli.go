@@ -15,13 +15,14 @@ import (
 
 const usage = `usage: sharelinux [flags] [USER@HOST[:PORT] | SAVED-NAME]
 
-Without an address a picker of saved connections opens. The password comes from
-the keyring, SHARELINUX_PASSWORD, -password-file, or is typed into the login form.
+Without an address the window lists your saved Macs and the Macs found on the
+network. The password comes from the keyring, SHARELINUX_PASSWORD,
+-password-file, or is typed into the sign-in dialog.
 
-Hotkeys (hold Ctrl+Alt+Shift, then press):
-  Esc leave exclusive mode   M cycle observe/control/exclusive   H debug HUD
-  F fullscreen   U cycle quality   D cycle displays   V virtual display at window size
-  X toggle HDR   R refresh   T type the local clipboard   G fetch files of the Mac's drag
+In a session Ctrl+Alt+Esc leaves exclusive mode. Hold Ctrl+Alt+Shift and press:
+  M cycle view/control/exclusive   H stats   F fullscreen   U quality
+  D cycle displays   V virtual display at window size   X toggle HDR
+  R refresh   T type the local clipboard   G fetch files of the Mac's drag
   S save a screenshot   Q quit
 
 flags:
@@ -129,7 +130,7 @@ func parseArgs(args []string, output io.Writer) (*options, error) {
 	set.BoolVar(&opts.NoClipboard, "no-clipboard", false, "do not share the clipboard")
 	set.BoolVar(&opts.NoGrab, "no-grab", false, "do not grab the keyboard in control mode")
 	set.BoolVar(&opts.Fullscreen, "fullscreen", false, "start fullscreen")
-	set.BoolVar(&opts.HUD, "hud", false, "start with the debug HUD on")
+	set.BoolVar(&opts.HUD, "hud", false, "start with the stats overlay on")
 	set.BoolVar(&opts.Save, "save", false, "remember this connection (password in the keyring) after it connects")
 	set.BoolVar(&opts.List, "list", false, "list saved connections and exit")
 	set.StringVar(&opts.Forget, "forget", "", "delete the saved connection with this name or address, and its password")
@@ -138,7 +139,7 @@ func parseArgs(args []string, output io.Writer) (*options, error) {
 	set.StringVar(&opts.ClientName, "name", "sharelinux", "name shown to the Mac's user")
 	set.BoolVar(&opts.Verbose, "v", false, "debug logging")
 	set.StringVar(&size, "size", "1280x800", "initial window size WxH")
-	set.StringVar(&opts.ScreenshotDir, "screenshot-dir", "", "where the screenshot hotkey saves (default: current directory)")
+	set.StringVar(&opts.ScreenshotDir, "screenshot-dir", "", "where screenshots are saved (default: the downloads folder)")
 	set.Usage = func() {
 		fmt.Fprint(output, usage)
 		set.PrintDefaults()

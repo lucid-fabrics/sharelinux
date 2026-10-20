@@ -15,7 +15,12 @@ import (
 	"github.com/zalando/go-keyring"
 )
 
-const keyringService = "open-screen-sharing"
+const (
+	keyringService = "sharelinux"
+	// legacyKeyringService is where an earlier build kept passwords. It is still
+	// read, so saved Macs keep working, but nothing is written to it.
+	legacyKeyringService = "open-screen-sharing"
+)
 
 // savedConnection is one entry of connections.json. It never holds a password.
 type savedConnection struct {
@@ -52,6 +57,9 @@ type keyringSecrets struct{}
 func (keyringSecrets) Get(id string) (string, error) {
 	password, err := keyring.Get(keyringService, id)
 	if errors.Is(err, keyring.ErrNotFound) {
+		password, err = keyring.Get(legacyKeyringService, id)
+	}
+	if errors.Is(err, keyring.ErrNotFound) {
 		return "", errNoSecret
 	}
 	return password, err
@@ -64,9 +72,13 @@ func (keyringSecrets) Set(id, password string) error {
 func (keyringSecrets) Delete(id string) error {
 	err := keyring.Delete(keyringService, id)
 	if errors.Is(err, keyring.ErrNotFound) {
-		return nil
+		err = nil
 	}
-	return err
+	legacyErr := keyring.Delete(legacyKeyringService, id)
+	if errors.Is(legacyErr, keyring.ErrNotFound) {
+		legacyErr = nil
+	}
+	return E.Errors(err, legacyErr)
 }
 
 // store is the list of saved connections plus their passwords.
@@ -81,13 +93,40 @@ func newStore(path string, secrets secretStore) *store {
 	return &store{path: path, secrets: secrets}
 }
 
-// defaultStorePath is $XDG_CONFIG_HOME/open-screen-sharing/connections.json.
-func defaultStorePath() (string, error) {
-	directory, err := os.UserConfigDir()
+const (
+	configName       = "sharelinux"
+	legacyConfigName = "open-screen-sharing"
+)
+
+// configDirectory is $XDG_CONFIG_HOME/sharelinux. A folder an earlier build
+// made under its old name is renamed to it the first time.
+func configDirectory() (string, error) {
+	base, err := os.UserConfigDir()
 	if err != nil {
 		return "", E.Cause(err, "find the config directory")
 	}
-	return filepath.Join(directory, "open-screen-sharing", "connections.json"), nil
+	return configDirectoryIn(base), nil
+}
+
+// configDirectoryIn is configDirectory under a given base folder.
+func configDirectoryIn(base string) string {
+	directory := filepath.Join(base, configName)
+	legacy := filepath.Join(base, legacyConfigName)
+	_, newErr := os.Stat(directory)
+	_, oldErr := os.Stat(legacy)
+	if errors.Is(newErr, os.ErrNotExist) && oldErr == nil {
+		_ = os.Rename(legacy, directory)
+	}
+	return directory
+}
+
+// defaultStorePath is $XDG_CONFIG_HOME/sharelinux/connections.json.
+func defaultStorePath() (string, error) {
+	directory, err := configDirectory()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(directory, "connections.json"), nil
 }
 
 func (s *store) List() ([]savedConnection, error) {

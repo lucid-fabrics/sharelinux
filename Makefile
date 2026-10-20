@@ -86,3 +86,16 @@ notarize_macos_pkg:
 fmt:
 	gofumpt -l -w cmd libsharing internal
 	go run ./cmd/internal/format_xcstrings $$(find OpenScreenSharing -name '*.xcstrings')
+
+# Installs the Linux viewer's icon and desktop entry for the current user, and
+# the binary next to them. PREFIX defaults to ~/.local.
+PREFIX ?= $(HOME)/.local
+
+install-linux:
+	go build -o build/sharelinux ./cmd/sharelinux
+	install -Dm755 build/sharelinux $(PREFIX)/bin/sharelinux
+	install -Dm644 cmd/sharelinux/data/io.github.sharelinux.ScreenSharing.svg $(PREFIX)/share/icons/hicolor/scalable/apps/io.github.sharelinux.ScreenSharing.svg
+	install -Dm644 cmd/sharelinux/data/io.github.sharelinux.ScreenSharing.desktop $(PREFIX)/share/applications/io.github.sharelinux.ScreenSharing.desktop
+	install -Dm644 cmd/sharelinux/data/io.github.sharelinux.ScreenSharing.metainfo.xml $(PREFIX)/share/metainfo/io.github.sharelinux.ScreenSharing.metainfo.xml
+	-gtk-update-icon-cache -f -t $(PREFIX)/share/icons/hicolor
+	-update-desktop-database $(PREFIX)/share/applications
