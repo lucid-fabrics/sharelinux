@@ -101,10 +101,6 @@ func (v *view) run() error {
 	}
 	_ = v.canvas.window.SetTitle(title + " - " + windowTitle)
 	_ = v.canvas.window.StartTextInput()
-	if info.Flags&rfb.ServerFlagObserveOnly != 0 && v.mode != rfb.ModeObserve {
-		v.mode = rfb.ModeObserve
-		v.h.toast("The Mac allows viewing only")
-	}
 	v.applyMode(v.mode, false)
 	for {
 		select {
@@ -140,6 +136,7 @@ func (v *view) run() error {
 }
 
 // release hands back everything the view took: grabs, held keys and SDL objects.
+func (v *view) release() {
 	if v.clip != nil {
 		v.clip.close()
 	}
@@ -171,13 +168,13 @@ func (v *view) releaseInput() {
 		_ = v.client.SendPointer(v.pointerX, v.pointerY, 0)
 	}
 }
+
+// poll moves what the network goroutines collected onto the SDL thread.
+func (v *view) poll() {
 	if v.pointerHeld && !v.transfer.gesture.Blocked() {
 		v.pointerHeld = false
 		v.sendPointer(v.pointerX, v.pointerY)
 	}
-
-// poll moves what the network goroutines collected onto the SDL thread.
-func (v *view) poll() {
 	v.syncTexture()
 	if cursor, changed := v.h.takeCursor(); changed {
 		v.setCursor(cursor)
@@ -442,6 +439,11 @@ func (v *view) controlling() bool {
 
 func (v *view) sendPointer(x, y int) {
 	v.pointerX, v.pointerY = x, y
+	if v.transfer.gesture.Blocked() {
+		// A drop is playing its own presses. Send this position when it is done.
+		v.pointerHeld = true
+		return
+	}
 	v.live.echo.Sent(time.Now())
 	err := v.client.SendPointer(x, y, v.buttons)
 	if err != nil {
@@ -580,9 +582,22 @@ func (v *view) onText(text string) {
 	}
 }
 
+// allowedMode is the mode a server accepts: a server that only allows viewing
+// never leaves observe mode, whatever was asked for.
+func allowedMode(mode rfb.Mode, flags uint32) rfb.Mode {
+	if flags&rfb.ServerFlagObserveOnly != 0 {
+		return rfb.ModeObserve
+	}
+	return mode
+}
+
 // applyMode switches between observing, controlling and exclusive control.
 func (v *view) applyMode(mode rfb.Mode, announce bool) {
 	previous := v.mode
+	if allowed := allowedMode(mode, v.client.Info().Flags); allowed != mode {
+		mode = allowed
+		v.notify("The Mac allows viewing only")
+	}
 	if previous == rfb.ModeExclusiveControl && mode != previous {
 		v.warpToPointer()
 	}
