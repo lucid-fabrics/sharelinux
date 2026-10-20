@@ -38,13 +38,17 @@ func main() {
 		forgetConnection(connections, opts.Forget)
 		return
 	}
-	viewer := &app{opts: opts, logger: logger, store: connections}
-	err = viewer.open()
+	prefsPath, err := defaultSettingsPath()
 	if err != nil {
 		fatal(err)
 	}
-	err = viewer.run()
-	viewer.close()
+	prefs := &settingsStore{path: prefsPath}
+	current, err := prefs.Load()
+	if err != nil {
+		logger.Warn("preferences", "error", err)
+	}
+	viewer := &app{opts: opts, logger: logger, store: connections, prefs: prefs, settings: current}
+	err = runGUI(viewer)
 	if err != nil {
 		fatal(err)
 	}

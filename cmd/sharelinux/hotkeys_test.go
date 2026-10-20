@@ -1,10 +1,6 @@
 package main
 
-import (
-	"testing"
-
-	"github.com/nekohasekai/open-screen-sharing/internal/rfb"
-)
+import "testing"
 
 func TestChordNeedsFullLeader(t *testing.T) {
 	const all = modCtrl | modAlt | modShift
@@ -45,16 +41,5 @@ func TestChordKeysAreUnique(t *testing.T) {
 func TestNextCycle(t *testing.T) {
 	if nextCycle(0, 3) != 1 || nextCycle(2, 3) != 0 {
 		t.Fatal("ring")
-	}
-}
-
-func TestAllowedMode(t *testing.T) {
-	for _, mode := range []rfb.Mode{rfb.ModeObserve, rfb.ModeControl, rfb.ModeExclusiveControl} {
-		if got := allowedMode(mode, rfb.ServerFlagObserveOnly); got != rfb.ModeObserve {
-			t.Errorf("view-only server allowed %v", got)
-		}
-		if got := allowedMode(mode, 0); got != mode {
-			t.Errorf("%v changed to %v", mode, got)
-		}
 	}
 }

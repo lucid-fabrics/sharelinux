@@ -197,6 +197,21 @@ func (s *store) Password(connection savedConnection) (string, error) {
 	return s.secrets.Get(connection.target().ID())
 }
 
+// Lookup returns the saved connection with the same address and user as the target.
+func (s *store) Lookup(t target) (savedConnection, bool) {
+	connections, err := s.List()
+	if err != nil {
+		return savedConnection{}, false
+	}
+	id := t.ID()
+	for _, connection := range connections {
+		if connection.target().ID() == id {
+			return connection, true
+		}
+	}
+	return savedConnection{}, false
+}
+
 // Find looks a connection up by name or by address, ignoring case.
 func (s *store) Find(query string) (savedConnection, bool) {
 	connections, err := s.List()

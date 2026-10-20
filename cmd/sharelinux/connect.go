@@ -4,7 +4,6 @@ import (
 	"context"
 	"strings"
 
-	"github.com/Zyko0/go-sdl3/sdl"
 	"github.com/nekohasekai/open-screen-sharing/internal/rfb"
 	E "github.com/sagernet/sing/common/exceptions"
 )
@@ -75,12 +74,36 @@ func (a *app) dial(ctx context.Context, req *request, h *handler) (*rfb.Client, 
 	return rfb.Dial(ctx, a.rfbOptions(req, h), h)
 }
 
-// connect dials the Mac while showing progress. Escape or closing the window cancels.
-func (a *app) connect(req *request) (*liveSession, error) {
+// dialer is one connection attempt running in the background. The window shows
+// its progress through dialEvents and can abort it.
+type dialer struct {
+	ctx     context.Context
+	cancel  context.CancelFunc
+	echo    *latency
+	handler *handler
+	prompts chan *sessionPrompt
+	results chan dialResult
+	req     *request
+}
+
+// dialEvents are what the window hears about an attempt. Each runs on the
+// dialer's goroutine, so the window must hand them to its own thread.
+type dialEvents struct {
+	State  func(status string)
+	Prompt func(*sessionPrompt)
+	Done   func(*liveSession, error)
+}
+
+// beginDial starts dialing in the background.
+func (a *app) beginDial(req *request) *dialer {
 	ctx, cancel := context.WithCancel(context.Background())
 	echo := &latency{}
 	h := newHandler(a.logger, echo)
-	prompts := make(chan *sessionPrompt)
+	d := &dialer{
+		ctx: ctx, cancel: cancel, echo: echo, handler: h, req: req,
+		prompts: make(chan *sessionPrompt),
+		results: make(chan dialResult, 1),
+	}
 	h.choose = func(request rfb.SessionRequest) (rfb.SessionChoice, error) {
 		switch req.opts.Session {
 		case "console":
@@ -92,7 +115,7 @@ func (a *app) connect(req *request) (*liveSession, error) {
 		}
 		prompt := &sessionPrompt{request: request, answer: make(chan rfb.SessionChoice, 1)}
 		select {
-		case prompts <- prompt:
+		case d.prompts <- prompt:
 		case <-ctx.Done():
 			return rfb.SessionCancel, ctx.Err()
 		}
@@ -103,56 +126,48 @@ func (a *app) connect(req *request) (*liveSession, error) {
 			return rfb.SessionCancel, ctx.Err()
 		}
 	}
-	results := make(chan dialResult, 1)
 	go func() {
 		client, err := a.dial(ctx, req, h)
-		results <- dialResult{client, err}
+		d.results <- dialResult{client, err}
 	}()
-	status := "Connecting"
-	var prompt *sessionPrompt
+	return d
+}
+
+// abort cancels the attempt. Done still fires, with a cancellation error.
+func (d *dialer) abort() {
+	d.cancel()
+}
+
+// run reports the attempt until it ends. It blocks, so start it in a goroutine.
+func (d *dialer) run(events dialEvents) {
 	for {
-		a.drawConnecting(req, status, prompt)
 		select {
-		case result := <-results:
+		case result := <-d.results:
 			if result.err != nil {
-				cancel()
-				return nil, result.err
+				d.cancel()
+				events.Done(nil, result.err)
+				return
 			}
-			live := &liveSession{req: req, client: result.client, handler: h, echo: echo, ctx: ctx, cancel: cancel, done: make(chan struct{})}
+			if d.ctx.Err() != nil {
+				_ = result.client.Close()
+				events.Done(nil, E.Extend(context.Canceled, "cancelled"))
+				return
+			}
+			live := &liveSession{req: d.req, client: result.client, handler: d.handler, echo: d.echo, ctx: d.ctx, cancel: d.cancel, done: make(chan struct{})}
 			go func() {
 				live.runErr = live.client.Run()
 				close(live.done)
 			}()
-			return live, nil
-		case state := <-h.states:
-			status = describeState(state)
-		case prompt = <-prompts:
-		default:
-		}
-		event := nextEvent(50)
-		if event == nil {
-			continue
-		}
-		if isQuit(event) {
-			cancel()
-			drainDial(results, (*rfb.Client).Close)
-			return nil, errQuit
-		}
-		if event.Type != sdl.EVENT_KEY_DOWN {
-			continue
-		}
-		key := event.KeyboardEvent().Key
-		switch {
-		case key == sdl.K_ESCAPE:
-			cancel()
-			drainDial(results, (*rfb.Client).Close)
-			return nil, E.Extend(context.Canceled, "cancelled")
-		case prompt != nil && key == sdl.K_C:
-			prompt.answer <- rfb.SessionShareConsole
-			prompt = nil
-		case prompt != nil && key == sdl.K_O:
-			prompt.answer <- rfb.SessionOwn
-			prompt = nil
+			events.Done(live, nil)
+			return
+		case state := <-d.handler.states:
+			events.State(describeState(state))
+		case prompt := <-d.prompts:
+			events.Prompt(prompt)
+		case <-d.ctx.Done():
+			drainDial(d.results, (*rfb.Client).Close)
+			events.Done(nil, E.Extend(context.Canceled, "cancelled"))
+			return
 		}
 	}
 }
@@ -180,21 +195,6 @@ func describeState(state rfb.State) string {
 		return "Starting the screen"
 	}
 	return "Connecting"
-}
-
-func (a *app) drawConnecting(req *request, status string, prompt *sessionPrompt) {
-	c := a.canvas
-	width, _ := c.begin(uiScale)
-	columns := glyphs(width) - 4
-	c.text(16, 16, colorAccent, ellipsize(status+" to "+req.target.String(), columns))
-	if prompt == nil {
-		c.text(16, 48, colorMuted, "Esc cancels.")
-	} else {
-		user := prompt.request.ConsoleUser
-		c.text(16, 48, colorText, ellipsize("The Mac has "+quoteName(user)+" logged in.", columns))
-		c.text(16, 68, colorText, "C: share their screen   O: your own session   Esc: cancel")
-	}
-	_ = c.renderer.Present()
 }
 
 func quoteName(name string) string {
