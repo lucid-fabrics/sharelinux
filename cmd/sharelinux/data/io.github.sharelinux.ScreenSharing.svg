@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3584e4"/>
+      <stop offset="1" stop-color="#1c71d8"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#99c1f1"/>
+      <stop offset="1" stop-color="#62a0ea"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="112" height="112" rx="26" fill="url(#tile)"/>
+  <rect x="26" y="30" width="76" height="52" rx="7" fill="#ffffff"/>
+  <rect x="32" y="36" width="64" height="40" rx="3" fill="url(#screen)"/>
+  <path d="M52 94h24" stroke="#ffffff" stroke-width="7" stroke-linecap="round"/>
+  <path d="M64 82v12" stroke="#ffffff" stroke-width="7"/>
+  <path d="M52 44l22 12-9 2-5 9z" fill="#ffffff" stroke="#1c71d8" stroke-width="2" stroke-linejoin="round"/>
+</svg>

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Screen Sharing
+Comment=View and control the screen of a Mac
+Exec=sharelinux %u
+Icon=io.github.sharelinux.ScreenSharing
+Terminal=false
+Categories=Network;RemoteAccess;
+Keywords=vnc;remote;desktop;mac;screen;
+MimeType=x-scheme-handler/vnc;
+StartupNotify=true
+StartupWMClass=io.github.sharelinux.ScreenSharing

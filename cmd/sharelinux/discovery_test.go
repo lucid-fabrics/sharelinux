@@ -95,3 +95,24 @@ func TestUnsavedHidesKnownMacsAndSorts(t *testing.T) {
 		t.Fatalf("sorted by name: %+v", got)
 	}
 }
+
+func TestUnescapeLabel(t *testing.T) {
+	cases := map[string]string{
+		"Mac mini":                 "Mac mini",
+		`Mac\ mini`:                "Mac mini",
+		`cicd\226\128\153s iMac`:   "cicd\u2019s iMac",
+		`a\.b\\c`:                 `a.b\c`,
+		`trailing\`:                `trailing\`,
+		`bad\999x`:                 "bad999x",
+		`two\04`:                   "two04",
+	}
+	for in, want := range cases {
+		if got := unescapeLabel(in); got != want {
+			t.Errorf("%q: %q, want %q", in, got, want)
+		}
+	}
+	mac, ok := newDiscoveredMac(entry(`MacBook\ Pro`, "mb.local.", 5900, "10.0.0.4"))
+	if !ok || mac.Name != "MacBook Pro" {
+		t.Fatalf("%+v", mac)
+	}
+}

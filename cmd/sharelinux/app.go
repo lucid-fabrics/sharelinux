@@ -122,10 +122,8 @@ func (a *app) remember(req *request, name string) {
 		Keyboard: req.opts.Keyboard,
 		LastUsed: now(),
 	}
-	if existing, found := a.store.Lookup(req.target); found {
-		if connection.Name == "" {
-			connection.Name = existing.Name
-		}
+	if existing, found := a.store.Lookup(req.target); found && existing.Name != "" {
+		connection.Name = existing.Name
 	}
 	err := a.store.Save(connection, req.password)
 	if err != nil {

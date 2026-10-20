@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.sharelinux.ScreenSharing</id>
+  <name>Screen Sharing</name>
+  <summary>View and control the screen of a Mac</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <description>
+    <p>Connect to the built-in Screen Sharing of a Mac, see its screen and control it with your keyboard and mouse. Copy and paste between the two computers and drag files across.</p>
+  </description>
+  <launchable type="desktop-id">io.github.sharelinux.ScreenSharing.desktop</launchable>
+  <content_rating type="oars-1.1"/>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <provides>
+    <binary>sharelinux</binary>
+  </provides>
+</component>

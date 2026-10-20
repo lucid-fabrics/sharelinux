@@ -27,6 +27,7 @@ type handler struct {
 	cursorX      int
 	cursorY      int
 	layout       *rfb.DisplayLayout
+	layoutNew    bool
 	clipboard    *rfb.Clipboard
 	toasts       []string
 	drag         *rfb.RemoteDrag
@@ -115,7 +116,7 @@ func (h *handler) remoteCursor() (int, int) {
 
 func (h *handler) DisplaysChanged(layout *rfb.DisplayLayout) {
 	h.access.Lock()
-	h.layout = layout
+	h.layout, h.layoutNew = layout, true
 	h.access.Unlock()
 }
 
@@ -241,4 +242,13 @@ func (h *handler) updateCount() uint64 {
 	h.access.Lock()
 	defer h.access.Unlock()
 	return h.updates
+}
+
+// layoutChanged reports, once, that the Mac sent a display layout.
+func (h *handler) layoutChanged() bool {
+	h.access.Lock()
+	defer h.access.Unlock()
+	changed := h.layoutNew
+	h.layoutNew = false
+	return changed
 }

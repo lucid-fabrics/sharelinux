@@ -27,6 +27,46 @@ type discoveredMac struct {
 	Port      int
 }
 
+// unescapeLabel undoes the DNS escaping of a service instance name: a
+// backslash before a character stands for the character, and a backslash with
+// three digits for the byte of that decimal value. Names like "Wassim\226\128\153s Mac"
+// come back as written by the person who named the Mac.
+func unescapeLabel(label string) string {
+	if !strings.Contains(label, "\\") {
+		return label
+	}
+	var result []byte
+	for index := 0; index < len(label); index++ {
+		if label[index] != '\\' || index+1 >= len(label) {
+			result = append(result, label[index])
+			continue
+		}
+		if value, ok := decimalByte(label[index+1:]); ok {
+			result = append(result, value)
+			index += 3
+			continue
+		}
+		result = append(result, label[index+1])
+		index++
+	}
+	return string(result)
+}
+
+// decimalByte reads three decimal digits at the start of text as a byte.
+func decimalByte(text string) (byte, bool) {
+	if len(text) < 3 {
+		return 0, false
+	}
+	value := 0
+	for _, digit := range []byte(text[:3]) {
+		if digit < '0' || digit > '9' {
+			return 0, false
+		}
+		value = value*10 + int(digit-'0')
+	}
+	return byte(value), value <= 255
+}
+
 // newDiscoveredMac reads one mDNS answer. It returns false for an answer
 // without a name or a usable address.
 func newDiscoveredMac(entry *zeroconf.ServiceEntry) (discoveredMac, bool) {
@@ -34,7 +74,7 @@ func newDiscoveredMac(entry *zeroconf.ServiceEntry) (discoveredMac, bool) {
 		return discoveredMac{}, false
 	}
 	mac := discoveredMac{
-		Name: strings.TrimSpace(entry.Instance),
+		Name: strings.TrimSpace(unescapeLabel(entry.Instance)),
 		Host: strings.TrimSuffix(entry.HostName, "."),
 		Port: entry.Port,
 	}
