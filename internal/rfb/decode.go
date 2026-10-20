@@ -9,6 +9,12 @@ import (
 	E "github.com/sagernet/sing/common/exceptions"
 )
 
+// errOutsideFramebuffer marks an MVS rectangle that does not fit the
+// framebuffer the client holds yet. The server draws it for a new geometry
+// that the client has not been told about, so the rectangle is dropped and the
+// resize that follows asks for the whole picture again.
+var errOutsideFramebuffer = E.New("rfb: rectangle outside the framebuffer")
+
 const (
 	maximumCompressedRectangle = 128 << 20
 	maximumInflatedRectangle   = 512 << 20
@@ -110,6 +116,9 @@ func (d *decoders) decode(input *stream, framebuffer *bgra.Image, rectangle Rect
 		payload, err := d.readPayload(input)
 		if err != nil {
 			return err
+		}
+		if x < 0 || y < 0 || x+width > framebuffer.Width || y+height > framebuffer.Height {
+			return errOutsideFramebuffer
 		}
 		return d.mvs.Decode(payload, x, y, width, height, framebuffer)
 	default:

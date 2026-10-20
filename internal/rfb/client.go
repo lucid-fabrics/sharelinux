@@ -707,6 +707,10 @@ func (c *Client) receiveRectangles(count int) (Update, error) {
 			payload := c.stream.stopCapture()
 			c.options.RectangleObserver(RawRectangle{Sequence: sequence, Rectangle: rectangle, Payload: payload})
 		}
+		if errors.Is(err, errOutsideFramebuffer) {
+			c.logger.Warn("rectangle dropped, it is outside the framebuffer", "rectangle", rectangle, "width", c.width, "height", c.height)
+			continue
+		}
 		if err != nil {
 			return update, E.Cause(err, "read ", rectangle.Encoding, " rectangle ", rectangle)
 		}
