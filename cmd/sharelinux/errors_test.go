@@ -41,3 +41,14 @@ func TestDescribeError(t *testing.T) {
 		t.Fatal("nil is no problem")
 	}
 }
+
+func TestDescribeErrorWrongVNCPassword(t *testing.T) {
+	kind, text := describeError(rfb.ErrAuthenticationFailed, "mac:5900")
+	if kind != problemPassword || !strings.Contains(text, "VNC password") {
+		t.Fatalf("%d %q", kind, text)
+	}
+	_, text = describeError(rfb.ErrUnsupportedServer, "mac:5900")
+	if !strings.Contains(text, "-vnc") {
+		t.Fatalf("unsupported servers should point at -vnc: %q", text)
+	}
+}

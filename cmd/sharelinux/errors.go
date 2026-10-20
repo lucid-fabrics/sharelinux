@@ -37,13 +37,13 @@ func describeError(err error, address string) (problemKind, string) {
 	case E.IsMulti(err, context.Canceled, rfb.ErrSessionCancelled):
 		return problemCancelled, "Connection cancelled."
 	case errors.Is(err, rfb.ErrAuthenticationFailed):
-		return problemPassword, "The user name or password was not accepted. Use the Mac account's name and password."
+		return problemPassword, "The user name or password was not accepted. Check the Mac account's name and password, or the VNC password when no user is given."
 	case errors.Is(err, rfb.ErrPermissionDenied):
 		return problemDenied, "The person at the Mac declined the request to share the screen."
 	case errors.Is(err, rfb.ErrUnverifiedServer):
 		return problemUnsupported, "This server would learn the password in clear text. Start with -allow-unverified to log in anyway."
 	case errors.Is(err, rfb.ErrUnsupportedServer):
-		return problemUnsupported, "This server does not offer a login this client supports: " + err.Error()
+		return problemUnsupported, "This server does not offer a login this client supports: " + err.Error() + ". If it only has a VNC password, leave the user empty or start with -vnc."
 	case errors.Is(err, syscall.ECONNREFUSED):
 		return problemRefused, address + " refused the connection. Turn on Screen Sharing in System Settings > General > Sharing on the Mac."
 	case errors.As(err, &dns) && dns.IsNotFound:

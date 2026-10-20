@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"strings"
 
 	"github.com/Zyko0/go-sdl3/sdl"
@@ -68,6 +67,14 @@ func (a *app) rfbOptions(req *request, h *handler) rfb.Options {
 	return options
 }
 
+// dial makes one attempt with the login the request asks for. It never falls
+// back to another login: an account password is not sent as a VNC password,
+// because that challenge can be cracked offline. A VNC password is used only
+// when the request says so (-vnc, or no user name).
+func (a *app) dial(ctx context.Context, req *request, h *handler) (*rfb.Client, error) {
+	return rfb.Dial(ctx, a.rfbOptions(req, h), h)
+}
+
 // connect dials the Mac while showing progress. Escape or closing the window cancels.
 func (a *app) connect(req *request) (*liveSession, error) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -98,18 +105,7 @@ func (a *app) connect(req *request) (*liveSession, error) {
 	}
 	results := make(chan dialResult, 1)
 	go func() {
-		client, err := rfb.Dial(ctx, a.rfbOptions(req, h), h)
-		if err != nil && errors.Is(err, rfb.ErrUnsupportedServer) && req.target.User != "" && req.password != "" && !req.opts.VNC {
-			// The server has no Mac account login. Try its VNC password with the same secret.
-			h.toast("No Mac account login offered, using the VNC password")
-			retry := *req
-			retry.opts.VNC = true
-			var second *rfb.Client
-			second, retryErr := rfb.Dial(ctx, a.rfbOptions(&retry, h), h)
-			if retryErr == nil {
-				client, err = second, nil
-			}
-		}
+		client, err := a.dial(ctx, req, h)
 		results <- dialResult{client, err}
 	}()
 	status := "Connecting"
@@ -139,7 +135,7 @@ func (a *app) connect(req *request) (*liveSession, error) {
 		}
 		if isQuit(event) {
 			cancel()
-			<-results
+			drainDial(results, (*rfb.Client).Close)
 			return nil, errQuit
 		}
 		if event.Type != sdl.EVENT_KEY_DOWN {
@@ -149,7 +145,7 @@ func (a *app) connect(req *request) (*liveSession, error) {
 		switch {
 		case key == sdl.K_ESCAPE:
 			cancel()
-			<-results
+			drainDial(results, (*rfb.Client).Close)
 			return nil, E.Extend(context.Canceled, "cancelled")
 		case prompt != nil && key == sdl.K_C:
 			prompt.answer <- rfb.SessionShareConsole
@@ -158,6 +154,15 @@ func (a *app) connect(req *request) (*liveSession, error) {
 			prompt.answer <- rfb.SessionOwn
 			prompt = nil
 		}
+	}
+}
+
+// drainDial waits for the dial that was cancelled and closes a client that
+// finished anyway, so its socket and goroutines do not outlive the attempt.
+func drainDial(results <-chan dialResult, closeClient func(*rfb.Client) error) {
+	result := <-results
+	if result.client != nil {
+		_ = closeClient(result.client)
 	}
 }
 
