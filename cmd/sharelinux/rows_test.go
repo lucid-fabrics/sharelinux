@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -63,5 +64,24 @@ func TestTileColorIsStable(t *testing.T) {
 		if !known[tileColor(id)] {
 			t.Errorf("%q: unknown colour", id)
 		}
+	}
+}
+
+func TestExclusiveTooltipIsHonestOnWayland(t *testing.T) {
+	x11, wayland := exclusiveTooltip(true), exclusiveTooltip(false)
+	if !strings.Contains(x11, "keeps the pointer inside") {
+		t.Fatalf("X11 holds the pointer: %q", x11)
+	}
+	if !strings.Contains(wayland, "Captures the keyboard only") {
+		t.Fatalf("Wayland captures the keyboard only: %q", wayland)
+	}
+	if strings.Contains(wayland, "keeps the pointer") {
+		t.Fatalf("Wayland must not promise what it cannot do: %q", wayland)
+	}
+	if exclusiveAnnouncement(true) == exclusiveAnnouncement(false) {
+		t.Fatal("the toast tells the two apart")
+	}
+	if !strings.Contains(exclusiveAnnouncement(false), "keyboard only") {
+		t.Fatal(exclusiveAnnouncement(false))
 	}
 }

@@ -22,14 +22,35 @@ var width, height = 640, 400
 // damage is the side of the square sent in each update; 0 sends the whole screen.
 var damage int
 
+// baseWidth and baseHeight are the size every new connection starts with; a
+// -resize changes the screen mid-session and the next connection starts over.
+var baseWidth, baseHeight int
+
+// resizeWidth, resizeHeight and resizeAfter describe the one resize of a session:
+// after that many update requests the server switches to the new size and says so
+// with a DesktopSize rectangle.
+var resizeWidth, resizeHeight, resizeAfter int
+
+// resizeCycle keeps changing the size every resizeAfter requests, between the
+// base size and the resize, instead of once.
+var resizeCycle bool
+
 func main() {
 	listen := flag.String("listen", "127.0.0.1:5990", "address to listen on")
 	password := flag.String("password", os.Getenv("MOCKRFB_PASSWORD"), "VNC password (or MOCKRFB_PASSWORD)")
 	size := flag.String("size", "640x400", "screen size WxH")
 	flag.IntVar(&damage, "damage", 0, "send only a square of this many pixels per update, 0 for the whole screen")
+	resize := flag.String("resize", "", "WxH@N: after N update requests change the screen to WxH (DesktopSize), for checking resizes")
+	flag.BoolVar(&resizeCycle, "resize-cycle", false, "with -resize, switch between the two sizes every N update requests instead of once")
 	flag.Parse()
 	if _, err := fmt.Sscanf(*size, "%dx%d", &width, &height); err != nil || width < 16 || height < 16 {
 		log.Fatal("bad -size ", *size)
+	}
+	baseWidth, baseHeight = width, height
+	if *resize != "" {
+		if _, err := fmt.Sscanf(*resize, "%dx%d@%d", &resizeWidth, &resizeHeight, &resizeAfter); err != nil || resizeWidth < 16 || resizeHeight < 16 || resizeAfter < 1 {
+			log.Fatal("bad -resize ", *resize)
+		}
 	}
 	listener, err := net.Listen("tcp", *listen)
 	if err != nil {
@@ -86,6 +107,7 @@ func frame(marker, x0, y0, w, h int) []byte {
 
 func serve(conn net.Conn, password string) {
 	defer conn.Close()
+	width, height = baseWidth, baseHeight
 	write := func(data ...byte) { conn.Write(data) }
 	conn.Write([]byte("RFB 003.008\n"))
 	version := make([]byte, 12)
@@ -122,6 +144,7 @@ func serve(conn net.Conn, password string) {
 	init = binary.BigEndian.AppendUint32(init, uint32(len(name)))
 	conn.Write(append(init, name...))
 	marker := 0
+	requests := 0
 	sentClipboard := false
 	for {
 		kind := make([]byte, 1)
@@ -139,6 +162,21 @@ func serve(conn net.Conn, password string) {
 		case 3: // FramebufferUpdateRequest
 			body := make([]byte, 9)
 			io.ReadFull(conn, body)
+			requests++
+			if resizeAfter > 0 && (requests == resizeAfter || resizeCycle && requests%resizeAfter == 0) {
+				if width == resizeWidth && height == resizeHeight {
+					width, height = baseWidth, baseHeight
+				} else {
+					width, height = resizeWidth, resizeHeight
+				}
+				log.Println("screen is now", width, "x", height)
+				change := []byte{0, 0, 0, 1, 0, 0, 0, 0}
+				change = binary.BigEndian.AppendUint16(change, uint16(width))
+				change = binary.BigEndian.AppendUint16(change, uint16(height))
+				change = binary.BigEndian.AppendUint32(change, 0xFFFFFF21) // DesktopSize, -223
+				conn.Write(change)
+				continue
+			}
 			marker = (marker + 4) % (width - 8)
 			update := []byte{0, 0, 0, 1}
 			x0, y0, w, h := 0, 0, width, height

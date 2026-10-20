@@ -169,10 +169,18 @@ static void rebuild_tile(OssScreen *self, const guint8 *pixels, gsize stride, in
 	self->tiles[index] = texture;
 }
 
-void oss_screen_update(GtkWidget *screen, const guint8 *pixels, gsize stride, int x, int y, int width, int height) {
+gboolean oss_screen_update(GtkWidget *screen, const guint8 *pixels, gsize length, gsize stride, int fb_width, int fb_height, int x, int y, int width, int height) {
 	OssScreen *self = OSS_SCREEN(screen);
-	if (self->tiles == NULL || width <= 0 || height <= 0) {
-		return;
+	if (self->tiles == NULL || pixels == NULL || fb_width != self->width || fb_height != self->height) {
+		return FALSE;
+	}
+	// The last row needs only its own pixels, not a whole stride.
+	if (fb_width <= 0 || fb_height <= 0 || stride < (gsize)fb_width * 4 || length / stride < (gsize)(fb_height - 1) ||
+	    length - stride * (gsize)(fb_height - 1) < (gsize)fb_width * 4) {
+		return FALSE;
+	}
+	if (width <= 0 || height <= 0) {
+		return TRUE;
 	}
 	int tile_w = self->tile_size > 0 ? self->tile_size : self->width;
 	int tile_h = self->tile_size > 0 ? self->tile_size : self->height;
@@ -180,7 +188,7 @@ void oss_screen_update(GtkWidget *screen, const guint8 *pixels, gsize stride, in
 	x = MAX(x, 0);
 	y = MAX(y, 0);
 	if (x >= x1 || y >= y1) {
-		return;
+		return TRUE;
 	}
 	for (int row = y / tile_h; row <= (y1 - 1) / tile_h; row++) {
 		for (int column = x / tile_w; column <= (x1 - 1) / tile_w; column++) {
@@ -188,6 +196,7 @@ void oss_screen_update(GtkWidget *screen, const guint8 *pixels, gsize stride, in
 		}
 	}
 	gtk_widget_queue_draw(screen);
+	return TRUE;
 }
 
 void oss_screen_set_viewport(GtkWidget *screen, float x, float y, float width, float height) {

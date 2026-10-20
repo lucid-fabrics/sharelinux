@@ -158,11 +158,19 @@ func (g *gui) setListActions(enabled bool) {
 	}
 }
 
+// newToast is a toast that shows its text as written. A toast reads its title
+// as Pango markup unless told not to, and the text here includes names from
+// the outside (folders, Macs, error messages): "a < b" or "<b>" must show as is.
+func newToast(message string) *adw.Toast {
+	toast := adw.NewToast(message)
+	toast.SetUseMarkup(false)
+	toast.SetTimeout(4)
+	return toast
+}
+
 // toast shows a short message over the current page.
 func (g *gui) toast(message string) {
-	toast := adw.NewToast(message)
-	toast.SetTimeout(4)
-	g.toasts.AddToast(toast)
+	g.toasts.AddToast(newToast(message))
 }
 
 func (g *gui) showAbout() {

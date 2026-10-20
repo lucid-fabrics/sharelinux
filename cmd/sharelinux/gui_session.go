@@ -8,6 +8,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"time"
 
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
@@ -67,6 +68,10 @@ type sessionView struct {
 	copyTitle  *gtk.Label
 	copyValue  *gtk.Label
 	copyBar    *gtk.ProgressBar
+	copyCancel *gtk.Button
+	// copyPulse keeps the bar moving while a drop waits for the Mac's answer.
+	copyPulse bool
+	copyHide  coreglib.SourceHandle
 
 	mode      rfb.Mode
 	quality   rfb.Quality
@@ -101,6 +106,8 @@ type sessionView struct {
 	virtualAsked bool
 	fullscreen   bool
 	hideTimer    coreglib.SourceHandle
+	// outliving holds the handlers on objects that outlive the session; end() removes them.
+	outliving signalScope
 }
 
 // startSession shows a connected Mac on its own page.
@@ -178,6 +185,7 @@ func (v *sessionView) buildHeader(name string) *adw.HeaderBar {
 			toggle.SetTooltip("This Mac only allows viewing")
 		}
 	}
+	v.modes.ToggleByName("exclusive").SetTooltip(exclusiveTooltip(pointerConfinable()))
 	v.modes.SetActiveName(modeID(allowedMode(v.mode, v.client.Info().Flags)))
 	header.PackStart(v.modes)
 
@@ -282,11 +290,11 @@ func (v *sessionView) buildCopyCard(overlay *gtk.Overlay) {
 	v.copyTitle.SetEllipsize(3)
 	v.copyValue = gtk.NewLabel("")
 	v.copyValue.AddCSSClass("dim-label")
-	cancel := gtk.NewButtonFromIconName("window-close-symbolic")
-	cancel.AddCSSClass("flat")
-	cancel.AddCSSClass("circular")
-	cancel.SetTooltipText("Cancel the copy")
-	cancel.ConnectClicked(func() {
+	v.copyCancel = gtk.NewButtonFromIconName("window-close-symbolic")
+	v.copyCancel.AddCSSClass("flat")
+	v.copyCancel.AddCSSClass("circular")
+	v.copyCancel.SetTooltipText("Cancel the copy")
+	v.copyCancel.ConnectClicked(func() {
 		if v.transfer != nil {
 			v.transfer.cancelCopy()
 		}
@@ -294,7 +302,7 @@ func (v *sessionView) buildCopyCard(overlay *gtk.Overlay) {
 	row := gtk.NewBox(gtk.OrientationHorizontal, 10)
 	row.Append(v.copyTitle)
 	row.Append(v.copyValue)
-	row.Append(cancel)
+	row.Append(v.copyCancel)
 	v.copyBar = gtk.NewProgressBar()
 	v.copyCard = gtk.NewBox(gtk.OrientationVertical, 8)
 	v.copyCard.AddCSSClass("oss-copy-card")
@@ -420,7 +428,7 @@ func (v *sessionView) setStats(on bool) {
 func (v *sessionView) start() {
 	v.transfer = &transfers{client: v.client, handler: v.h, context: v.live.ctx, folder: func() string { return v.g.app.preferences().downloadFolder() }}
 	if !v.live.req.opts.NoClipboard {
-		v.clip = newClipboardBridge(v.client, v.screen, func(message string) { v.notify(message) })
+		v.clip = newClipboardBridge(v.client, v.screen, func(message string) { v.notify(message) }, v.controlling)
 	}
 	// A frame clock tick would stop while the picture is still, and with it the
 	// check for a connection that ended, so a timer drives the polling instead.
@@ -447,6 +455,14 @@ func (v *sessionView) end() {
 	if v.hideTimer != 0 {
 		coreglib.SourceRemove(v.hideTimer)
 	}
+	if v.copyHide != 0 {
+		coreglib.SourceRemove(v.copyHide)
+		v.copyHide = 0
+	}
+	// The window outlives the session: a handler left on it would keep this
+	// session, and its picture, alive and keep reacting to fullscreen.
+	v.outliving.release()
+	v.im.SetClientWidget(nil)
 	v.releaseInput()
 	if v.clip != nil {
 		v.clip.close()
@@ -464,6 +480,27 @@ func (v *sessionView) end() {
 		v.g.window.Unfullscreen()
 	}
 	v.g.window.SetTitle(windowName)
+	v.release()
+}
+
+// release frees what the session's widgets hold. A page that was merely
+// popped stayed in memory with its whole picture, because the closures on its
+// widgets held the session (see destroyTree). The picture's tiles go at once,
+// the widgets and actions are destroyed, and the Go collector then takes the
+// session and its framebuffer.
+func (v *sessionView) release() {
+	v.screen.clear()
+	for _, name := range v.actions.ListActions() {
+		coreglib.Destroy(v.actions.LookupAction(name))
+	}
+	coreglib.Destroy(v.actions)
+	coreglib.Destroy(v.im)
+	destroyTree(v.page)
+	// The framebuffer of a big screen is large; hand it back soon.
+	coreglib.TimeoutAdd(200, func() bool {
+		debug.FreeOSMemory()
+		return false
+	})
 }
 
 // poll moves what the network goroutines collected onto the main loop. It runs once per frame.
@@ -509,9 +546,15 @@ func (v *sessionView) poll() {
 	if v.h.layoutChanged() {
 		v.layoutArrived()
 	}
+	if v.layoutSeen {
+		v.askVirtualDisplay()
+	}
 	if time.Since(v.statsAt) >= statsInterval {
 		v.statsAt = time.Now()
 		v.updateStats()
+		if v.copyPulse {
+			v.copyBar.Pulse()
+		}
 	}
 }
 
@@ -531,30 +574,42 @@ func (v *sessionView) layoutArrived() {
 	}
 }
 
+// askVirtualDisplay creates the virtual display the preferences ask for at the
+// size of the window, once, as soon as the window has a size.
+func (v *sessionView) askVirtualDisplay() {
+	if v.virtualAsked {
+		return
+	}
+	prefs := v.g.app.preferences()
+	if !prefs.virtualFollowsWindow(&v.live.req.opts) {
+		v.virtualAsked = true
+		return
+	}
+	display, ok := prefs.windowVirtualDisplay(&v.live.req.opts, v.screen.Width(), v.screen.Height())
+	if !ok {
+		return
+	}
+	v.virtualAsked = true
+	err := v.client.SetVirtualDisplay(display.Width, display.Height, display.Density, rfb.VirtualDisplayLargestSide, rfb.VirtualDisplayLargestSide)
+	v.report(fmt.Sprintf("Virtual display %d×%d", display.Width, display.Height), err)
+}
+
 // syncPicture copies changed pixels from the framebuffer into the widget's tiles.
+// The size is read from the framebuffer inside its lock, so what is copied
+// always matches the buffer, even when the Mac resized meanwhile.
 func (v *sessionView) syncPicture() {
 	dirty, full := v.h.takeDirty()
-	width, height := v.client.FramebufferSize()
-	if width <= 0 || height <= 0 {
-		return
-	}
-	if width != v.screen.width || height != v.screen.height {
-		v.screen.resize(width, height)
-		full = true
-	}
-	if !full && dirty.Empty() {
-		v.layoutPicture()
-		return
-	}
 	v.client.Framebuffer(func(framebuffer *bgra.Image) {
-		if framebuffer == nil {
+		if framebuffer == nil || framebuffer.Bounds().Empty() {
 			return
 		}
-		area := dirty
-		if full {
-			area = framebuffer.Bounds()
+		resize, area := planPicture(framebuffer.Bounds(), image.Pt(v.screen.width, v.screen.height), dirty, full)
+		if resize {
+			v.screen.resize(framebuffer.Width, framebuffer.Height)
 		}
-		v.screen.update(framebuffer, area)
+		if !v.screen.update(framebuffer, area) {
+			v.g.app.logger.Warn("picture does not fit the widget", "width", framebuffer.Width, "height", framebuffer.Height)
+		}
 	})
 	v.layoutPicture()
 }
@@ -628,14 +683,37 @@ func (v *sessionView) updateStats() {
 	}
 }
 
+// copyDoneShown is how long the card says a copy is finished before it goes.
+const copyDoneShown = 2500
+
+// showTransfer is the one indicator of a file copy or drop: it says what is
+// prepared, how far the copy is and, for a moment, that it is done.
 func (v *sessionView) showTransfer(state transferState) {
+	if v.copyHide != 0 {
+		coreglib.SourceRemove(v.copyHide)
+		v.copyHide = 0
+	}
 	v.copyCard.SetVisible(state.Active)
+	v.copyPulse = state.Active && state.Phase == phasePreparing
 	if !state.Active {
 		return
 	}
 	v.copyTitle.SetLabel(state.title())
-	v.copyValue.SetLabel(fmt.Sprintf("%d%%", state.Percent))
-	v.copyBar.SetFraction(float64(state.Percent) / 100)
+	v.copyValue.SetLabel(state.value())
+	v.copyCancel.SetVisible(state.Phase != phaseDone)
+	switch state.Phase {
+	case phasePreparing:
+		v.copyBar.Pulse()
+	case phaseDone:
+		v.copyBar.SetFraction(1)
+		v.copyHide = coreglib.TimeoutAdd(copyDoneShown, func() bool {
+			v.copyHide = 0
+			v.copyCard.SetVisible(false)
+			return false
+		})
+	default:
+		v.copyBar.SetFraction(float64(state.Percent) / 100)
+	}
 }
 
 func (v *sessionView) notify(message string) {
@@ -705,7 +783,11 @@ func (v *sessionView) applyMode(mode rfb.Mode, announce bool) {
 	v.applyGrabs()
 	v.updateSystemCursor()
 	if announce {
-		v.notify("Mode: " + mode.String())
+		if mode == rfb.ModeExclusiveControl {
+			v.notify(exclusiveAnnouncement(pointerConfinable()))
+		} else {
+			v.notify("Mode: " + mode.String())
+		}
 	}
 	if mode != rfb.ModeObserve {
 		v.screen.GrabFocus()
@@ -1027,7 +1109,6 @@ func (v *sessionView) onDrop(value *coreglib.Value, x, y float64) bool {
 		return false
 	}
 	fx, fy, _ := v.toFramebuffer(x, y)
-	v.notify("Dropping " + pluralize(len(paths), "item"))
 	v.transfer.drop(paths, fx, fy)
 	return true
 }
@@ -1060,7 +1141,6 @@ func (v *sessionView) chooseFilesToSend() {
 		if x == 0 && y == 0 {
 			x, y = frameWidth/2, frameHeight/2
 		}
-		v.notify("Dropping " + pluralize(len(paths), "item"))
 		v.transfer.drop(paths, x, y)
 	})
 }
@@ -1193,7 +1273,7 @@ func (v *sessionView) toggleFullscreen() {
 // installFullscreenReveal hides the header bar in fullscreen and brings it
 // back when the pointer touches the top edge.
 func (v *sessionView) installFullscreenReveal() {
-	v.g.window.NotifyProperty("fullscreened", func() {
+	fullscreened := v.g.window.NotifyProperty("fullscreened", func() {
 		v.fullscreen = v.g.window.IsFullscreen()
 		v.toolbar.SetExtendContentToTopEdge(v.fullscreen)
 		if v.fullscreen {
@@ -1203,6 +1283,7 @@ func (v *sessionView) installFullscreenReveal() {
 		}
 		v.toolbar.SetRevealTopBars(!v.fullscreen)
 	})
+	v.outliving.add(v.g.window, fullscreened)
 	motion := gtk.NewEventControllerMotion()
 	motion.SetPropagationPhase(gtk.PhaseCapture)
 	motion.ConnectMotion(func(x, y float64) {

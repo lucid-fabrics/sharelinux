@@ -64,21 +64,64 @@ type transfers struct {
 	cancelled bool
 }
 
+// transferPhase is where a copy is, which decides what the copy card says.
+type transferPhase int
+
+const (
+	// phaseCopying is the zero value: bytes are moving and Percent counts them.
+	phaseCopying transferPhase = iota
+	// phasePreparing is a drop waiting for the Mac to say where it lands.
+	phasePreparing
+	// phaseDone is a finished copy. The card says so for a moment, then goes.
+	phaseDone
+)
+
 // transferState is what the copy card shows.
 type transferState struct {
 	Name    string
 	Percent int
 	Upload  bool
+	Phase   transferPhase
+	// Folder is where a finished copy went.
+	Folder string
 	// Active is false once the copy has ended, so the card can go away.
 	Active bool
 }
 
 // title is the first line of the copy card.
 func (s transferState) title() string {
-	if s.Upload {
+	switch {
+	case s.Phase == phasePreparing:
+		return "Preparing " + s.Name
+	case s.Phase == phaseDone && s.Upload:
+		return "Sent to the Mac"
+	case s.Phase == phaseDone:
+		return "Saved to " + s.Folder
+	case s.Upload:
 		return "Copying " + s.Name + " to the Mac"
 	}
 	return "Copying " + s.Name + " from the Mac"
+}
+
+// value is the second line of the copy card: the progress, or where a sent copy landed.
+func (s transferState) value() string {
+	switch {
+	case s.Phase == phasePreparing:
+		return ""
+	case s.Phase == phaseDone && s.Upload:
+		return s.Folder
+	case s.Phase == phaseDone:
+		return ""
+	}
+	return fmt.Sprintf("%d%%", s.Percent)
+}
+
+// dropName is what the card calls the files of a drop.
+func dropName(paths []string) string {
+	if len(paths) == 1 {
+		return filepath.Base(paths[0])
+	}
+	return pluralize(len(paths), "item")
 }
 
 var errCopyCancelled = E.New("the copy was cancelled")
@@ -194,22 +237,40 @@ func (t *transfers) finishCopies(message string, err error) {
 	}
 }
 
+// announceDrop puts the drop on the copy card before anything else happens, so
+// the whole action has the one indicator and no toast beside it.
+func (t *transfers) announceDrop(paths []string) {
+	t.handler.setTransfer(transferState{Name: dropName(paths), Upload: true, Phase: phasePreparing, Active: true})
+}
+
+// finishDrop turns the card into the confirmation of a finished drop.
+func (t *transfers) finishDrop(paths []string, destination string) {
+	t.handler.setTransfer(transferState{Name: dropName(paths), Upload: true, Phase: phaseDone, Folder: filepath.Base(destination), Percent: 100, Active: true})
+}
+
+// failDrop takes the card away and says why.
+func (t *transfers) failDrop(message string) {
+	t.handler.setTransfer(transferState{})
+	t.handler.toast(message)
+}
+
 // drop sends files that were dropped on the window to the Mac. The Mac decides
 // where they land: the drag is started over the pointer position and released,
 // and the Mac answers with the folder it was released over.
 func (t *transfers) drop(paths []string, x, y int) {
 	t.beginBatch()
+	t.announceDrop(paths)
 	t.gesture.Begin()
 	go func() {
 		defer t.gesture.End()
 		named, err := dropNames(paths)
 		if err != nil {
-			t.handler.toast("Cannot drop: " + err.Error())
+			t.failDrop("Cannot drop: " + err.Error())
 			return
 		}
 		id, err := t.client.SendDrag(rfb.NewFileClipboard(named))
 		if err != nil {
-			t.handler.toast("Cannot drop: " + err.Error())
+			t.failDrop("Cannot drop: " + err.Error())
 			return
 		}
 		dropGesture(t.client.SendPointer, time.Sleep, x, y)
@@ -217,7 +278,7 @@ func (t *transfers) drop(paths []string, x, y int) {
 		destination, err := t.waitDestination(id)
 		if err != nil {
 			_ = t.client.CancelDrag(id)
-			t.handler.toast(err.Error())
+			t.failDrop(err.Error())
 			return
 		}
 		for _, path := range paths {
@@ -227,8 +288,7 @@ func (t *transfers) drop(paths []string, x, y int) {
 				return
 			}
 		}
-		t.finishCopies("", nil)
-		t.handler.toast("Sent " + pluralize(len(paths), "item") + " to " + filepath.Base(destination))
+		t.finishDrop(paths, destination)
 	}()
 }
 
@@ -272,7 +332,6 @@ func (t *transfers) fetch(drag *rfb.RemoteDrag) {
 				return
 			}
 		}
-		t.finishCopies("", nil)
-		t.handler.toast(fmt.Sprint("Saved ", pluralize(len(files), "item"), " to ", directory))
+		t.handler.setTransfer(transferState{Name: pluralize(len(files), "item"), Phase: phaseDone, Folder: filepath.Base(directory), Percent: 100, Active: true})
 	}()
 }

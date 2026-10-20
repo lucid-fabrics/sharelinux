@@ -124,6 +124,35 @@ func TestSettingsVirtualDisplay(t *testing.T) {
 	}
 }
 
+func TestWindowVirtualDisplay(t *testing.T) {
+	s := defaultSettings()
+	opts := &options{Explicit: map[string]bool{}}
+	if _, ok := s.windowVirtualDisplay(opts, 1280, 800); ok {
+		t.Fatal("off by default")
+	}
+	s.VirtualDisplay = true
+	display, ok := s.windowVirtualDisplay(opts, 1280, 800)
+	if !ok || display != (virtualDisplay{Width: 1280, Height: 800, Density: 1}) {
+		t.Fatalf("the default size follows the window: %+v %v", display, ok)
+	}
+	s.HiDPI = true
+	if display, _ = s.windowVirtualDisplay(opts, 1280, 800); display.Density != 2 {
+		t.Fatalf("HiDPI doubles the density: %+v", display)
+	}
+	if _, ok = s.windowVirtualDisplay(opts, 0, 0); ok {
+		t.Fatal("a window without a size asks for nothing yet")
+	}
+	s.VirtualSize = "1920x1080"
+	if _, ok = s.windowVirtualDisplay(opts, 1280, 800); ok {
+		t.Fatal("a fixed size is sent at connect, not by the window")
+	}
+	s.VirtualSize = virtualSizeWindow
+	opts.Explicit["virtual"] = true
+	if _, ok = s.windowVirtualDisplay(opts, 1280, 800); ok {
+		t.Fatal("-virtual on the command line wins")
+	}
+}
+
 func TestDownloadFolder(t *testing.T) {
 	s := defaultSettings()
 	s.DownloadDir = "/somewhere"

@@ -27,6 +27,11 @@ static void drop_barriers(void) {
 	barrier_count = 0;
 }
 
+gboolean oss_pointer_confinable(void) {
+	GdkDisplay *display = gdk_display_get_default();
+	return display != NULL && GDK_IS_X11_DISPLAY(display);
+}
+
 gboolean oss_x11_confined(void) {
 	return barrier_count > 0;
 }

@@ -16,9 +16,13 @@ GtkWidget *oss_screen_new(int tile_size);
 void oss_screen_resize(GtkWidget *screen, int width, int height);
 
 // oss_screen_update copies the rectangle from the BGRA framebuffer at pixels
-// (stride bytes per row) into the tiles it touches. The pixels are only read
-// during the call.
-void oss_screen_update(GtkWidget *screen, const guint8 *pixels, gsize stride, int x, int y, int width, int height);
+// into the tiles it touches. The buffer is length bytes, fb_width x fb_height
+// pixels with stride bytes per row, and the call never reads outside it. It
+// returns FALSE and copies nothing when the buffer does not fit the picture the
+// widget was resized to (the Mac's screen changed size meanwhile), or does not
+// hold the pixels its own size claims; the caller then resizes and sends the
+// whole picture. The pixels are only read during the call.
+gboolean oss_screen_update(GtkWidget *screen, const guint8 *pixels, gsize length, gsize stride, int fb_width, int fb_height, int x, int y, int width, int height);
 
 // oss_screen_set_viewport says where the picture sits, in widget units.
 void oss_screen_set_viewport(GtkWidget *screen, float x, float y, float width, float height);

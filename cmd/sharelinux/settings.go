@@ -98,6 +98,21 @@ func (s settings) virtualFollowsWindow(opts *options) bool {
 	return s.VirtualDisplay && s.VirtualSize == virtualSizeWindow && opts.Virtual == nil && !opts.Explicit["virtual"]
 }
 
+// windowVirtualDisplay is the virtual display to ask for when the preferences
+// say it follows the window: the size of the window in points, doubled in
+// density when the HiDPI preference is on. It reports false while the window
+// has no size yet.
+func (s settings) windowVirtualDisplay(opts *options, width, height int) (virtualDisplay, bool) {
+	if !s.virtualFollowsWindow(opts) || width <= 0 || height <= 0 {
+		return virtualDisplay{}, false
+	}
+	density := 1.0
+	if s.HiDPI {
+		density = 2
+	}
+	return virtualDisplay{Width: width, Height: height, Density: density}, true
+}
+
 // downloadFolder is where files from the Mac land.
 func (s settings) downloadFolder() string {
 	if s.DownloadDir != "" {

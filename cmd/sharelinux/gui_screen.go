@@ -62,17 +62,19 @@ func (s *screenView) resize(width, height int) {
 	C.oss_screen_resize(s.c, C.int(width), C.int(height))
 }
 
-// update copies a rectangle of the framebuffer into the tiles it touches.
-func (s *screenView) update(framebuffer *bgra.Image, area image.Rectangle) {
+// update copies a rectangle of the framebuffer into the tiles it touches. It
+// returns false when the framebuffer does not fit the picture the widget holds.
+func (s *screenView) update(framebuffer *bgra.Image, area image.Rectangle) bool {
 	if framebuffer == nil || len(framebuffer.Pix) == 0 {
-		return
+		return true
 	}
 	area = area.Intersect(framebuffer.Bounds())
 	if area.Empty() {
-		return
+		return true
 	}
-	C.oss_screen_update(s.c, (*C.guint8)(unsafe.Pointer(&framebuffer.Pix[0])), C.gsize(framebuffer.Stride),
-		C.int(area.Min.X), C.int(area.Min.Y), C.int(area.Dx()), C.int(area.Dy()))
+	return C.oss_screen_update(s.c, (*C.guint8)(unsafe.Pointer(&framebuffer.Pix[0])), C.gsize(len(framebuffer.Pix)), C.gsize(framebuffer.Stride),
+		C.int(framebuffer.Width), C.int(framebuffer.Height),
+		C.int(area.Min.X), C.int(area.Min.Y), C.int(area.Dx()), C.int(area.Dy())) != 0
 }
 
 func (s *screenView) setViewport(port viewport) {
@@ -110,6 +112,16 @@ func (s *screenView) frames() uint64 {
 	return uint64(C.oss_screen_frames(s.c))
 }
 
+// clear frees the picture's tiles at once.
+func (s *screenView) clear() {
+	s.resize(0, 0)
+}
+
+// tileCount is the number of tiles that hold a picture, for tests.
+func (s *screenView) tileCount() int {
+	return int(C.oss_screen_tile_count(s.c))
+}
+
 // inhibitShortcuts hands the system's shortcuts (Super, Alt+Tab) to this window, or takes them back.
 func (s *screenView) inhibitShortcuts(on bool) bool {
 	value := C.gboolean(0)
@@ -132,6 +144,12 @@ func (s *screenView) confinePointer(on bool) bool {
 		value = 1
 	}
 	return C.oss_x11_confine(s.c, value) != 0
+}
+
+// pointerConfinable reports whether this display server lets the app hold the
+// pointer inside its window. Wayland does not, and the Exclusive mode says so.
+func pointerConfinable() bool {
+	return C.oss_pointer_confinable() != 0
 }
 
 func gdkRect(x, y int) *gdk.Rectangle {

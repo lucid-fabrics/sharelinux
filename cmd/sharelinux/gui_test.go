@@ -5,7 +5,9 @@ package main
 import (
 	"testing"
 
+	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
 	"github.com/diamondburned/gotk4/pkg/gdk/v4"
+	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 	"github.com/nekohasekai/open-screen-sharing/internal/rfb"
 )
 
@@ -84,3 +86,20 @@ func TestMatchesQuery(t *testing.T) {
 	}
 }
 
+// A toast reads Pango markup unless told not to. Folder names, Mac names and
+// error texts reach toasts, and "<" or "&" in one made the title fail to parse.
+func TestToastShowsExternalTextAsWritten(t *testing.T) {
+	if !gtk.InitCheck() {
+		t.Skip("GTK needs a display (run under Xvfb)")
+	}
+	adw.Init()
+	for _, text := range []string{"Saved 1 item to <b>Reports</b> & more", "a < b", "Bob's <Mac>"} {
+		toast := newToast(text)
+		if toast.UseMarkup() {
+			t.Fatalf("%q would be parsed as markup", text)
+		}
+		if toast.Title() != text {
+			t.Fatalf("title %q, want %q", toast.Title(), text)
+		}
+	}
+}

@@ -28,7 +28,14 @@ type clipboardBridge struct {
 	client    *rfb.Client
 	clipboard *gdk.Clipboard
 	notify    func(string)
-	handle    coreglib.SignalHandle
+	// allow says whether the local clipboard may go to the Mac. It is false in
+	// View mode: someone who only watches has not agreed to share what they copy.
+	allow  func() bool
+	handle coreglib.SignalHandle
+	// withheld is set when the local clipboard changed while it could not be
+	// sent. Entering Control later must not send what was copied in View mode;
+	// the next copy clears it.
+	withheld bool
 
 	// last is the text both sides last agreed on, lastPicture the picture. They
 	// stop a copy from bouncing back.
@@ -39,15 +46,17 @@ type clipboardBridge struct {
 	closed bool
 }
 
-func newClipboardBridge(client *rfb.Client, widget gtk.Widgetter, notify func(string)) *clipboardBridge {
-	bridge := &clipboardBridge{client: client, notify: notify}
+func newClipboardBridge(client *rfb.Client, widget gtk.Widgetter, notify func(string), allow func() bool) *clipboardBridge {
+	bridge := &clipboardBridge{client: client, notify: notify, allow: allow}
 	bridge.clipboard = gtk.BaseWidget(widget).Display().Clipboard()
 	bridge.handle = bridge.clipboard.ConnectChanged(func() {
 		// A change this program made (a copy from the Mac) is not sent back.
 		if bridge.clipboard.IsLocal() {
 			return
 		}
-		bridge.toMac()
+		if bridge.noteLocalChange() {
+			bridge.toMac()
+		}
 	})
 	return bridge
 }
@@ -95,9 +104,28 @@ func (b *clipboardBridge) fromMac(clipboard *rfb.Clipboard) error {
 	return nil
 }
 
-// toMac sends the local clipboard to the Mac when it changed.
+// permitted reports whether this bridge may send at all right now.
+func (b *clipboardBridge) permitted() bool {
+	return !b.isClosed() && b.allow != nil && b.allow()
+}
+
+// noteLocalChange records that the local clipboard changed and says whether
+// the new content may go to the Mac. A copy made while sending is not allowed
+// is withheld for good, even if sending becomes allowed afterwards.
+func (b *clipboardBridge) noteLocalChange() bool {
+	b.withheld = !b.permitted()
+	return !b.withheld
+}
+
+// mayCopyToMac reports whether the local clipboard may be sent now.
+func (b *clipboardBridge) mayCopyToMac() bool {
+	return b.permitted() && !b.withheld
+}
+
+// toMac sends the local clipboard to the Mac when it changed, and only while
+// controlling it.
 func (b *clipboardBridge) toMac() {
-	if b.isClosed() {
+	if !b.mayCopyToMac() {
 		return
 	}
 	formats := b.clipboard.Formats()
@@ -105,7 +133,7 @@ func (b *clipboardBridge) toMac() {
 	case formats.ContainGType(coreglib.TypeString):
 		b.clipboard.ReadTextAsync(context.Background(), func(result gio.AsyncResulter) {
 			text, err := b.clipboard.ReadTextFinish(result)
-			if err != nil || text == "" || text == b.last || b.isClosed() {
+			if err != nil || text == "" || text == b.last || !b.mayCopyToMac() {
 				return
 			}
 			b.last = text
@@ -117,7 +145,7 @@ func (b *clipboardBridge) toMac() {
 	case formats.ContainMIMEType(mimePNG) || formats.ContainGType(gdk.GTypeTexture):
 		b.clipboard.ReadTextureAsync(context.Background(), func(result gio.AsyncResulter) {
 			texture, err := b.clipboard.ReadTextureFinish(result)
-			if err != nil || texture == nil || b.isClosed() {
+			if err != nil || texture == nil || !b.mayCopyToMac() {
 				return
 			}
 			data := gdk.BaseTexture(texture).SaveToPNGBytes().Data()
