@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"net"
+	"net/netip"
 	"slices"
 	"sort"
 	"strings"
@@ -125,15 +126,40 @@ func (m discoveredMac) subtitle() string {
 	return host + " · Screen Sharing is on"
 }
 
-// matches reports whether a saved connection is this Mac.
+// hostKey is a host or address in the one form two spellings of it share: lower
+// case, no trailing dot, no brackets or zone, an IP in its canonical text, and
+// a name without ".local".
+func hostKey(host string) string {
+	host = strings.ToLower(strings.TrimSpace(host))
+	host = strings.TrimSuffix(host, ".")
+	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	bare, _, _ := strings.Cut(host, "%")
+	address, err := netip.ParseAddr(bare)
+	if err == nil {
+		return address.Unmap().String()
+	}
+	return strings.TrimSuffix(host, ".local")
+}
+
+// matches reports whether a saved connection is this Mac: the same port and the
+// same mDNS host name, any address the Mac announced (IPv4 or IPv6, however it
+// is written), or the same name. A Mac saved by its IPv4 address still matches
+// when mDNS only gave its IPv6 address, through the name.
 func (m discoveredMac) matches(saved savedConnection) bool {
 	if saved.Port != m.Port {
 		return false
 	}
-	if m.Host != "" && strings.EqualFold(saved.Host, m.Host) {
+	host := hostKey(saved.Host)
+	if m.Host != "" && host == hostKey(m.Host) {
 		return true
 	}
-	return slices.Contains(m.Addresses, saved.Host)
+	for _, address := range m.Addresses {
+		if host == hostKey(address) {
+			return true
+		}
+	}
+	name := strings.TrimSpace(saved.Name)
+	return name != "" && strings.EqualFold(name, m.Name)
 }
 
 // unsaved drops the Macs that are already in the saved list and sorts by name.
