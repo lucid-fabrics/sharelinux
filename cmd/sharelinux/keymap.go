@@ -1,0 +1,230 @@
+package main
+
+import (
+	"unicode"
+
+	"github.com/nekohasekai/open-screen-sharing/internal/rfb"
+)
+
+// SDL scancodes are USB HID usage numbers, so the tables below are keyed by
+// them and need no SDL import. Mac key codes are the kVK_* values.
+type macKey struct {
+	Code   uint16
+	Keysym uint32
+	Valid  bool
+}
+
+const (
+	hidA          = 4
+	hidGrave      = 53
+	hidNonUSSlash = 100
+	hidCapsLock   = 57
+)
+
+const (
+	keysymBackSpace uint32 = 0xff08
+	keysymTab       uint32 = 0xff09
+	keysymReturn    uint32 = 0xff0d
+	keysymEscape    uint32 = 0xff1b
+	keysymDelete    uint32 = 0xffff
+	keysymHome      uint32 = 0xff50
+	keysymLeft      uint32 = 0xff51
+	keysymUp        uint32 = 0xff52
+	keysymRight     uint32 = 0xff53
+	keysymDown      uint32 = 0xff54
+	keysymPageUp    uint32 = 0xff55
+	keysymPageDown  uint32 = 0xff56
+	keysymEnd       uint32 = 0xff57
+	keysymInsert    uint32 = 0xff63
+	keysymHelp      uint32 = 0xff6a
+	keysymMenu      uint32 = 0xff67
+	keysymF1        uint32 = 0xffbe
+	keysymKeypad0   uint32 = 0xffb0
+)
+
+type keyEntry struct {
+	code   uint16
+	keysym uint32
+}
+
+// namedKeys are the keys that produce no text. Printable keys carry the
+// character of the user's own layout as their keysym.
+var namedKeys = map[uint32]keyEntry{
+	40:  {36, keysymReturn},
+	41:  {53, keysymEscape},
+	42:  {51, keysymBackSpace},
+	43:  {48, keysymTab},
+	44:  {49, ' '},
+	57:  {57, 0},
+	70:  {105, 0xff61},
+	71:  {107, 0xff14},
+	72:  {113, 0xff13},
+	73:  {114, keysymInsert},
+	74:  {115, keysymHome},
+	75:  {116, keysymPageUp},
+	76:  {117, keysymDelete},
+	77:  {119, keysymEnd},
+	78:  {121, keysymPageDown},
+	79:  {124, keysymRight},
+	80:  {123, keysymLeft},
+	81:  {125, keysymDown},
+	82:  {126, keysymUp},
+	83:  {71, 0xff7f},
+	84:  {75, 0xffaf},
+	85:  {67, 0xffaa},
+	86:  {78, 0xffad},
+	87:  {69, 0xffab},
+	88:  {76, 0xff8d},
+	99:  {65, 0xffae},
+	101: {110, keysymMenu},
+	103: {81, 0xffbd},
+	117: {114, keysymHelp},
+	127: {74, 0},
+	128: {72, 0},
+	129: {73, 0},
+	133: {95, 0xffac},
+	// Japanese keyboards: ro, yen, kana (Hangul/English) and eisu keys.
+	135: {94, 0},
+	137: {93, 0},
+	144: {104, 0},
+	145: {102, 0},
+	// Modifiers. Alt is Option and the Super key is Command.
+	224: {59, 0xffe3},
+	225: {56, 0xffe1},
+	226: {58, 0xffe9},
+	227: {55, 0xffeb},
+	228: {62, 0xffe4},
+	229: {60, 0xffe2},
+	230: {61, 0xffea},
+	231: {54, 0xffec},
+}
+
+// functionCodes are F1 to F20 (HID 58 to 69 for F1 to F12, 104 to 111 for F13 to F20).
+var functionCodes = [...]uint16{122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111, 105, 107, 113, 106, 64, 79, 80, 90}
+
+// letterCodes are A to Z; digitCodes are 1 to 9 then 0 (HID 30 to 39).
+var letterCodes = [...]uint16{0, 11, 8, 2, 14, 3, 5, 4, 34, 38, 40, 37, 46, 45, 31, 35, 12, 15, 1, 17, 32, 9, 13, 7, 16, 6}
+var digitCodes = [...]uint16{18, 19, 20, 21, 23, 22, 26, 28, 25, 29}
+
+// punctuationCodes maps the punctuation keys, minus to slash. HID 50 is the ISO
+// pound key, which a Mac reads like backslash.
+var punctuationCodes = map[uint32]uint16{
+	45: 27, 46: 24, 47: 33, 48: 30, 49: 42, 50: 42, 51: 41, 52: 39, 54: 43, 55: 47, 56: 44,
+}
+
+var keypadDigits = [...]uint16{82, 83, 84, 85, 86, 87, 88, 89, 91, 92}
+
+// lookupScancode finds the Mac key code and the keysym of a key that is not
+// printable. keyboard selects between the ANSI, ISO and JIS meaning of the keys
+// next to left Shift and the grave key.
+func lookupScancode(scancode uint32, keyboard rfb.KeyboardType) (macKey, bool) {
+	switch {
+	case scancode >= hidA && scancode < hidA+26:
+		return macKey{Code: letterCodes[scancode-hidA], Valid: true}, true
+	case scancode >= 30 && scancode <= 39:
+		return macKey{Code: digitCodes[scancode-30], Valid: true}, true
+	case scancode >= 58 && scancode <= 69:
+		number := scancode - 58
+		return macKey{Code: functionCodes[number], Keysym: keysymF1 + number, Valid: true}, true
+	case scancode >= 104 && scancode <= 111:
+		number := scancode - 104 + 12
+		return macKey{Code: functionCodes[number], Keysym: keysymF1 + number, Valid: true}, true
+	case scancode >= 89 && scancode <= 98:
+		digit := (scancode - 88) % 10
+		return macKey{Code: keypadDigits[digit], Keysym: keysymKeypad0 + uint32(digit), Valid: true}, true
+	case scancode == hidGrave:
+		if keyboard == rfb.KeyboardISO {
+			return macKey{Code: 10, Valid: true}, true
+		}
+		return macKey{Code: 50, Valid: true}, true
+	case scancode == hidNonUSSlash:
+		if keyboard == rfb.KeyboardISO {
+			return macKey{Code: 50, Valid: true}, true
+		}
+		return macKey{Code: 10, Valid: true}, true
+	}
+	entry, found := namedKeys[scancode]
+	if found {
+		return macKey{Code: entry.code, Keysym: entry.keysym, Valid: true}, true
+	}
+	code, found := punctuationCodes[scancode]
+	if found {
+		return macKey{Code: code, Valid: true}, true
+	}
+	return macKey{}, false
+}
+
+// keysymFor is the keysym of the character a key types on the user's layout.
+func keysymFor(character rune, shift bool) uint32 {
+	if character <= 0 {
+		return 0
+	}
+	if shift && character < unicode.MaxASCII && unicode.IsLetter(character) {
+		character = unicode.ToUpper(character)
+	}
+	if character < 0x100 {
+		return uint32(character)
+	}
+	return 0x01000000 | uint32(character)
+}
+
+// mapKey turns one physical key press into a Mac key code and keysym.
+func mapKey(scancode uint32, character rune, shift bool, keyboard rfb.KeyboardType) (macKey, bool) {
+	key, found := lookupScancode(scancode, keyboard)
+	if !found {
+		return macKey{}, false
+	}
+	if key.Keysym == 0 && scancode != hidCapsLock {
+		key.Keysym = keysymFor(character, shift)
+	}
+	return key, true
+}
+
+// printable reports whether a key types text, so a following text input event is
+// the character of the key and must not be typed a second time.
+func printable(scancode uint32) bool {
+	switch {
+	case scancode >= hidA && scancode < hidA+26, scancode >= 30 && scancode <= 39:
+		return true
+	case scancode == 44, scancode == hidGrave, scancode == hidNonUSSlash:
+		return true
+	}
+	_, found := punctuationCodes[scancode]
+	return found
+}
+
+// keyboardLearner starts at the configured keyboard type and learns ISO or JIS
+// from keys only those keyboards have, like the Mac app does for hardware keyboards.
+type keyboardLearner struct {
+	current rfb.KeyboardType
+	fixed   bool
+}
+
+func newKeyboardLearner(setting string) *keyboardLearner {
+	learner := &keyboardLearner{current: rfb.KeyboardANSI, fixed: setting != "auto"}
+	switch setting {
+	case "iso":
+		learner.current = rfb.KeyboardISO
+	case "jis":
+		learner.current = rfb.KeyboardJIS
+	}
+	return learner
+}
+
+func (l *keyboardLearner) Type() rfb.KeyboardType {
+	return l.current
+}
+
+func (l *keyboardLearner) Learn(scancode uint32) {
+	if l.fixed {
+		return
+	}
+	switch scancode {
+	case 135, 137, 144, 145, 133:
+		l.current = rfb.KeyboardJIS
+	case hidNonUSSlash, 50:
+		if l.current != rfb.KeyboardJIS {
+			l.current = rfb.KeyboardISO
+		}
+	}
+}
