@@ -155,15 +155,69 @@ func TestTextFilter(t *testing.T) {
 		t.Fatal("ctrl+a types nothing, so no expectation")
 	}
 	f.KeyDown(4, 0)
-	if f.Consume("é") {
-		t.Fatal("composed text is typed")
-	}
-	f.KeyDown(4, 0)
 	f.Reset()
 	if f.Consume("a") {
 		t.Fatal("reset forgets")
 	}
 	if f.Consume("x") {
 		t.Fatal("text without a key is typed")
+	}
+}
+
+// typedCharacters counts how many characters reach the Mac for one key press:
+// one for the key code and one more for every text event the filter lets through.
+func typedCharacters(scancode uint32, mod uint16, text string) int {
+	var f textFilter
+	f.KeyDown(scancode, mod)
+	typed := 1
+	if !f.Consume(text) {
+		typed++
+	}
+	return typed
+}
+
+func TestTextFilterNonASCIIIsTypedOnce(t *testing.T) {
+	cases := []struct {
+		name     string
+		scancode uint32
+		mod      uint16
+		text     string
+	}{
+		{"o with diaeresis", 51, 0, "ö"},
+		{"e with acute", 8, 0, "é"},
+		{"AltGr+Q", 20, modRightAlt, "@"},
+		{"shifted umlaut", 52, modLeftShift, "Ä"},
+	}
+	for _, c := range cases {
+		if got := typedCharacters(c.scancode, c.mod, c.text); got != 1 {
+			t.Errorf("%s typed %d times", c.name, got)
+		}
+	}
+}
+
+func TestTextFilterTypesInputMethodText(t *testing.T) {
+	var f textFilter
+	f.KeyDown(44, modLeftCtrl)
+	if f.Consume("こんにちは") {
+		t.Fatal("composition text no key explains is typed")
+	}
+	f.KeyDown(224, 0)
+	if f.Consume("日本") {
+		t.Fatal("a modifier key explains no text")
+	}
+}
+
+func TestMuhenkanHenkanKatakana(t *testing.T) {
+	cases := map[uint32]uint16{136: 104, 138: 104, 139: 102}
+	for scancode, code := range cases {
+		key, found := lookupScancode(scancode, rfb.KeyboardJIS)
+		if !found || key.Code != code {
+			t.Errorf("HID %d: %+v %v", scancode, key, found)
+		}
+		learner := newKeyboardLearner("auto")
+		learner.Learn(scancode)
+		if learner.Type() != rfb.KeyboardJIS {
+			t.Errorf("HID %d should mark the keyboard JIS", scancode)
+		}
 	}
 }

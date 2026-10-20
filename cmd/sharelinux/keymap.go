@@ -85,7 +85,10 @@ var namedKeys = map[uint32]keyEntry{
 	133: {95, 0xffac},
 	// Japanese keyboards: ro, yen, kana (Hangul/English) and eisu keys.
 	135: {94, 0},
+	136: {104, 0}, // Katakana/Hiragana is the Kana key
 	137: {93, 0},
+	138: {104, 0}, // Henkan converts, which is the Kana key
+	139: {102, 0}, // Muhenkan cancels the conversion, which is the Eisu key
 	144: {104, 0},
 	145: {102, 0},
 	// Modifiers. Alt is Option and the Super key is Command.
@@ -220,7 +223,7 @@ func (l *keyboardLearner) Learn(scancode uint32) {
 		return
 	}
 	switch scancode {
-	case 135, 137, 144, 145, 133:
+	case 133, 135, 136, 137, 138, 139, 144, 145:
 		l.current = rfb.KeyboardJIS
 	case hidNonUSSlash, 50:
 		if l.current != rfb.KeyboardJIS {
