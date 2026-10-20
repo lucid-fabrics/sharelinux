@@ -63,6 +63,9 @@ type view struct {
 	dropPaths    []string
 	dropX, dropY int
 	fetching     bool
+
+	// pointerHeld notes a pointer position kept back while a drop owned the pointer.
+	pointerHeld bool
 }
 
 func (a *app) view(live *liveSession) error {
@@ -140,7 +143,6 @@ func (v *view) run() error {
 	if v.clip != nil {
 		v.clip.close()
 	}
-func (v *view) release() {
 	v.releaseInput()
 	_ = v.canvas.window.SetKeyboardGrab(false)
 	_ = v.canvas.window.SetMouseGrab(false)
@@ -169,6 +171,10 @@ func (v *view) releaseInput() {
 		_ = v.client.SendPointer(v.pointerX, v.pointerY, 0)
 	}
 }
+	if v.pointerHeld && !v.transfer.gesture.Blocked() {
+		v.pointerHeld = false
+		v.sendPointer(v.pointerX, v.pointerY)
+	}
 
 // poll moves what the network goroutines collected onto the SDL thread.
 func (v *view) poll() {

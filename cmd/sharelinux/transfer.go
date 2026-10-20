@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/nekohasekai/open-screen-sharing/internal/rfb"
@@ -51,6 +52,29 @@ type transfers struct {
 	client  *rfb.Client
 	handler *handler
 	context context.Context
+	// gesture holds back live pointer events while a drop plays its own presses.
+	gesture pointerGate
+}
+
+// pointerGate lets one writer own the Mac's pointer for a while. The view skips
+// its own pointer events while the gate is held, so they cannot interleave with
+// the synthetic ones.
+type pointerGate struct {
+	held atomic.Bool
+}
+
+func (g *pointerGate) Begin()        { g.held.Store(true) }
+func (g *pointerGate) End()          { g.held.Store(false) }
+func (g *pointerGate) Blocked() bool { return g.held.Load() }
+
+// dropGesture presses, drags a pixel and releases the left button at x, y, which
+// is how the Mac learns where the dropped files should land.
+func dropGesture(send func(x, y int, buttons uint8) error, wait func(time.Duration), x, y int) {
+	_ = send(x, y, rfb.ButtonLeft)
+	wait(150 * time.Millisecond)
+	_ = send(x+1, y+1, rfb.ButtonLeft)
+	wait(150 * time.Millisecond)
+	_ = send(x+1, y+1, 0)
 }
 
 // copyOne uploads or downloads one item and waits for it to finish.
@@ -73,7 +97,9 @@ func (t *transfers) copyOne(upload bool, source, destination string) error {
 // where they land: the drag is started over the pointer position and released,
 // and the Mac answers with the folder it was released over.
 func (t *transfers) drop(paths []string, x, y int) {
+	t.gesture.Begin()
 	go func() {
+		defer t.gesture.End()
 		named, err := dropNames(paths)
 		if err != nil {
 			t.handler.toast("Cannot drop: " + err.Error())
@@ -84,11 +110,8 @@ func (t *transfers) drop(paths []string, x, y int) {
 			t.handler.toast("Cannot drop: " + err.Error())
 			return
 		}
-		_ = t.client.SendPointer(x, y, rfb.ButtonLeft)
-		time.Sleep(150 * time.Millisecond)
-		_ = t.client.SendPointer(x+1, y+1, rfb.ButtonLeft)
-		time.Sleep(150 * time.Millisecond)
-		_ = t.client.SendPointer(x+1, y+1, 0)
+		dropGesture(t.client.SendPointer, time.Sleep, x, y)
+		t.gesture.End()
 		destination, err := t.waitDestination(id)
 		if err != nil {
 			_ = t.client.CancelDrag(id)
@@ -120,7 +143,7 @@ func (t *transfers) waitDestination(id uint32) (string, error) {
 				return path, nil
 			}
 		case <-deadline.C:
-			return "", E.New("The Mac did not say where the files were dropped")
+			return "", E.New("the Mac did not say where the files were dropped")
 		case <-t.context.Done():
 			return "", t.context.Err()
 		}
