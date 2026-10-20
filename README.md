@@ -57,13 +57,32 @@ You can also switch to the Nightly track in the App settings of the macOS app an
 * It can be connected to using the native macOS ScreenSharing.app (note: due to an Apple bug, you must go to Settings > Quality and disable "Full Quality" before adding the configuration)
 * Our client is optimized for it
 
+### Linux (and a cross-platform SDL viewer)
+
+`cmd/sharelinux` is a Go + SDL3 viewer for the built-in macOS Screen Sharing server. It also builds and runs on macOS.
+
+Build dependencies:
+
+* Go 1.26.8 or newer, no cgo needed (the SDL3 binding loads the library at run time)
+* SDL3 **3.4 or newer** as a shared library: Ubuntu 26.04 and Debian 14 `libsdl3-0` (`libsdl3-dev` to build the Docker image), Homebrew `sdl3` on macOS, or point `SDL3_LIBRARY` at `libSDL3.so.0`
+* A Secret Service (GNOME Keyring, KWallet) if you want saved passwords; without one connections still save, the password is typed each time
+
+```
+go build -o sharelinux ./cmd/sharelinux
+./sharelinux user@mac.local            # or: ./sharelinux for the picker of saved Macs
+```
+
+Hold Ctrl+Alt+Shift and press Esc (leave exclusive mode), M (observe, control, exclusive), H (debug HUD), F (fullscreen), U (quality), D (display), V (virtual display at window size), X (HDR), R (refresh), T (type the local clipboard on the Mac), G (fetch files the Mac is dragging), S (screenshot), Q (quit). Super is Command and Alt is Option. Run `sharelinux -h` for all flags.
+
+`cmd/sharelinux/Dockerfile` builds the viewer on Debian 14 and runs it under Xvfb; `cmd/sharelinux/internal/mockrfb` is a tiny RFB server for checking it without a Mac.
+
 ## Roadmap
 
 * [x] Add support for macOS
 * [x] Add support for RDP
 * [x] Publish to iOS App Store
 * [ ] Publish to Homebrew
-* [ ] Add support for other operating systems, such as Android, Windows, and Linux
+* [ ] Add support for other operating systems, such as Android and Windows (Linux: see `cmd/sharelinux`)
 * [ ] Add a jailbreak version to provide numerous privilege-based improvements
 * [ ] Create a protocol extension to support high refresh rates on Mac, touch passthrough on Mac (similar to Sidecar), Smaller scaling at native quality on Mac, multi-touch support on iOS, and further protocol optimizations
 
