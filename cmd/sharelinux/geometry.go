@@ -106,5 +106,5 @@ func scrollPoints(info rfb.ServerInfo, x, y float32) (float64, float64) {
 	if info.Dialect != rfb.DialectApple && !info.Accepts(scrollWheelMessage) {
 		return -float64(x) * rfb.StandardPointsPerPulse, float64(y) * rfb.StandardPointsPerPulse
 	}
-	return float64(x) * wheelPoints, float64(y) * wheelPoints
+	return -float64(x) * wheelPoints, float64(y) * wheelPoints
 }

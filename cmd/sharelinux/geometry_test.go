@@ -112,8 +112,25 @@ func TestScrollPointsKeepsSmoothScrolling(t *testing.T) {
 		"scroll-wheel-seen": extended,
 	} {
 		x, y := scrollPoints(info, 0.5, -2)
-		if x != 8 || y != -32 {
+		if x != -8 || y != -32 {
 			t.Fatal(name, x, y)
+		}
+	}
+}
+
+func TestScrollPointsHorizontalSign(t *testing.T) {
+	extended := rfb.ServerInfo{Dialect: rfb.DialectStandard, Extended: true}
+	extended.Commands[scrollWheelMessage/8] = 0x80 >> (scrollWheelMessage % 8)
+	// SDL counts a scroll to the right positive; SendScroll counts it negative.
+	for name, info := range map[string]rfb.ServerInfo{
+		"apple":    {Dialect: rfb.DialectApple},
+		"smooth":   extended,
+		"standard": {Dialect: rfb.DialectStandard},
+	} {
+		right, _ := scrollPoints(info, 1, 0)
+		left, _ := scrollPoints(info, -1, 0)
+		if right >= 0 || left <= 0 {
+			t.Fatal(name, right, left)
 		}
 	}
 }
