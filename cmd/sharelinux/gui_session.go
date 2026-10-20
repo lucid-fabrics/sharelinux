@@ -89,6 +89,7 @@ type sessionView struct {
 	frames   uint64
 	fps      float64
 	statsAt  time.Time
+	loggedAt time.Time
 	tickID   uint
 	ended    bool
 
@@ -580,6 +581,10 @@ func (v *sessionView) updateStats() {
 	now := time.Now()
 	v.meter.Tick(now, int(v.screen.frames()), v.h.updateCount(), v.client.Statistics().WireBytes)
 	v.fps = v.meter.Frames
+	if now.Sub(v.loggedAt) >= time.Second {
+		v.loggedAt = now
+		v.g.app.logger.Debug("stats", "drawn_fps", int(v.meter.Frames), "update_fps", int(v.meter.Updates), "mbit", int(v.meter.BitsPS/1e6))
+	}
 	v.subtitle.SetLabel(connectedText(v.fps))
 	if !v.showStats {
 		return

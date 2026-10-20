@@ -64,7 +64,7 @@ You can also switch to the Nightly track in the App settings of the macOS app an
 Build dependencies:
 
 * Go 1.26.8 or newer and a C compiler (the GTK binding uses cgo)
-* GTK **4.14** or newer and libadwaita **1.7** or newer, with their development files and `libx11-dev`, `libxfixes-dev`, `pkg-config`. Ubuntu 26.04 and Debian 14: `apt install libgtk-4-dev libadwaita-1-dev libx11-dev libxfixes-dev`
+* GTK **4.14** or newer and libadwaita **1.7** or newer, with their development files, plus `libgirepository1.0-dev` (gotk4 needs it), `libx11-dev`, `libxfixes-dev` and `pkg-config`. Ubuntu 26.04 and Debian 14: `apt install libgtk-4-dev libadwaita-1-dev libgirepository1.0-dev libx11-dev libxfixes-dev`
 * A Secret Service (GNOME Keyring, KWallet) if you want saved passwords; without one connections still save, the password is typed each time
 * Avahi or any mDNS-capable network for the "On this network" list (the viewer browses `_rfb._tcp` itself, it does not need the Avahi daemon)
 

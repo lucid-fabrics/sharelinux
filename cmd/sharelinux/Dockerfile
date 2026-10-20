@@ -1,14 +1,14 @@
 # Builds sharelinux on Debian 14 and runs it under Xvfb for headless checks.
 #   docker build -f cmd/sharelinux/Dockerfile -t sharelinux .
 #   docker run --rm sharelinux                      # -list of saved Macs
-#   docker run --rm --entrypoint sharelinux-check sharelinux   # window under Xvfb against the mock server
-# GTK 4.14 and libadwaita 1.5 are the least the viewer uses (AdwDialog, AdwPreferencesDialog and the
-# toggle group need 1.5, 1.5 and 1.7); Debian 14 and Ubuntu 26.04 ship newer ones.
+#   docker run --rm sharelinux sharelinux-check     # the window under Xvfb against the mock server
+# The viewer needs GTK 4.14 and libadwaita 1.7 (the mode switch is an AdwToggleGroup); Debian 14 and
+# Ubuntu 26.04 ship newer ones.
 FROM debian:forky AS build
 COPY --from=golang:1.27 /usr/local/go /usr/local/go
 ENV PATH=/usr/local/go/bin:$PATH
 RUN apt-get update && apt-get install -y --no-install-recommends \
-	ca-certificates git gcc pkg-config libgtk-4-dev libadwaita-1-dev libx11-dev libxfixes-dev \
+	ca-certificates git gcc pkg-config libgtk-4-dev libadwaita-1-dev libgirepository1.0-dev libx11-dev libxfixes-dev \
 	&& rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY go.mod go.sum ./

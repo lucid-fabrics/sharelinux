@@ -25,6 +25,7 @@ struct _OssScreen {
 	gboolean cursor_visible;
 
 	guint64 frames;
+	GskScalingFilter downscale_filter;
 };
 
 G_DEFINE_FINAL_TYPE(OssScreen, oss_screen, GTK_TYPE_WIDGET)
@@ -74,7 +75,7 @@ static void oss_screen_snapshot(GtkWidget *widget, GtkSnapshot *snapshot) {
 	}
 	float device = (float)gtk_widget_get_scale_factor(widget);
 	float scale = self->viewport.size.width / (float)self->width;
-	GskScalingFilter filter = scale > 1.0f ? GSK_SCALING_FILTER_LINEAR : GSK_SCALING_FILTER_TRILINEAR;
+	GskScalingFilter filter = scale > 1.0f ? GSK_SCALING_FILTER_LINEAR : self->downscale_filter;
 	int tile_w = self->tile_size > 0 ? self->tile_size : self->width;
 	int tile_h = self->tile_size > 0 ? self->tile_size : self->height;
 	for (int row = 0; row < self->rows; row++) {
@@ -116,6 +117,16 @@ static void oss_screen_init(OssScreen *self) {
 	gtk_widget_set_hexpand(GTK_WIDGET(self), TRUE);
 	gtk_widget_set_vexpand(GTK_WIDGET(self), TRUE);
 	self->tile_size = 512;
+	// A picture bigger than the window is shrunk with linear filtering. Trilinear
+	// (SHARELINUX_FILTER=trilinear) smooths more but on a software renderer it is
+	// 2x slower at 2560x1600 and 10x slower at 6522x4154, so it is opt-in.
+	self->downscale_filter = GSK_SCALING_FILTER_LINEAR;
+	const char *filter = g_getenv("SHARELINUX_FILTER");
+	if (g_strcmp0(filter, "trilinear") == 0) {
+		self->downscale_filter = GSK_SCALING_FILTER_TRILINEAR;
+	} else if (g_strcmp0(filter, "nearest") == 0) {
+		self->downscale_filter = GSK_SCALING_FILTER_NEAREST;
+	}
 }
 
 GtkWidget *oss_screen_new(int tile_size) {
