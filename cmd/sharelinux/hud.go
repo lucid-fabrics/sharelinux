@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/nekohasekai/open-screen-sharing/internal/rfb"
 )
 
 // meter turns running counters into per-second rates over a window of about a second.
@@ -79,4 +81,13 @@ func formatBits(bitsPerSecond float64) string {
 	default:
 		return fmt.Sprintf("%.0f bit/s", bitsPerSecond)
 	}
+}
+
+// bandwidthLine is the HUD's bandwidth row. Only Apple's record stream counts the
+// bytes on the wire, so other servers have no figure and get no row.
+func bandwidthLine(info rfb.ServerInfo, bitsPerSecond float64) string {
+	if info.Dialect != rfb.DialectApple {
+		return ""
+	}
+	return "bandwidth " + formatBits(bitsPerSecond)
 }

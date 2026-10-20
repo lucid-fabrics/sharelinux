@@ -3,6 +3,8 @@ package main
 import (
 	"testing"
 	"time"
+
+	"github.com/nekohasekai/open-screen-sharing/internal/rfb"
 )
 
 func TestMeter(t *testing.T) {
@@ -49,5 +51,14 @@ func TestStraightAlpha(t *testing.T) {
 	got := straightAlpha([]byte{50, 100, 0, 100, 9, 9, 9, 0})
 	if got[0] != 127 || got[1] != 255 || got[2] != 0 || got[3] != 100 || got[4] != 0 || got[7] != 0 {
 		t.Fatal(got)
+	}
+}
+
+func TestBandwidthLineByDialect(t *testing.T) {
+	if got := bandwidthLine(rfb.ServerInfo{Dialect: rfb.DialectStandard}, 2e6); got != "" {
+		t.Fatalf("standard bandwidth line = %q, want empty", got)
+	}
+	if got := bandwidthLine(rfb.ServerInfo{Dialect: rfb.DialectApple}, 2e6); got != "bandwidth 2.0 Mbit/s" {
+		t.Fatalf("Apple bandwidth line = %q", got)
 	}
 }

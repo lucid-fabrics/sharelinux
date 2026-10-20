@@ -134,6 +134,10 @@ const (
 	maximumPulses          = 64
 )
 
+// StandardPointsPerPulse is the scroll distance SendScroll turns into one wheel
+// button pulse on a server that is not Apple's.
+const StandardPointsPerPulse = standardPointsPerPulse
+
 func (c *Client) SendScroll(x, y int, deltaX, deltaY float64) error {
 	c.access.Lock()
 	if c.mode == ModeObserve {

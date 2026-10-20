@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"time"
 	"unicode"
 
@@ -364,12 +365,13 @@ func (v *view) drawHUD() {
 	lines := []string{
 		fmt.Sprintf("screen   %dx%d", frameWidth, frameHeight),
 		fmt.Sprintf("fps      %.0f drawn, %.0f updates", v.meter.Frames, v.meter.Updates),
-		fmt.Sprintf("bandwidth %s", formatBits(v.meter.BitsPS)),
+		bandwidthLine(info, v.meter.BitsPS),
 		fmt.Sprintf("latency  %.0f ms input to picture", float64(v.live.echo.Value())/float64(time.Millisecond)),
 		fmt.Sprintf("codec    %s", v.h.lastEncoding()),
 		fmt.Sprintf("mode     %s, quality %s", v.mode, v.quality),
 		fmt.Sprintf("server   %s, %s, %s", info.Dialect, info.Version, info.SecurityType),
 	}
+	lines = slices.DeleteFunc(lines, func(line string) bool { return line == "" })
 	longest := 0
 	for _, line := range lines {
 		longest = max(longest, len(line))
@@ -523,7 +525,7 @@ func (v *view) onWheel(wheel *sdl.MouseWheelEvent) {
 	if !v.controlling() {
 		return
 	}
-	dx, dy := scrollPoints(wheel.X, wheel.Y)
+	dx, dy := scrollPoints(v.client.Info(), wheel.X, wheel.Y)
 	err := v.client.SendScroll(v.pointerX, v.pointerY, dx, dy)
 	if err != nil {
 		v.app.logger.Debug("scroll", "error", err)

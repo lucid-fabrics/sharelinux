@@ -1,6 +1,10 @@
 package main
 
-import "math"
+import (
+	"math"
+
+	"github.com/nekohasekai/open-screen-sharing/internal/rfb"
+)
 
 // viewport is where the remote screen sits inside the window, in window pixels.
 type viewport struct {
@@ -89,7 +93,18 @@ func (p *relativePointer) move(dx, dy float32, v viewport, frameWidth, frameHeig
 // of a mouse wheel is one unit; a trackpad reports fractions of it.
 const wheelPoints = 16.0
 
-// scrollPoints converts SDL wheel units to the points the Mac scrolls by.
-func scrollPoints(x, y float32) (float64, float64) {
+// scrollWheelMessage is the message type of a Mac's scroll event, the only way
+// to scroll smoothly. Servers without it get wheel button pulses.
+const scrollWheelMessage = 0x17
+
+// scrollPoints converts SDL wheel units to the points SendScroll takes. A
+// server that scrolls by wheel button pulses gets one pulse per notch (16
+// points would be 0.8 of a pulse, so a lone notch would send nothing), and
+// SendScroll counts horizontal motion positive to the left where SDL counts it
+// positive to the right.
+func scrollPoints(info rfb.ServerInfo, x, y float32) (float64, float64) {
+	if info.Dialect != rfb.DialectApple && !info.Accepts(scrollWheelMessage) {
+		return -float64(x) * rfb.StandardPointsPerPulse, float64(y) * rfb.StandardPointsPerPulse
+	}
 	return float64(x) * wheelPoints, float64(y) * wheelPoints
 }
