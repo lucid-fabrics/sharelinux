@@ -77,14 +77,36 @@ func dropGesture(send func(x, y int, buttons uint8) error, wait func(time.Durati
 	_ = send(x+1, y+1, 0)
 }
 
+// progressToastInterval is the least time between two progress toasts of one copy.
+const progressToastInterval = time.Second
+
+// newProgressToaster returns the progress callback of one copy. It is never nil
+// because the file copy core calls it unconditionally. It toasts the percentage
+// at most once per interval and only while the total is known.
+func newProgressToaster(toast func(string), now func() time.Time) func(filecopy.Progress) {
+	var last time.Time
+	return func(progress filecopy.Progress) {
+		if progress.Total <= 0 || progress.Transferred >= progress.Total {
+			return
+		}
+		current := now()
+		if !last.IsZero() && current.Sub(last) < progressToastInterval {
+			return
+		}
+		last = current
+		toast(fmt.Sprint("Copying ", filepath.Base(progress.Item), ": ", progress.Transferred*100/progress.Total, "%"))
+	}
+}
+
 // copyOne uploads or downloads one item and waits for it to finish.
 func (t *transfers) copyOne(upload bool, source, destination string) error {
 	var transfer *filecopy.Transfer
 	var err error
+	progress := newProgressToaster(t.handler.toast, time.Now)
 	if upload {
-		transfer, err = t.client.FileCopy().Upload(t.context, filecopy.PathSource(source), destination, nil)
+		transfer, err = t.client.FileCopy().Upload(t.context, filecopy.PathSource(source), destination, progress)
 	} else {
-		transfer, err = t.client.FileCopy().Download(t.context, source, destination, nil)
+		transfer, err = t.client.FileCopy().Download(t.context, source, destination, progress)
 	}
 	if err != nil {
 		return err
