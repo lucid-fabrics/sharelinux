@@ -3,10 +3,12 @@ module github.com/nekohasekai/open-screen-sharing
 go 1.26.8
 
 require (
-	github.com/Zyko0/go-sdl3 v0.1.1
 	github.com/bodgit/sevenzip v1.6.5
+	github.com/diamondburned/gotk4-adwaita/pkg v0.0.0-20260808200908-d4aecaa0ff32
+	github.com/diamondburned/gotk4/pkg v0.4.1
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.20.1
+	github.com/libp2p/zeroconf/v2 v2.2.0
 	github.com/nwaples/rardecode/v2 v2.4.5
 	github.com/sagernet/asc-go v0.0.0-20260914163356-9e3d45a797c1
 	github.com/sagernet/gomobile v0.1.13
@@ -22,14 +24,12 @@ require (
 )
 
 require (
-	github.com/Zyko0/purego-gen v0.0.0-20250727121216-3bcd331a1e0c // indirect
 	github.com/andybalholm/brotli v1.2.2 // indirect
 	github.com/bodgit/plumbing v1.3.0 // indirect
 	github.com/bodgit/windows v1.0.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/danieljoos/wincred v1.2.3 // indirect
 	github.com/dgrijalva/jwt-go/v4 v4.0.0-preview1 // indirect
-	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/florianl/go-nfqueue/v2 v2.1.0 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
@@ -40,6 +40,7 @@ require (
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/mdlayher/netlink v1.11.2 // indirect
 	github.com/mdlayher/socket v0.6.0 // indirect
+	github.com/miekg/dns v1.1.43 // indirect
 	github.com/pierrec/lz4/v4 v4.1.27 // indirect
 	github.com/sagernet/fswatch v0.1.2 // indirect
 	github.com/sagernet/gvisor v0.0.0-20260727.0-sing-box-mod.1 // indirect
