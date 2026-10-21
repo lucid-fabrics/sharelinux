@@ -253,3 +253,86 @@ func TestVideoPaysOff(t *testing.T) {
 		t.Fatal("always plans like auto")
 	}
 }
+
+func TestPlanWithHDR(t *testing.T) {
+	both := videoCaps{HEVCVAAPI: true, HEVCSoftware: true, HEVC444x10VAAPI: true, HEVC444x10Software: true}
+	cases := []struct {
+		name      string
+		mode      videoMode
+		caps      videoCaps
+		wantHDR   bool
+		wantKinds []decoderKind
+	}{
+		{"both decoders", videoAuto, both, true, []decoderKind{decoderVAAPI, decoderSoftware}},
+		{"software mode never asks the GPU", videoSoftware, both, true, []decoderKind{decoderSoftware}},
+		{"only the GPU takes 4:4:4", videoAuto, videoCaps{HEVCVAAPI: true, HEVCSoftware: true, HEVC444x10VAAPI: true}, true, []decoderKind{decoderVAAPI}},
+		{"only software takes 4:4:4", videoAuto, videoCaps{HEVCVAAPI: true, HEVCSoftware: true, HEVC444x10Software: true}, true, []decoderKind{decoderSoftware}},
+		{"no 4:4:4 decoder keeps the plan standard range", videoAuto, videoCaps{HEVCVAAPI: true, HEVCSoftware: true}, false, nil},
+		{"GPU-only 4:4:4 in software mode has nothing", videoSoftware, videoCaps{HEVCSoftware: true, HEVC444x10VAAPI: true}, false, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			plan := planVideo(c.mode, c.caps, true).withHDR(c.mode, c.caps)
+			if plan.HDR != c.wantHDR {
+				t.Fatalf("HDR %v, want %v", plan.HDR, c.wantHDR)
+			}
+			if !slices.Equal(plan.HDRKinds, c.wantKinds) {
+				t.Fatalf("HDR decoders %v, want %v", plan.HDRKinds, c.wantKinds)
+			}
+			offered := plan.Offer.PixelFormats&media.PixelFormat444TenBitFullRange != 0
+			if offered != c.wantHDR {
+				t.Fatalf("the offer names 4:4:4 10-bit: %v, want %v", offered, c.wantHDR)
+			}
+			if plan.Offer.PixelFormats&media.PixelFormatsSDR420 != media.PixelFormatsSDR420 {
+				t.Fatal("the standard range formats stay in the offer")
+			}
+		})
+	}
+}
+
+func TestPlanWithHDRNeedsHEVC(t *testing.T) {
+	caps := videoCaps{H264Software: true, HEVC444x10Software: true}
+	plan := planVideo(videoAuto, caps, true).withHDR(videoAuto, caps)
+	if plan.Codec != media.CodecH264 || plan.HDR || plan.Offer.PixelFormats&media.PixelFormat444TenBitFullRange != 0 {
+		t.Fatalf("an H.264 plan cannot ask for HDR: %+v", plan)
+	}
+	off := planVideo(videoOff, caps, true).withHDR(videoOff, caps)
+	if off.enabled() || off.HDR {
+		t.Fatalf("no plan stays no plan: %+v", off)
+	}
+}
+
+func TestPlanKindsFor(t *testing.T) {
+	caps := videoCaps{HEVCVAAPI: true, HEVCSoftware: true, HEVC444x10Software: true}
+	plan := planVideo(videoAuto, caps, true).withHDR(videoAuto, caps)
+	sdr := media.Color{BitDepth: 8, ChromaFormat: 1}
+	hdr := media.Color{BitDepth: 10, ChromaFormat: 3, Transfer: media.TransferPQ}
+	if got := plan.kindsFor(sdr); !slices.Equal(got, []decoderKind{decoderVAAPI, decoderSoftware}) {
+		t.Fatalf("SDR video: %v", got)
+	}
+	if got := plan.kindsFor(hdr); !slices.Equal(got, []decoderKind{decoderSoftware}) {
+		t.Fatalf("HDR video skips the decoder that cannot take 4:4:4: %v", got)
+	}
+	// A decoder that failed is gone for both kinds of stream.
+	failed := plan.withoutKind(decoderSoftware)
+	if got := failed.kindsFor(hdr); len(got) != 0 {
+		t.Fatalf("no decoder left for HDR: %v", got)
+	}
+	if got := failed.kindsFor(sdr); !slices.Equal(got, []decoderKind{decoderVAAPI}) {
+		t.Fatalf("SDR video keeps the GPU: %v", got)
+	}
+}
+
+func TestVideoRowsNameHDR(t *testing.T) {
+	rows := []statRow{{"Codec", "x"}}
+	hdr := videoStats{Active: true, Codec: media.CodecHEVC, Kind: decoderVAAPI,
+		Color: media.Color{BitDepth: 10, ChromaFormat: 3, Transfer: media.TransferHLG}}
+	got := applyVideoRows(rows, hdr)
+	if got[0].Value != "HEVC 4:4:4 10-bit HDR (HLG, VA-API)" {
+		t.Fatalf("%q", got[0].Value)
+	}
+	sdr := videoStats{Active: true, Codec: media.CodecHEVC, Kind: decoderSoftware, Color: media.Color{BitDepth: 8, ChromaFormat: 1}}
+	if got := applyVideoRows(rows, sdr); got[0].Value != "HEVC (software)" {
+		t.Fatalf("%q", got[0].Value)
+	}
+}

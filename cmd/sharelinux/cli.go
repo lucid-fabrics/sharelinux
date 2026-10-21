@@ -128,7 +128,7 @@ func parseArgs(args []string, output io.Writer) (*options, error) {
 	set.StringVar(&keyboard, "keyboard", "auto", "keyboard type: auto, ansi, iso or jis")
 	set.UintVar(&display, "display", 0, "display id to share, 0 for all")
 	set.StringVar(&virtual, "virtual", "", "ask for a virtual display WxH[@DENSITY] in points, density 1 or 2")
-	set.BoolVar(&opts.HDR, "hdr", false, "HDR reference mode of the virtual display")
+	set.BoolVar(&opts.HDR, "hdr", false, "ask for HDR video (Wayland with color management); the virtual display follows")
 	set.BoolVar(&opts.NoClipboard, "no-clipboard", false, "do not share the clipboard")
 	set.BoolVar(&opts.NoGrab, "no-grab", false, "do not grab the keyboard in control mode")
 	set.BoolVar(&opts.Fullscreen, "fullscreen", false, "start fullscreen")

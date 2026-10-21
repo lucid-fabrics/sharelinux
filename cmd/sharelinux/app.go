@@ -83,6 +83,9 @@ type app struct {
 
 	videoOnce sync.Once
 	caps      videoCaps
+
+	hdrOnce sync.Once
+	hdrEnv  hdrEnv
 }
 
 // videoMode is the video mode for new connections: the environment wins over the preferences.
@@ -111,6 +114,46 @@ func (a *app) videoCapabilities() videoCaps {
 			"h264-vaapi", a.caps.H264VAAPI, "h264-software", a.caps.H264Software, "driver", a.caps.Driver, "vaapi-error", a.caps.Error)
 	})
 	return a.caps
+}
+
+// displayHDR asks the display server once what it offers for HDR. The first call has to come
+// from the GTK thread after the display is open.
+func (a *app) displayHDR() hdrEnv {
+	a.hdrOnce.Do(func() {
+		if hdrEnvironment == nil {
+			return
+		}
+		a.hdrEnv = hdrEnvironment()
+		if a.logger != nil {
+			a.logger.Info("hdr display", "wayland", a.hdrEnv.Wayland, "color-manager", a.hdrEnv.ColorManager,
+				"gtk-color-management", a.hdrEnv.ColorManagement)
+		}
+	})
+	return a.hdrEnv
+}
+
+// hdrState says whether this machine can show HDR video.
+func (a *app) hdrState() hdrState {
+	return hdrAvailable(a.videoCapabilities(), a.displayHDR())
+}
+
+// hdrWanted is the person's wish for HDR: the flag or the preference.
+func (a *app) hdrWanted() bool {
+	return a.preferences().HDR || a.opts != nil && a.opts.HDR
+}
+
+// hdrOffReason says in a few words why a wish for HDR is not followed.
+func (a *app) hdrOffReason() string {
+	state := a.hdrState()
+	if !state.Available {
+		return state.Reason
+	}
+	return hdrRestart
+}
+
+// hdrEffective says whether a session asks the Mac for HDR video.
+func (a *app) hdrEffective(wanted bool) bool {
+	return hdrEffective(wanted, a.hdrState(), a.displayHDR())
 }
 
 // preferences returns the current preferences.

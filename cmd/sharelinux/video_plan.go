@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -118,6 +119,9 @@ func (o outputKind) String() string {
 type videoCaps struct {
 	HEVCVAAPI, HEVCSoftware bool
 	H264VAAPI, H264Software bool
+	// HEVC444x10VAAPI and HEVC444x10Software say whether a decoder really decoded a tiny
+	// HEVC 4:4:4 10-bit stream, the profile of HDR video.
+	HEVC444x10VAAPI, HEVC444x10Software bool
 	// Device is the VA-API node that was probed, Driver what the driver calls itself.
 	Device, Driver string
 	// Error says why VA-API is missing, when it is.
@@ -170,6 +174,10 @@ type videoPlan struct {
 	// Kinds are the decoders to try for Codec, best first. A decoder that fails
 	// hands over to the next one; when the last fails the tiles take over.
 	Kinds []decoderKind
+	// HDR is set when the offer asks for HEVC 4:4:4 10-bit too. HDRKinds are the decoders that
+	// take such a stream; Kinds minus them still decode the 4:2:0 one.
+	HDR      bool
+	HDRKinds []decoderKind
 }
 
 func (p videoPlan) enabled() bool { return len(p.Kinds) > 0 }
@@ -208,7 +216,7 @@ func planVideo(mode videoMode, caps videoCaps, serverHasVideo bool) videoPlan {
 	}
 	plan.Offer = media.OfferOptions{
 		Codecs: []media.Codec{plan.Codec},
-		// Standard dynamic range, 4:2:0, full or video range. HDR and 4:4:4 are later work.
+		// Standard dynamic range, 4:2:0, full or video range. HDR adds 4:4:4 10-bit (withHDR).
 		PixelFormats:  media.PixelFormatsSDR420,
 		FrameRate60:   true,
 		TilesPerFrame: 1,
@@ -219,15 +227,59 @@ func planVideo(mode videoMode, caps videoCaps, serverHasVideo bool) videoPlan {
 	return plan
 }
 
-// withoutKind drops a decoder that failed, and what is left is the plan to carry on with.
-func (p videoPlan) withoutKind(kind decoderKind) videoPlan {
-	kept := make([]decoderKind, 0, len(p.Kinds))
-	for _, k := range p.Kinds {
-		if k != kind {
-			kept = append(kept, k)
+// withHDR adds HDR to a plan: the offer names 4:4:4 10-bit full range, which makes the Mac
+// offer HDR mode 3, and the decoders that took the probe stream of that profile are the ones
+// that may decode it. A plan whose codec is not HEVC, or whose machine has no such decoder,
+// stays as it is.
+func (p videoPlan) withHDR(mode videoMode, caps videoCaps) videoPlan {
+	if !p.enabled() || p.Codec != media.CodecHEVC {
+		return p
+	}
+	var kinds []decoderKind
+	if caps.HEVC444x10VAAPI && mode != videoSoftware && slices.Contains(p.Kinds, decoderVAAPI) {
+		kinds = append(kinds, decoderVAAPI)
+	}
+	if caps.HEVC444x10Software && slices.Contains(p.Kinds, decoderSoftware) {
+		kinds = append(kinds, decoderSoftware)
+	}
+	if len(kinds) == 0 {
+		return p
+	}
+	p.HDR = true
+	p.HDRKinds = kinds
+	p.Offer.PixelFormats |= media.PixelFormat444TenBitFullRange
+	return p
+}
+
+// kindsFor are the decoders to try for a stream, best first: HDR video only goes to the ones
+// that handle 4:4:4 10-bit.
+func (p videoPlan) kindsFor(color media.Color) []decoderKind {
+	if !is444TenBit(color) {
+		return p.Kinds
+	}
+	kinds := make([]decoderKind, 0, len(p.HDRKinds))
+	for _, kind := range p.HDRKinds {
+		if slices.Contains(p.Kinds, kind) {
+			kinds = append(kinds, kind)
 		}
 	}
+	return kinds
+}
+
+// withoutKind drops a decoder that failed, and what is left is the plan to carry on with.
+func (p videoPlan) withoutKind(kind decoderKind) videoPlan {
+	drop := func(kinds []decoderKind) []decoderKind {
+		kept := make([]decoderKind, 0, len(kinds))
+		for _, k := range kinds {
+			if k != kind {
+				kept = append(kept, k)
+			}
+		}
+		return kept
+	}
+	kept := drop(p.Kinds)
 	p.Kinds = kept
+	p.HDRKinds = drop(p.HDRKinds)
 	if len(kept) == 0 {
 		p.Reason = kind.String() + " decoding failed"
 	}
@@ -277,6 +329,8 @@ type videoStats struct {
 	Active bool
 	Codec  media.Codec
 	Kind   decoderKind
+	// Color is what the stream's header says about its picture, once it is known.
+	Color  media.Color
 	Output outputKind
 	// Units went into the decoder, Frames came out, Presented were drawn.
 	Units, Frames, Presented uint64
@@ -301,7 +355,7 @@ func applyVideoRows(rows []statRow, v videoStats) []statRow {
 	out := make([]statRow, 0, len(rows)+3)
 	for _, row := range rows {
 		if row.Label == "Codec" {
-			row.Value = videoLabel(v.Codec, v.Kind)
+			row.Value = streamLabel(v.Codec, v.Color, v.Kind)
 			out = append(out, row)
 			out = append(out,
 				statRow{"Decode", formatMillis(v.DecodeAvg)},

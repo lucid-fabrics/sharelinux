@@ -49,8 +49,14 @@ func (a *app) rfbOptions(req *request, h *handler) rfb.Options {
 		// virtual display, and the one it offers the stream.
 		DecoderMaxPixelRate: planVideo(a.videoMode(), a.videoCapabilities(), true).decoderPixelRate(videoThreads()),
 	}
-	if req.opts.Virtual != nil || req.opts.HDR {
-		virtual, hdr := req.opts.Virtual, req.opts.HDR
+	// HDR means real HDR video: where this machine cannot show it, the virtual display stays
+	// standard range too, so the Mac never sends a stream that would be shown wrong.
+	hdr := a.hdrEffective(req.opts.HDR)
+	if req.opts.HDR && !hdr {
+		a.logger.Info("hdr", "state", "off", "reason", a.hdrOffReason())
+	}
+	if req.opts.Virtual != nil || hdr {
+		virtual := req.opts.Virtual
 		options.Prepare = func(client *rfb.Client) {
 			if virtual != nil {
 				err := client.SetVirtualDisplay(virtual.Width, virtual.Height, virtual.Density, rfb.VirtualDisplayLargestSide, rfb.VirtualDisplayLargestSide)
