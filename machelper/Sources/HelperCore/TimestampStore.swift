@@ -7,6 +7,15 @@ public protocol TimestampStore: AnyObject {
     func load() throws -> [Data: Data]
     /// Must be durable before it returns; a throw makes the channel refuse the handshake.
     func save(peer: Data, timestamp: Data) throws
+    /// Called when `load` failed: set the unreadable data aside and start empty.
+    /// Throwing keeps the channel failing closed.
+    func moveCorruptAside() throws
+}
+
+extension TimestampStore {
+    /// Default: no recovery possible, so the channel keeps failing closed.
+    /// Stores that can recover override it.
+    public func moveCorruptAside() throws { throw CocoaError(.fileWriteUnknown) }
 }
 
 public final class MemoryTimestampStore: TimestampStore {
@@ -14,11 +23,13 @@ public final class MemoryTimestampStore: TimestampStore {
     public init() {}
     public func load() throws -> [Data: Data] { table }
     public func save(peer: Data, timestamp: Data) throws { table[peer] = timestamp }
+    public func moveCorruptAside() throws { table = [:] }
 }
 
 /// JSON file {peerKeyHex: timestampHex}, replaced atomically, mode 0600. A
 /// missing file is an empty table; an unreadable or malformed one throws, and
-/// the channel then refuses handshakes rather than guess.
+/// the channel then moves it aside (`moveCorruptAside`) and restarts with a
+/// fresh floor, or refuses handshakes if even that fails.
 public final class FileTimestampStore: TimestampStore {
     private let url: URL
     private var table: [Data: Data]?
@@ -38,6 +49,18 @@ public final class FileTimestampStore: TimestampStore {
         }
         table = out
         return out
+    }
+
+    /// Renames the file to `<name>.corrupt-<unix seconds>` (mode untouched) and
+    /// forgets any cached table. The next `save` writes a fresh file.
+    public func moveCorruptAside() throws {
+        let aside = url.deletingLastPathComponent().appendingPathComponent(
+            url.lastPathComponent + ".corrupt-\(Int(Date().timeIntervalSince1970))")
+        try? FileManager.default.removeItem(at: aside)
+        if FileManager.default.fileExists(atPath: url.path) {
+            try FileManager.default.moveItem(at: url, to: aside)
+        }
+        table = [:]
     }
 
     public func save(peer: Data, timestamp: Data) throws {

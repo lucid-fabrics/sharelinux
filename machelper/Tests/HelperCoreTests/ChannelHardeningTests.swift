@@ -92,15 +92,76 @@ extension ChannelTests {
         XCTAssertLessThan(limiter.trackedCount, 5)
     }
 
-    func testSourceTableOverflowSharesOneBucketInsteadOfGrowing() {
+    static func spoof(_ i: Int) -> PeerAddress {
+        PeerAddress(bytes: [172, UInt8(i >> 16 & 0xff), UInt8(i >> 8 & 0xff), UInt8(i & 0xff)])!
+    }
+
+    /// A full table makes room by evicting a source that never authenticated, so
+    /// a newcomer gets a bucket of its own instead of a shared, drained one.
+    func testFullSourceTableEvictsInsteadOfSharingAnOverflowBucket() {
         var limiter = SourceRateLimiter()
         for i in 0..<ChannelLimits.maxTrackedSources {
-            XCTAssertTrue(limiter.allow(PeerAddress(bytes: [10, 1, UInt8(i >> 8), UInt8(i & 0xff)]), now: 5))
+            XCTAssertTrue(limiter.allow(Self.spoof(i), now: 5))
         }
-        var passed = 0
-        for i in 0..<100 where limiter.allow(PeerAddress(bytes: [10, 2, 0, UInt8(i)]), now: 5) { passed += 1 }
-        XCTAssertEqual(passed, Int(ChannelLimits.handshakesPerSourceBurst))
+        for i in 0..<100 { _ = limiter.allow(Self.spoof(10_000 + i), now: 5) }
+        let newcomer = PeerAddress(bytes: [192, 0, 2, 77])
+        XCTAssertTrue(limiter.allow(newcomer, now: 5))
         XCTAssertEqual(limiter.trackedCount, ChannelLimits.maxTrackedSources)
+    }
+
+    /// Finding 3: spoofing more than 256 sources used to push everyone new into
+    /// one shared bucket the spoofers had drained.
+    func testAuthenticatedSourceKeepsItsOwnBucketUnderASpoofFlood() {
+        var limiter = SourceRateLimiter()
+        let real = PeerAddress(bytes: [192, 0, 2, 50])
+        limiter.markAuthenticated(real, now: 0)
+        for i in 0..<1000 { _ = limiter.allow(Self.spoof(i), now: 1) }
+        XCTAssertTrue(limiter.allow(real, now: 1))
+        XCTAssertTrue(limiter.allow(real, now: 1))
+        XCTAssertFalse(limiter.allow(real, now: 1), "its own burst of 2, not more")
+        XCTAssertLessThanOrEqual(limiter.trackedCount, ChannelLimits.maxTrackedSources)
+    }
+
+    func testPinnedSourceIsNeverEvictedEvenWhenItIsTheOldestEntry() {
+        var limiter = SourceRateLimiter()
+        let real = PeerAddress(bytes: [192, 0, 2, 50])
+        XCTAssertTrue(limiter.allow(real, now: 0))
+        XCTAssertTrue(limiter.allow(real, now: 0))
+        limiter.markAuthenticated(real, now: 0)
+        for i in 0..<1000 { _ = limiter.allow(Self.spoof(i), now: 0.001 * Double(i + 1) / 10) }
+        // Had it been evicted it would come back with a full bucket.
+        XCTAssertFalse(limiter.allow(real, now: 0.2))
+    }
+
+    func testPinsAreBoundedAndExpire() {
+        var limiter = SourceRateLimiter()
+        for i in 0..<(ChannelLimits.maxPinnedSources * 3) {
+            limiter.markAuthenticated(Self.spoof(i), now: Double(i))
+        }
+        XCTAssertEqual(limiter.pinnedCount, ChannelLimits.maxPinnedSources)
+        XCTAssertFalse(limiter.isPinned(Self.spoof(0)), "the oldest pin makes way")
+        XCTAssertTrue(limiter.isPinned(Self.spoof(ChannelLimits.maxPinnedSources * 3 - 1)))
+        limiter.markAuthenticated(Self.spoof(9999), now: 100_000)
+        XCTAssertEqual(limiter.pinnedCount, 1, "old pins expire")
+    }
+
+    /// The same through the channel: a paired device that authenticated, went
+    /// quiet, and reconnects after a flood of spoofed senders is still answered.
+    func testPairedDeviceStillGetsAnswersAfterASpoofedSourceFlood() throws {
+        let real = PeerAddress(bytes: [192, 0, 2, 50])!
+        let c = try initiate()
+        let r = channel.receive(c.datagram, from: real)
+        let s = try finish(c, reply: try XCTUnwrap(r.reply))
+        _ = channel.receive(try s.seal(InputPacket(type: .keepalive).encode(), now: env.mono), from: real)
+        env.mono += 10
+        let stranger = PrivKey()
+        for i in 0..<(ChannelLimits.maxTrackedSources + 50) {
+            let f = try initiate(key: stranger, at: env.wall.addingTimeInterval(Double(i)))
+            _ = channel.receive(f.datagram, from: Self.spoof(i))
+        }
+        env.mono += 1
+        let again = try initiate(at: env.wall.addingTimeInterval(1))
+        XCTAssertEqual(channel.receive(again.datagram, from: real).events, [.handshakeAnswered])
     }
 
     // MARK: session and source bookkeeping
@@ -253,14 +314,57 @@ extension ChannelTests {
         XCTAssertNotNil(channel.receive(fresh.datagram, from: Self.addr).reply)
     }
 
-    func testUnreadableTimestampFileRefusesHandshakesInsteadOfGuessing() throws {
-        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    /// Finding 4: a corrupt store used to block every handshake until someone
+    /// deleted the file by hand.
+    func testCorruptTimestampFileIsMovedAsideAndAFreshFloorApplies() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("timestamps.json")
         try Data("not json".utf8).write(to: file)
-        defer { try? FileManager.default.removeItem(at: file) }
+        func open() {
+            let e = env
+            channel = HelperChannel(
+                staticKey: macKey, pairedKeys: { e.paired },
+                environment: { _, _ in fatalError() },
+                clock: ChannelClock(monotonic: { e.mono }, wall: { e.wall }), timestamps: FileTimestampStore(url: file))
+        }
+        // Captured before the corruption was noticed: older than the recovery time.
+        let captured = try initiate(at: env.wall.addingTimeInterval(-5))
+        let atRecovery = try initiate(at: env.wall)
+        open()
+        XCTAssertTrue(channel.timestampsTrusted)
+        XCTAssertTrue(channel.timestampStoreRecovered)
+        let aside = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasPrefix("timestamps.json.corrupt-") }
+        XCTAssertEqual(aside.count, 1)
+        XCTAssertEqual(try Data(contentsOf: dir.appendingPathComponent(aside[0])), Data("not json".utf8))
+        // Anything not newer than the recovery time is refused, replays included.
+        XCTAssertEqual(channel.receive(captured.datagram, from: Self.addr).events, [.dropped(.staleTimestamp)])
+        env.mono += 1
+        XCTAssertEqual(channel.receive(atRecovery.datagram, from: Self.addr).events, [.dropped(.staleTimestamp)])
+        env.mono += 1
+        let fresh = try initiate(at: env.wall.addingTimeInterval(1))
+        XCTAssertEqual(channel.receive(fresh.datagram, from: Self.addr).events, [.handshakeAnswered])
+        // The floor is stored, so a restart right after cannot reopen the window.
+        env.mono += 1
+        open()
+        XCTAssertFalse(channel.timestampStoreRecovered, "the new file is healthy")
+        XCTAssertEqual(channel.receive(captured.datagram, from: Self.addr).events, [.dropped(.staleTimestamp)])
+        env.mono += 1
+        XCTAssertEqual(channel.receive(atRecovery.datagram, from: Self.addr).events, [.dropped(.staleTimestamp)])
+        let attrs = try FileManager.default.attributesOfItem(atPath: file.path)
+        XCTAssertEqual(attrs[.posixPermissions] as? Int, 0o600)
+    }
+
+    func testUnrecoverableTimestampStoreStillRefusesHandshakes() throws {
+        final class Stuck: TimestampStore {
+            func load() throws -> [Data: Data] { throw CocoaError(.fileReadCorruptFile) }
+            func save(peer: Data, timestamp: Data) throws {}
+        }
         let e = env
         channel = HelperChannel(
             staticKey: macKey, pairedKeys: { e.paired }, environment: { _, _ in fatalError() },
-            clock: ChannelClock(monotonic: { e.mono }, wall: { e.wall }), timestamps: FileTimestampStore(url: file))
+            clock: ChannelClock(monotonic: { e.mono }, wall: { e.wall }), timestamps: Stuck())
         XCTAssertFalse(channel.timestampsTrusted)
         let r = channel.receive(try initiate().datagram, from: Self.addr)
         XCTAssertNil(r.reply)

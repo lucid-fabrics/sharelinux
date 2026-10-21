@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import os
 
 public enum DropReason: Equatable, Sendable {
     case malformed
@@ -35,15 +36,25 @@ public struct ChannelResult: Equatable, Sendable {
 }
 
 /// Per-source handshake limiter with bounded memory: at most
-/// `ChannelLimits.maxTrackedSources` buckets; once full, idle buckets are
-/// forgotten (a full bucket carries no information) and sources that still do
-/// not fit share one bucket, so a flood of spoofed addresses can neither grow
-/// the table nor starve the global budget.
+/// `ChannelLimits.maxTrackedSources` buckets. When the table is full, idle
+/// buckets are forgotten first (a full bucket carries no information); if it
+/// is still full, the least recently seen source that never authenticated
+/// is evicted. Sources that recently authenticated a session are pinned and
+/// are never evicted, so a sender who spoofs hundreds of source addresses
+/// (it needs the Mac's public key to get past mac1) cannot push a real device
+/// out of its own bucket. At most `maxPinnedSources` are pinned, each for
+/// `sourcePinLifetime`, which keeps room for newcomers (the cap is far below
+/// the table size) and keeps memory bounded.
 struct SourceRateLimiter {
-    private var table: [PeerAddress?: RateLimiter] = [:]
-    private var overflow = SourceRateLimiter.bucket()
+    private struct Entry {
+        var bucket: RateLimiter
+        var lastSeen: Double
+    }
+    private var table: [PeerAddress?: Entry] = [:]
+    private var pinned: [PeerAddress?: Double] = [:]
     private var lastPrune = -Double.infinity
     var trackedCount: Int { table.count }
+    var pinnedCount: Int { pinned.count }
 
     private static func bucket() -> RateLimiter {
         RateLimiter(
@@ -51,17 +62,40 @@ struct SourceRateLimiter {
             burst: ChannelLimits.handshakesPerSourceBurst)
     }
 
+    /// Call when a session from this source authenticated its first packet.
+    mutating func markAuthenticated(_ source: PeerAddress?, now: Double) {
+        expirePins(now: now)
+        pinned[source] = now
+        while pinned.count > ChannelLimits.maxPinnedSources,
+            let oldest = pinned.min(by: { $0.value < $1.value })?.key
+        {
+            pinned[oldest] = nil
+        }
+    }
+
+    func isPinned(_ source: PeerAddress?) -> Bool { pinned[source] != nil }
+
+    private mutating func expirePins(now: Double) {
+        pinned = pinned.filter { now >= $0.value && now - $0.value < ChannelLimits.sourcePinLifetime }
+    }
+
     mutating func allow(_ source: PeerAddress?, now: Double) -> Bool {
-        if table[source] == nil, table.count >= ChannelLimits.maxTrackedSources, now - lastPrune >= 1 || now < lastPrune {
-            lastPrune = now
-            table = table.filter { !$0.value.isFull(now: now) }
-        }
         if table[source] == nil, table.count >= ChannelLimits.maxTrackedSources {
-            return overflow.allow(now: now)
+            expirePins(now: now)
+            if now - lastPrune >= 1 || now < lastPrune {
+                lastPrune = now
+                table = table.filter { pinned[$0.key] != nil || !$0.value.bucket.isFull(now: now) }
+            }
+            if table.count >= ChannelLimits.maxTrackedSources {
+                // Pins are capped far below the table size, so a victim exists.
+                let victim = table.filter { pinned[$0.key] == nil }.min { $0.value.lastSeen < $1.value.lastSeen }
+                if let v = victim { table[v.key] = nil }
+            }
         }
-        var b = table[source] ?? SourceRateLimiter.bucket()
-        let ok = b.allow(now: now)
-        table[source] = b
+        var e = table[source] ?? Entry(bucket: SourceRateLimiter.bucket(), lastSeen: now)
+        let ok = e.bucket.allow(now: now)
+        e.lastSeen = max(e.lastSeen, now)
+        table[source] = e
         return ok
     }
 }
@@ -105,9 +139,16 @@ public final class HelperChannel {
     private var motionBudget = RateLimiter(perSecond: ChannelLimits.motionUnitsPerSecond)
     private var lastTimestamp: [Data: Data] = [:]
     private let timestamps: TimestampStore
-    /// False when the timestamp store could not be read: handshakes are refused
-    /// rather than risk accepting a replay.
+    /// False when the timestamp store could not be read and could not be
+    /// recovered either: handshakes are refused rather than risk a replay.
     public private(set) var timestampsTrusted = true
+    /// True when the store was corrupt at start and was moved aside. Until the
+    /// wall clock passes the recovery time no initiation is newer than the
+    /// floor, so nothing captured earlier can be replayed.
+    public private(set) var timestampStoreRecovered = false
+    /// Not a real peer: the entry that holds the recovery floor. Persisted like
+    /// any timestamp so a second restart cannot lose it.
+    static let timestampFloorKey = Data(count: 32)
     private let mac1Key: SymmetricKey
     private var active: Live?
     private var pending: Live?
@@ -130,10 +171,32 @@ public final class HelperChannel {
         self.ephemeralSource = ephemeralSource
         self.timestamps = timestamps
         mac1Key = Mac1.key(macPublic: staticKey.publicKey.rawRepresentation)
-        if let loaded = try? timestamps.load() { lastTimestamp = loaded } else { timestampsTrusted = false }
+        if let loaded = try? timestamps.load() { lastTimestamp = loaded } else { recoverTimestampStore() }
     }
 
     public var activePeerKey: Data? { active?.peerKey }
+
+    /// The store is unreadable. Failing closed forever would need a human to
+    /// find the file, so: move it aside (kept for inspection), start empty, and
+    /// record "now" as a floor that every initiation must beat. A captured
+    /// initiation is older than the floor, so it stays refused. If the file
+    /// cannot be moved or the floor cannot be stored, handshakes stay refused.
+    private func recoverTimestampStore() {
+        timestampsTrusted = false
+        do {
+            try timestamps.moveCorruptAside()
+            let floor = TAI64N.encode(clock.wall())
+            try timestamps.save(peer: HelperChannel.timestampFloorKey, timestamp: floor)
+            lastTimestamp = [HelperChannel.timestampFloorKey: floor]
+            timestampsTrusted = true
+            timestampStoreRecovered = true
+            Logger(subsystem: "io.github.sharelinux.mousehelper", category: "channel").warning(
+                "handshake timestamp store was unreadable: moved aside and restarted with a fresh floor")
+        } catch {
+            Logger(subsystem: "io.github.sharelinux.mousehelper", category: "channel").error(
+                "handshake timestamp store is unreadable and could not be recovered: handshakes refused")
+        }
+    }
 
     private func isPaired(_ key: Data) -> Bool {
         // Visit every entry: no early exit on a match.
@@ -217,6 +280,9 @@ public final class HelperChannel {
             if let last = lastTimestamp[peerKey], !TAI64N.isNewer(ts, than: last) {
                 return ChannelResult(reply: nil, events: [.dropped(.staleTimestamp)])
             }
+            if let floor = lastTimestamp[HelperChannel.timestampFloorKey], !TAI64N.isNewer(ts, than: floor) {
+                return ChannelResult(reply: nil, events: [.dropped(.staleTimestamp)])
+            }
             let response = try hs.writeMessage(payload: Data())
             let keys = try hs.split()
             // Durable before the answer leaves; if it cannot be stored the
@@ -271,6 +337,9 @@ public final class HelperChannel {
             live = p
             live.source = source
             pending = nil
+            // A paired device proved itself: keep its handshake bucket safe
+            // from address-spoofing floods.
+            sourceLimiter.markAuthenticated(source, now: now)
             events.append(.sessionStarted(peerKey: p.peerKey))
         } else if let a = active {
             live = a
