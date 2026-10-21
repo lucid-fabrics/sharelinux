@@ -26,8 +26,9 @@ final class StateCoalescerTests: XCTestCase {
             let end = ProcessInfo.processInfo.systemUptime + 0.0002
             while ProcessInfo.processInfo.systemUptime < end {}
         }
-        var raw = 0
-        rig.runtime.onState = { [prior = rig.runtime.onState] s in raw += 1; prior?(s) }
+        // Counted under a lock: the kill below publishes from the runtime queue.
+        let rawCount = Counter()
+        rig.runtime.onState = { [prior = rig.runtime.onState] s in rawCount.hit(s); prior?(s) }
         rig.runtime.setAllowRawMouse(true)
         let client = try rig.connect()
         rig.run(0.2)
@@ -45,6 +46,7 @@ final class StateCoalescerTests: XCTestCase {
             rig.send(client, InputPacket(type: .input, dx: 16, dy: 0, seqLocal: UInt32(i)))
         }
         let floodSeconds = now() - started
+        let raw = rawCount.snapshot.0
         XCTAssertGreaterThan(raw, 2000, "the flood really flipped the state (\(raw) updates)")
 
         // The hotkey handler is a block on the main queue: it must run at once.
