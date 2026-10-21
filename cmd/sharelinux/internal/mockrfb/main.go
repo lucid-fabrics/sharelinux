@@ -35,6 +35,13 @@ var resizeWidth, resizeHeight, resizeAfter int
 // base size and the resize, instead of once.
 var resizeCycle bool
 
+// observeOnly makes the server speak Apple's 003.889 dialect and advertise the
+// observe-only server flag, the way a Mac that only allows viewing does.
+var observeOnly bool
+
+// observeOnlyFlags is ServerFlagObserveOnly | ServerFlagExtended.
+const observeOnlyFlags = 0x01 | 0x10
+
 func main() {
 	listen := flag.String("listen", "127.0.0.1:5990", "address to listen on")
 	password := flag.String("password", os.Getenv("MOCKRFB_PASSWORD"), "VNC password (or MOCKRFB_PASSWORD)")
@@ -42,6 +49,7 @@ func main() {
 	flag.IntVar(&damage, "damage", 0, "send only a square of this many pixels per update, 0 for the whole screen")
 	resize := flag.String("resize", "", "WxH@N: after N update requests change the screen to WxH (DesktopSize), for checking resizes")
 	flag.BoolVar(&resizeCycle, "resize-cycle", false, "with -resize, switch between the two sizes every N update requests instead of once")
+	flag.BoolVar(&observeOnly, "observe-only", false, "advertise the observe-only server flag (Apple dialect), for checking view-only servers")
 	flag.Parse()
 	if _, err := fmt.Sscanf(*size, "%dx%d", &width, &height); err != nil || width < 16 || height < 16 {
 		log.Fatal("bad -size ", *size)
@@ -109,7 +117,11 @@ func serve(conn net.Conn, password string) {
 	defer conn.Close()
 	width, height = baseWidth, baseHeight
 	write := func(data ...byte) { conn.Write(data) }
-	conn.Write([]byte("RFB 003.008\n"))
+	if observeOnly {
+		conn.Write([]byte("RFB 003.889\n"))
+	} else {
+		conn.Write([]byte("RFB 003.008\n"))
+	}
 	version := make([]byte, 12)
 	if _, err := io.ReadFull(conn, version); err != nil {
 		return
@@ -141,8 +153,14 @@ func serve(conn net.Conn, password string) {
 	init := binary.BigEndian.AppendUint16(nil, uint16(width))
 	init = binary.BigEndian.AppendUint16(init, uint16(height))
 	init = append(init, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0)
-	init = binary.BigEndian.AppendUint32(init, uint32(len(name)))
-	conn.Write(append(init, name...))
+	nameBytes := []byte(name)
+	if observeOnly {
+		// Apple's extended name: two zero bytes, the flags, 16 command bytes.
+		extra := binary.BigEndian.AppendUint32([]byte{0, 0}, observeOnlyFlags)
+		nameBytes = append(append(extra, make([]byte, 16)...), nameBytes...)
+	}
+	init = binary.BigEndian.AppendUint32(init, uint32(len(nameBytes)))
+	conn.Write(append(init, nameBytes...))
 	marker := 0
 	requests := 0
 	sentClipboard := false
@@ -206,6 +224,11 @@ func serve(conn net.Conn, password string) {
 			body := make([]byte, 5)
 			io.ReadFull(conn, body)
 			fmt.Printf("pointer buttons=%#x x=%d y=%d\n", body[0], binary.BigEndian.Uint16(body[1:]), binary.BigEndian.Uint16(body[3:]))
+		case 0x0a: // Apple SetMode
+			io.ReadFull(conn, make([]byte, 3))
+			log.Println("mode message")
+		case 0x15: // Apple auto pasteboard
+			io.ReadFull(conn, make([]byte, 7))
 		case 6: // ClientCutText
 			head := make([]byte, 7)
 			io.ReadFull(conn, head)
