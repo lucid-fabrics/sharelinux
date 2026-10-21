@@ -135,11 +135,13 @@ public final class HelperChannel {
 
     private func handleInitiation(_ body: Data, from source: PeerAddress?) -> ChannelResult {
         let now = clock.monotonic()
-        guard handshakeLimiter.allow(now: now) else {
-            return ChannelResult(reply: nil, events: [.dropped(.handshakeRateLimit)])
-        }
+        // Wrong-size datagrams are free to reject, so they must not eat the
+        // handshake budget that real handshakes need.
         guard body.count == HelperChannel.initiationBodySize else {
             return ChannelResult(reply: nil, events: [.dropped(.malformed)])
+        }
+        guard handshakeLimiter.allow(now: now) else {
+            return ChannelResult(reply: nil, events: [.dropped(.handshakeRateLimit)])
         }
         do {
             let hs = try HandshakeState(

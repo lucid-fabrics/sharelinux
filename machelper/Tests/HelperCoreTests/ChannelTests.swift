@@ -229,6 +229,15 @@ final class ChannelTests: XCTestCase {
         XCTAssertEqual(answered, 5)
     }
 
+    func testWrongSizeInitiationsDoNotConsumeHandshakeBudget() throws {
+        let good = try initiate()
+        for n in 0..<50 {
+            let junk = Data([DatagramKind.ikInitiation.rawValue]) + Data(count: n)
+            XCTAssertEqual(channel.receive(junk, from: Self.addr).events, [.dropped(.malformed)])
+        }
+        XCTAssertNotNil(channel.receive(good.datagram, from: Self.addr).reply)
+    }
+
     func testRemovingPairedKeyEndsSessionSilently() throws {
         let s = try connect()
         _ = try send(s, InputPacket(type: .keepalive))
