@@ -13,6 +13,13 @@ public struct RuntimeState: Equatable, Sendable {
     /// Last reason input was refused, nil while accepted or without a session.
     public var lastDeny: HelperState?
 
+    /// The text of the always-on-top badge: shown exactly while events are being
+    /// posted, whatever the menu bar does (the notch or "hide menu bar icon"
+    /// can hide the icon; the badge is a separate window). nil: no badge.
+    public var badgeText: String? {
+        injecting ? "Raw mouse active: \(device ?? "a device")" : nil
+    }
+
     public init(allowRawMouse: Bool, device: String?, injecting: Bool, lastDeny: HelperState?) {
         self.allowRawMouse = allowRawMouse; self.device = device
         self.injecting = injecting; self.lastDeny = lastDeny
@@ -22,7 +29,27 @@ public struct RuntimeState: Equatable, Sendable {
 /// The local "Allow raw mouse" switch. Default off on every launch and never
 /// persisted: only a click at this Mac turns it on, and the remote side cannot
 /// reach it.
-final class LocalSwitch { var isOn = false }
+final class LocalSwitch {
+    private let state = OSAllocatedUnfairLock(initialState: false)
+    /// Readable and writable from any thread: the kill switch turns it off
+    /// without going through the runtime queue.
+    var isOn: Bool {
+        get { state.withLock { $0 } }
+        set { state.withLock { $0 = newValue } }
+    }
+}
+
+/// Local emergencies that stop input before the runtime queue gets to run.
+public enum EmergencyKind: Sendable {
+    /// "Stop now", the hotkey, Quit: switch off, session over.
+    case kill
+    /// System going to sleep: session over, switch unchanged.
+    case sleep
+    /// Screen locked: buttons up, session stays.
+    case lock
+    /// The user session left the console: buttons up, session stays.
+    case sessionLost
+}
 
 /// Wires channel, gate, environment monitor and mouse controller together.
 /// Everything runs on `queue` (one serial queue), so no locks are needed; the
@@ -35,6 +62,8 @@ final class LocalSwitch { var isOn = false }
 public final class HelperRuntime {
     public let queue: DispatchQueue
     public let controller: MouseController
+    /// Everything the controller posts goes through this guard.
+    public let guardedPoster: GuardedPoster
     public let monitor: EnvironmentMonitor
     private let channel: HelperChannel
     private let localSwitch = LocalSwitch()
@@ -69,7 +98,8 @@ public final class HelperRuntime {
         self.monotonic = clock.monotonic
         self.deviceName = deviceName
         self.pairedKeys = pairedKeys
-        controller = MouseController(poster: poster, clock: clock.monotonic, doubleClickInterval: doubleClickInterval)
+        guardedPoster = GuardedPoster(poster)
+        controller = MouseController(poster: guardedPoster, clock: clock.monotonic, doubleClickInterval: doubleClickInterval)
         let mon = EnvironmentMonitor(
             session: session, sharing: sharing, access: access, ownUID: ownUID, clock: clock.monotonic)
         monitor = mon
@@ -212,11 +242,57 @@ public final class HelperRuntime {
 
     // MARK: local actions (menu, hotkey, system notifications)
 
-    /// The menu switch. Turning it off ends any session.
-    public func setAllowRawMouse(_ on: Bool) {
+    /// Why the switch cannot be turned on, nil when it can. The app sets this
+    /// when the kill hotkey could not be registered: the owner must always have
+    /// a way to stop that does not depend on a menu bar icon that can be hidden.
+    public var cannotEnableReason: String? {
+        get { enableBlock.withLock { $0 } }
+        set { enableBlock.withLock { $0 = newValue } }
+    }
+    private let enableBlock = OSAllocatedUnfairLock<String?>(initialState: nil)
+
+    /// The menu switch. Turning it off ends any session. Turning it on is
+    /// refused while `cannotEnableReason` is set; returns whether the switch
+    /// ended up as asked.
+    @discardableResult
+    public func setAllowRawMouse(_ on: Bool) -> Bool {
+        if on, cannotEnableReason != nil {
+            localSwitch.isOn = false
+            publish()
+            return false
+        }
         localSwitch.isOn = on
         if !on { stopEverything(.toggleOff) }
         publish()
+        return true
+    }
+
+    /// The kill switch for handlers that must not wait for the runtime queue
+    /// (hotkey, menu, sleep, lock). Callable from any thread. On the calling
+    /// thread, right now: the switch goes off (for `.kill`), posting stops and
+    /// every held button comes up. Then the runtime queue ends the session and
+    /// releases the controller as usual, and lifts the posting block.
+    ///
+    /// - Parameter wait: how long to wait for the queue to finish (0: not at
+    ///   all). Sleep and Quit use a short wait and carry on after it: the
+    ///   buttons are already up whether or not the queue answered.
+    /// - Returns: true when the queue finished within `wait`.
+    @discardableResult
+    public func emergencyStop(_ kind: EmergencyKind, wait: TimeInterval = 0) -> Bool {
+        if kind == .kill { localSwitch.isOn = false }
+        guardedPoster.beginStop()
+        let done = DispatchSemaphore(value: 0)
+        queue.async { [self] in
+            switch kind {
+            case .kill: killSwitch()
+            case .sleep: willSleep()
+            case .lock: environmentInterruption(.locked)
+            case .sessionLost: environmentInterruption(.environment)
+            }
+            guardedPoster.endStop()
+            done.signal()
+        }
+        return wait > 0 && done.wait(timeout: .now() + wait) == .success
     }
 
     /// Kill switch (menu "Stop now" and the hotkey): releases buttons, ends the

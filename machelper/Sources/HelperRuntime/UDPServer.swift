@@ -103,10 +103,27 @@ public final class UDPServer {
         fd = -1
     }
 
-    /// Reads everything waiting on the socket.
+    /// Datagrams read per pass. The socket is read on the same serial queue as
+    /// the timer that runs the watchdogs and the environment sampling; draining
+    /// it until empty let a flood keep that queue busy for as long as the flood
+    /// lasted, so no watchdog fired and no kill switch ran. After this many (or
+    /// `maxPassSeconds`) the pass ends: the read source fires again at once if
+    /// data is still waiting, and whatever else is queued runs in between.
+    static let maxDatagramsPerPass = 32
+    static let maxPassSeconds = 0.002
+
+    /// Reads what is waiting on the socket, up to the per-pass cap.
     private func drain() {
         var buf = [UInt8](repeating: 0, count: 2048)
-        while true {
+        let started = DispatchTime.now().uptimeNanoseconds
+        var read = 0
+        while read < UDPServer.maxDatagramsPerPass {
+            read += 1
+            if read % 8 == 0,
+                Double(DispatchTime.now().uptimeNanoseconds &- started) / 1e9 > UDPServer.maxPassSeconds
+            {
+                return
+            }
             var from = sockaddr_storage()
             var fromLen = socklen_t(MemoryLayout<sockaddr_storage>.size)
             let n = withUnsafeMutablePointer(to: &from) { p in

@@ -25,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var server: UDPServer!
     private var sessionSource: SystemSessionSource!
     private var hotKeyRef: EventHotKeyRef?
+    private let badge = InjectingBadge()
     private var stateItem: NSMenuItem!
     private var toggleItem: NSMenuItem!
     private var grantItem: NSMenuItem!
@@ -60,7 +61,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         runtime.onSessionStart = { [weak self] device in DispatchQueue.main.async { self?.notifySessionStart(device) } }
 
         buildMenu()
-        registerKillHotKey()
+        if let problem = registerKillHotKey() {
+            // No hotkey means no stop that survives a hidden menu bar icon: refuse to switch on.
+            runtime.cannotEnableReason = problem
+            log.error("\(problem, privacy: .public)")
+        }
         observeSystem()
         server = UDPServer(runtime: runtime)
         do { try server.start() } catch {
@@ -109,7 +114,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let name = s.injecting ? "cursorarrow.click.2" : "cursorarrow"
         statusItem.button?.image = NSImage(systemSymbolName: name, accessibilityDescription: "OSS Mouse Helper")
         statusItem.button?.alphaValue = s.allowRawMouse ? 1.0 : 0.5
-        if let device = s.device {
+        badge.update(text: s.badgeText)
+        if let why = runtime.cannotEnableReason {
+            toggleItem.isEnabled = false
+            stateItem.title = "Cannot switch on: " + why
+        } else if let device = s.device {
             let why = s.lastDeny.map { " (\(Self.describe($0)))" } ?? ""
             stateItem.title = s.injecting ? "Raw mouse active: \(device)" : "Connected: \(device)\(why)"
         } else {
@@ -132,10 +141,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggle() {
         let on = !state.allowRawMouse
-        runtime.queue.async { self.runtime.setAllowRawMouse(on) }
+        runtime.queue.async { self.runtime.setAllowRawMouse(on) }  // refused while cannotEnableReason is set
     }
 
-    @objc private func stopNow() { runtime.queue.async { self.runtime.killSwitch() } }
+    /// Released on this thread at once; the runtime queue only ends the session afterwards.
+    @objc private func stopNow() { runtime.emergencyStop(.kill) }
 
     @objc private func requestAccess() {
         // The only place a permission is requested, and only on the owner's click.
@@ -143,28 +153,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func quit() {
-        runtime.queue.sync { self.runtime.killSwitch() }
+        // Buttons are up and posting is off before this returns; the wait is
+        // bounded so a busy queue cannot keep the app from quitting.
+        runtime.emergencyStop(.kill, wait: 0.5)
         server.stop()
         NSApp.terminate(nil)
     }
 
     // MARK: kill switch hotkey (Carbon, needs no grant): Control-Option-Command-Escape
 
-    private func registerKillHotKey() {
+    /// Registers the hotkey. Returns nil on success, otherwise the reason it failed
+    /// (another app owns the shortcut, or the handler could not be installed).
+    private func registerKillHotKey() -> String? {
         var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
         let me = Unmanaged.passUnretained(self).toOpaque()
-        InstallEventHandler(
+        let installed = InstallEventHandler(
             GetApplicationEventTarget(),
             { _, _, user in
                 guard let user else { return noErr }
                 let app = Unmanaged<AppDelegate>.fromOpaque(user).takeUnretainedValue()
-                app.runtime.queue.async { app.runtime.killSwitch() }
+                app.runtime.emergencyStop(.kill)  // on this thread, not through the runtime queue
                 return noErr
             }, 1, &spec, me, nil)
+        guard installed == noErr else {
+            return "the kill hotkey handler could not be installed (error \(installed))"
+        }
         let id = EventHotKeyID(signature: OSType(0x4F53_5348), id: 1)  // 'OSSH'
-        RegisterEventHotKey(
+        let registered = RegisterEventHotKey(
             UInt32(kVK_Escape), UInt32(controlKey | optionKey | cmdKey), id, GetApplicationEventTarget(), 0,
             &hotKeyRef)
+        guard registered == noErr, hotKeyRef != nil else {
+            return "Control-Option-Command-Escape could not be registered (error \(registered)); another app may use it"
+        }
+        return nil
     }
 
     // MARK: system notifications -> stuck-button protection
@@ -174,7 +195,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         dist.addObserver(forName: .init("com.apple.screenIsLocked"), object: nil, queue: nil) { [weak self] _ in
             guard let self else { return }
             self.sessionSource.noteLockNotification()
-            self.runtime.queue.async { self.runtime.environmentInterruption(.locked) }
+            self.runtime.emergencyStop(.lock)
         }
         dist.addObserver(forName: .init("com.apple.screenIsUnlocked"), object: nil, queue: nil) { [weak self] _ in
             guard let self else { return }
@@ -184,12 +205,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let center = NSWorkspace.shared.notificationCenter
         center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: nil) { [weak self] _ in
             guard let self else { return }
-            self.runtime.queue.sync { self.runtime.willSleep() }
+            self.runtime.emergencyStop(.sleep, wait: 1.0)  // bounded: sleep never waits on a stuck queue
         }
         center.addObserver(forName: NSWorkspace.sessionDidResignActiveNotification, object: nil, queue: nil) {
             [weak self] _ in
             guard let self else { return }
-            self.runtime.queue.async { self.runtime.environmentInterruption(.environment) }
+            self.runtime.emergencyStop(.sessionLost)
         }
         center.addObserver(forName: NSWorkspace.sessionDidBecomeActiveNotification, object: nil, queue: nil) {
             [weak self] _ in
