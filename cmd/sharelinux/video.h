@@ -103,8 +103,13 @@ double oss_frame_luma_mean(const OssFrame *frame);
 // goes to GTK as a DMA-BUF when the display can import it; otherwise (or
 // when that fails) the picture is read back into a memory texture. The frame
 // stays valid: the texture holds its own reference to a GPU surface. output
-// says which way it went.
-GdkTexture *oss_frame_texture(const OssFrame *frame, GdkDisplay *display, gboolean dmabuf, OssOutput *output);
+// says which way it went. dmabuf_failures counts the imports that should have
+// worked and did not, for whoever owns it (one session's screen): after a few the
+// DMA-BUF path is not tried until oss_dmabuf_failures_reset.
+GdkTexture *oss_frame_texture(const OssFrame *frame, GdkDisplay *display, gboolean dmabuf, gint *dmabuf_failures, OssOutput *output);
+
+// oss_dmabuf_failures_reset lets the DMA-BUF path be tried again.
+void oss_dmabuf_failures_reset(gint *dmabuf_failures);
 
 // oss_dmabuf_nv12_supported says whether the display imports NV12 DMA-BUFs at all.
 gboolean oss_dmabuf_nv12_supported(GdkDisplay *display);
@@ -136,6 +141,23 @@ gboolean oss_hardware_failure_is_fatal(int av_error, int *failures);
 // oss_video_test_break_dmabuf makes every DMA-BUF import fail at the builder, for tests of the
 // failure path.
 void oss_video_test_break_dmabuf(gboolean broken);
+
+// oss_video_test_fail_decoders makes every decoder whose kind is in the bit mask (1 << OssDecoderKind)
+// answer OSS_ERR_FATAL, for tests of a decoder failing in the middle of a stream.
+void oss_video_test_fail_decoders(int kinds);
+
+// oss_video_test_eagain makes the next sends of a packet answer "full" without taking it.
+void oss_video_test_eagain(int sends);
+
+// oss_video_test_force_swscale makes software pictures go through swscale even where GTK takes planar YUV.
+void oss_video_test_force_swscale(gboolean forced);
+
+// oss_frame_test_texture: see video.c.
+gboolean oss_frame_test_texture(OssFrame *frame, int crop_left, int crop_top, int x, int y, OssColor expect, guint8 pixel[4],
+                                gboolean *matches);
+
+// oss_rgb_color_state is the state of the RGB converted from a stream's YUV.
+GdkColorState *oss_rgb_color_state(OssColor color);
 
 // oss_color_state builds the GdkColorState for a stream. Values GTK cannot use
 // become BT.709 limited range.

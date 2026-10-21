@@ -338,8 +338,30 @@ static int drain(OssVideoDecoder *decoder) {
 	}
 }
 
+static gint test_fatal_kinds, test_eagain_sends;
+
+void oss_video_test_fail_decoders(int kinds) {
+	g_atomic_int_set(&test_fatal_kinds, kinds);
+}
+
+void oss_video_test_eagain(int sends) {
+	g_atomic_int_set(&test_eagain_sends, sends);
+}
+
+// avcodec_send_packet, except that a test can make it answer "full" without taking the packet.
+static int send_packet(OssVideoDecoder *decoder) {
+	if (g_atomic_int_get(&test_eagain_sends) > 0) {
+		g_atomic_int_dec_and_test(&test_eagain_sends);
+		return AVERROR(EAGAIN);
+	}
+	return avcodec_send_packet(decoder->context, decoder->packet);
+}
+
 int oss_video_decode(OssVideoDecoder *decoder, const guint8 *data, gsize length, gboolean sync, gint64 age_us) {
 	decoder->stats.units++;
+	if ((g_atomic_int_get(&test_fatal_kinds) & (1 << decoder->kind)) != 0) {
+		return OSS_ERR_FATAL;
+	}
 	if (decoder->want_sync && !sync) {
 		return OSS_ERR_BAD_DATA;
 	}
@@ -376,14 +398,16 @@ int oss_video_decode(OssVideoDecoder *decoder, const guint8 *data, gsize length,
 	decoder->submitted_us = g_get_monotonic_time();
 	decoder->received_us = decoder->submitted_us - MAX(age_us, 0);
 	decoder->unit_bytes = length;
-	int result = avcodec_send_packet(decoder->context, decoder->packet);
-	av_packet_unref(decoder->packet);
+	int result = send_packet(decoder);
 	if (result == AVERROR(EAGAIN)) {
+		// The decoder is full and did not take the packet: take what it has, then send the same
+		// packet again. An emptied packet would tell it the stream ended.
 		result = drain(decoder);
 		if (result == 0) {
-			result = avcodec_send_packet(decoder->context, decoder->packet);
+			result = send_packet(decoder);
 		}
 	}
+	av_packet_unref(decoder->packet);
 	if (result >= 0) {
 		result = drain(decoder);
 	}
@@ -444,6 +468,33 @@ static GdkColorState *build_cicp(int primaries, int transfer, int matrix, gboole
 	GdkColorState *state = gdk_cicp_params_build_color_state(params, &error);
 	g_clear_error(&error);
 	g_object_unref(params);
+	return state;
+}
+
+// oss_rgb_color_state is the state of the RGB a conversion of the stream's YUV gives: the same
+// primaries and transfer, full range, no matrix.
+GdkColorState *oss_rgb_color_state(OssColor color) {
+	int primaries = color.primaries, transfer = color.transfer;
+	if (primaries == 0 || primaries == 2) {
+		primaries = 1;
+	}
+	if (transfer == 0 || transfer == 2) {
+		transfer = 13;
+	}
+	guint key = ((guint)primaries & 0xff) | (((guint)transfer & 0xff) << 8) | (1u << 25);
+	g_mutex_lock(&color_lock);
+	if (color_cache == NULL) {
+		color_cache = g_hash_table_new(g_direct_hash, g_direct_equal);
+	}
+	GdkColorState *state = g_hash_table_lookup(color_cache, GUINT_TO_POINTER(key));
+	if (state == NULL) {
+		state = build_cicp(primaries, transfer, 0, TRUE);
+		if (state == NULL) {
+			state = gdk_color_state_get_srgb();
+		}
+		g_hash_table_insert(color_cache, GUINT_TO_POINTER(key), state);
+	}
+	g_mutex_unlock(&color_lock);
 	return state;
 }
 
@@ -605,12 +656,18 @@ static void plane_copy(guint8 *to, gsize to_stride, const guint8 *from, int from
 	}
 }
 
+static gboolean test_force_swscale;
+
+void oss_video_test_force_swscale(gboolean forced) {
+	test_force_swscale = forced;
+}
+
 // Packs a decoded software picture into one buffer of the layout GTK takes. GTK before 4.20
 // has no planar YUV memory formats, so there everything goes through swscale.
 #if GTK_CHECK_VERSION(4, 20, 0)
 static gboolean pack_planar(const AVFrame *av, int width, int height, Pixels *pixels) {
 	int chroma_w = (width + 1) / 2, chroma_h = (height + 1) / 2;
-	if (width % 2 != 0 || height % 2 != 0) {
+	if (width % 2 != 0 || height % 2 != 0 || test_force_swscale) {
 		return FALSE;
 	}
 	if (av->format == AV_PIX_FMT_YUV420P || av->format == AV_PIX_FMT_YUVJ420P) {
@@ -654,13 +711,26 @@ static gboolean pack_planar(const AVFrame *av, int width, int height, Pixels *pi
 }
 #endif
 
+
 // Anything else is converted to BGRA by swscale.
-static gboolean convert_bgra(const AVFrame *av, int width, int height, OssColor color, Pixels *pixels) {
+static gboolean convert_bgra(const AVFrame *picture, int width, int height, OssColor color, Pixels *pixels) {
+	// The crop of a decoded picture only says what is visible; the planes still start at the coded corner.
+	AVFrame *cropped = av_frame_clone(picture);
+	if (cropped == NULL) {
+		return FALSE;
+	}
+	if (av_frame_apply_cropping(cropped, AV_FRAME_CROP_UNALIGNED) < 0 || cropped->width < width || cropped->height < height) {
+		av_frame_free(&cropped);
+		return FALSE;
+	}
+	const AVFrame *av = cropped;
 	gsize stride = (gsize)width * 4;
-	guint8 *buffer = g_malloc(stride * height);
+	// swscale's vector code may write a few bytes past the last row when the width is not a multiple of its block.
+	guint8 *buffer = g_malloc(stride * height + 64);
 	struct SwsContext *sws = sws_getContext(width, height, av->format, width, height, AV_PIX_FMT_BGRA, SWS_BILINEAR, NULL, NULL, NULL);
 	if (sws == NULL) {
 		g_free(buffer);
+		av_frame_free(&cropped);
 		return FALSE;
 	}
 	int space = color.matrix == 6 || color.matrix == 5 ? SWS_CS_SMPTE170M : SWS_CS_ITU709;
@@ -672,6 +742,7 @@ static gboolean convert_bgra(const AVFrame *av, int width, int height, OssColor 
 	int destination_stride[4] = {(int)stride, 0, 0, 0};
 	sws_scale(sws, source, source_stride, 0, height, destination, destination_stride);
 	sws_freeContext(sws);
+	av_frame_free(&cropped);
 	pixels->bytes = g_bytes_new_take(buffer, stride * height);
 	pixels->format = GDK_MEMORY_B8G8R8X8;
 	pixels->strides[0] = stride;
@@ -698,20 +769,20 @@ static GdkTexture *texture_from_memory(const AVFrame *av, const OssFrameInfo *in
 		gdk_memory_texture_builder_set_stride_for_plane(builder, plane, pixels.strides[plane]);
 	}
 #endif
-	if (pixels.yuv) {
-		gdk_memory_texture_builder_set_color_state(builder, oss_color_state(info->color));
-	}
+	// Planes go to GTK as YUV in the stream's color state. What swscale made is RGB in the same
+	// primaries and transfer, and has to say so, or a wide gamut picture is shown as sRGB.
+	gdk_memory_texture_builder_set_color_state(builder, pixels.yuv ? oss_color_state(info->color) : oss_rgb_color_state(info->color));
 	GdkTexture *texture = gdk_memory_texture_builder_build(builder);
 	g_object_unref(builder);
 	g_bytes_unref(pixels.bytes);
 	return texture;
 }
 
-// Consecutive DMA-BUF failures that should not have happened; after a few the GPU path is not tried again.
-static gint dmabuf_failures;
+// Consecutive DMA-BUF failures that should not have happened; after a few the GPU path is not tried
+// again by whoever owns the counter (a session's screen), until it is reset.
 #define DMABUF_FAILURE_LIMIT 3
 
-GdkTexture *oss_frame_texture(const OssFrame *frame, GdkDisplay *display, gboolean dmabuf, OssOutput *output) {
+GdkTexture *oss_frame_texture(const OssFrame *frame, GdkDisplay *display, gboolean dmabuf, gint *dmabuf_failures, OssOutput *output) {
 	*output = OSS_OUTPUT_NONE;
 	if (!frame->info.hardware) {
 		GdkTexture *texture = texture_from_memory(frame->av, &frame->info);
@@ -720,15 +791,15 @@ GdkTexture *oss_frame_texture(const OssFrame *frame, GdkDisplay *display, gboole
 		}
 		return texture;
 	}
-	if (dmabuf && g_atomic_int_get(&dmabuf_failures) < DMABUF_FAILURE_LIMIT) {
+	if (dmabuf && g_atomic_int_get(dmabuf_failures) < DMABUF_FAILURE_LIMIT) {
 		GdkTexture *texture = NULL;
 		switch (texture_from_surface(frame, display, &texture)) {
 		case DMABUF_OK:
-			g_atomic_int_set(&dmabuf_failures, 0);
+			g_atomic_int_set(dmabuf_failures, 0);
 			*output = OSS_OUTPUT_DMABUF;
 			return texture;
 		case DMABUF_FAILED:
-			g_atomic_int_inc(&dmabuf_failures);
+			g_atomic_int_inc(dmabuf_failures);
 			break;
 		case DMABUF_UNSUPPORTED:
 			break;
@@ -752,4 +823,45 @@ GdkTexture *oss_frame_texture(const OssFrame *frame, GdkDisplay *display, gboole
 		*output = OSS_OUTPUT_COPY;
 	}
 	return texture;
+}
+
+void oss_dmabuf_failures_reset(gint *dmabuf_failures) {
+	g_atomic_int_set(dmabuf_failures, 0);
+}
+
+// ---- for tests -----------------------------------------------------------
+
+// oss_frame_test_texture makes the texture of a software frame as the screen does, as if the
+// picture were cropped at the left and top by (crop_left, crop_top) more than it is, and reads
+// one pixel (B, G, R, A) of it. matches says whether its color state is the one for expect.
+gboolean oss_frame_test_texture(OssFrame *frame, int crop_left, int crop_top, int x, int y, OssColor expect, guint8 pixel[4],
+                                gboolean *matches) {
+	AVFrame *av = frame->av;
+	int old_left = av->crop_left, old_top = av->crop_top;
+	OssFrameInfo old = frame->info;
+	av->crop_left += crop_left;
+	av->crop_top += crop_top;
+	frame->info.width -= crop_left;
+	frame->info.height -= crop_top;
+	gint failures = 0;
+	OssOutput output;
+	GdkTexture *texture = oss_frame_texture(frame, NULL, FALSE, &failures, &output);
+	av->crop_left = old_left;
+	av->crop_top = old_top;
+	gboolean ok = FALSE;
+	if (texture != NULL) {
+		int width = gdk_texture_get_width(texture), height = gdk_texture_get_height(texture);
+		if (x < width && y < height) {
+			gsize stride = (gsize)width * 4;
+			guint8 *data = g_malloc(stride * height);
+			gdk_texture_download(texture, data, stride);
+			memcpy(pixel, data + stride * y + 4 * x, 4);
+			g_free(data);
+			ok = TRUE;
+		}
+		*matches = gdk_color_state_equal(gdk_texture_get_color_state(texture), oss_rgb_color_state(expect));
+		g_object_unref(texture);
+	}
+	frame->info = old;
+	return ok;
 }

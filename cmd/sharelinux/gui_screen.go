@@ -37,6 +37,9 @@ type screenView struct {
 
 	// dmabuf says GPU pictures may go to GTK as DMA-BUFs.
 	dmabuf bool
+	// dmabufFailures counts the DMA-BUF imports that failed in a row; at three this screen reads pictures
+	// back instead, until the next run of the video.
+	dmabufFailures C.gint
 }
 
 func newScreenView() *screenView {
@@ -149,6 +152,10 @@ func gdkRect(x, y int) *gdk.Rectangle {
 // setVideo shows the Mac's video (true) or the picture tiles. Turning it off
 // keeps the last video picture until the tiles change.
 func (s *screenView) setVideo(on bool) {
+	if on {
+		// A new run of the video may be luckier with DMA-BUFs than the one that gave up on them.
+		C.oss_dmabuf_failures_reset(&s.dmabufFailures)
+	}
 	C.oss_screen_set_video(s.c, boolToC(on))
 }
 
@@ -197,7 +204,7 @@ func (s *screenView) setOffload(on bool) {
 func (s *screenView) present(frame *videoFrame) outputKind {
 	defer frame.free()
 	var output C.OssOutput
-	texture := C.oss_frame_texture(frame.c, C.gdk_display_get_default(), boolToC(s.dmabuf), &output)
+	texture := C.oss_frame_texture(frame.c, C.gdk_display_get_default(), boolToC(s.dmabuf), &s.dmabufFailures, &output)
 	if texture == nil {
 		return outputNone
 	}

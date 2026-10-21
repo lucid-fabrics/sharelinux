@@ -75,6 +75,43 @@ func breakDMABufForTest(broken bool) {
 	C.oss_video_test_break_dmabuf(boolToC(broken))
 }
 
+// failDecodersForTest makes the decoders of these kinds answer "unusable" to every unit, so a test can
+// break a decoder in the middle of a stream. Call it with no kinds to mend them.
+func failDecodersForTest(kinds ...decoderKind) {
+	mask := 0
+	for _, kind := range kinds {
+		if kind == decoderVAAPI {
+			mask |= 1 << C.OSS_DECODER_VAAPI
+		} else {
+			mask |= 1 << C.OSS_DECODER_SOFTWARE
+		}
+	}
+	C.oss_video_test_fail_decoders(C.int(mask))
+}
+
+// fullAnswersForTest makes the next sends of a packet to libavcodec answer "full" without taking it.
+func fullAnswersForTest(sends int) {
+	C.oss_video_test_eagain(C.int(sends))
+}
+
+// forceSwscaleForTest sends software pictures through swscale even where GTK takes planar YUV.
+func forceSwscaleForTest(forced bool) {
+	C.oss_video_test_force_swscale(boolToC(forced))
+}
+
+// textureForTest makes the picture's texture as the screen does, cropped cropLeft and cropTop more
+// at the left and top, and returns its pixel (b, g, r, a) at x, y and whether its color state is the
+// one for RGB made from expect.
+func (f *videoFrame) textureForTest(cropLeft, cropTop, x, y int, expect media.Color) (pixel [4]byte, matches, ok bool) {
+	color := C.OssColor{
+		primaries: C.int(expect.Primaries), transfer: C.int(expect.Transfer), matrix: C.int(expect.Matrix),
+		full_range: boolToC(expect.FullRange), bit_depth: C.int(expect.BitDepth), chroma_format: C.int(expect.ChromaFormat),
+	}
+	var match C.gboolean
+	ok = C.oss_frame_test_texture(f.c, C.int(cropLeft), C.int(cropTop), C.int(x), C.int(y), color, (*C.guint8)(unsafe.Pointer(&pixel[0])), &match) != 0
+	return pixel, match != 0, ok
+}
+
 // decodeResult is what feeding a unit to the decoder came to.
 type decodeResult int
 
@@ -148,7 +185,7 @@ func boolToC(value bool) C.gboolean {
 
 // decode feeds one access unit. It returns how many pictures are ready.
 func (d *decoder) decode(data []byte, sync bool, age time.Duration) (int, decodeResult) {
-	if len(data) == 0 {
+	if len(data) == 0 || d.c == nil {
 		return 0, decodeBadData
 	}
 	n := int(C.oss_video_decode(d.c, (*C.guint8)(unsafe.Pointer(&data[0])), C.gsize(len(data)), boolToC(sync), C.gint64(age.Microseconds())))
@@ -163,6 +200,9 @@ func (d *decoder) decode(data []byte, sync bool, age time.Duration) (int, decode
 
 // next takes the next decoded picture.
 func (d *decoder) next() *videoFrame {
+	if d.c == nil {
+		return nil
+	}
 	c := C.oss_video_next(d.c)
 	if c == nil {
 		return nil
@@ -181,11 +221,17 @@ func (d *decoder) next() *videoFrame {
 
 // flush drops the pictures in flight; the next unit has to be a keyframe.
 func (d *decoder) flush() {
+	if d.c == nil {
+		return
+	}
 	C.oss_video_flush(d.c)
 }
 
 func (d *decoder) stats() (units, frames, errors uint64, total time.Duration, last, max time.Duration) {
 	var stats C.OssVideoStats
+	if d.c == nil {
+		return 0, 0, 0, 0, 0, 0
+	}
 	C.oss_video_stats(d.c, &stats)
 	return uint64(stats.units), uint64(stats.frames), uint64(stats.errors), time.Duration(stats.decode_us_total) * time.Microsecond,
 		time.Duration(stats.decode_us_last) * time.Microsecond, time.Duration(stats.decode_us_max) * time.Microsecond
@@ -435,10 +481,12 @@ func (s *videoStream) decodeUnit(item videoItem) {
 		s.access.Unlock()
 		s.event(videoEvent{Kind: videoDecoderChanged, Text: dec.kind.String() + " decoding failed"})
 		if format != nil {
+			// reopen closes dec: nothing below may touch it. The next decoder starts at a keyframe.
 			s.reopen(format)
 			s.queue.waitForSync()
 			s.askKeyframe()
 		}
+		return
 	}
 	for ; frames > 0; frames-- {
 		frame := dec.next()
