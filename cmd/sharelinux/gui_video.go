@@ -8,6 +8,7 @@ import (
 	"time"
 
 	coreglib "github.com/diamondburned/gotk4/pkg/core/glib"
+	"github.com/diamondburned/gotk4/pkg/glib/v2"
 )
 
 const (
@@ -131,6 +132,9 @@ func (v *sessionView) startVideo() {
 	info := v.client.Info()
 	caps := app.videoCapabilities()
 	plan := planVideo(app.videoMode(), caps, serverHasVideo(&info))
+	if v.hdr {
+		plan = plan.withHDR(app.videoMode(), caps)
+	}
 	if !plan.enabled() {
 		app.logger.Info("video", "plan", "tiles", "reason", plan.Reason)
 		vid.gaveUp = true
@@ -155,13 +159,49 @@ func (v *sessionView) startVideo() {
 	vid.stream = stream
 	vid.changes = 0
 	vid.heard = heardWatch{}
-	app.logger.Info("video", "plan", "stream", "codec", codecName(plan.Codec), "decoders", decoderNames(plan.Kinds), "device", caps.Device, "driver", caps.Driver)
+	app.logger.Info("video", "plan", "stream", "codec", codecName(plan.Codec), "decoders", decoderNames(plan.Kinds), "device", caps.Device, "driver", caps.Driver,
+		"hdr", plan.HDR, "hdr-decoders", decoderNames(plan.HDRKinds))
 	vid.do(func() {
 		err := client.StartMediaStream(plan.Offer, stream)
 		if err != nil {
 			stream.event(videoEvent{Kind: videoFailed, Text: err.Error()})
 		}
 	})
+}
+
+// toggleHDR switches HDR video for this session. Turning it on needs a desktop that can show it. The
+// virtual display's HDR flag follows, and a running stream starts over, because what the Mac sends is
+// decided in the offer.
+func (v *sessionView) toggleHDR() {
+	app := v.g.app
+	if !v.hdr && !app.hdrEffective(true) {
+		v.notify("HDR is not available here: " + app.hdrOffReason())
+		return
+	}
+	v.hdr = !v.hdr
+	v.hdrAction.SetState(glib.NewVariantBoolean(v.hdr))
+	message := map[bool]string{true: "HDR on", false: "HDR off"}[v.hdr]
+	vid := &v.vid
+	client, hdr := v.client, v.hdr
+	if vid.stream == nil && !vid.on {
+		// The next stream is planned with the new state.
+		v.report(message, client.SetHDR(hdr))
+		return
+	}
+	v.leaveVideo()
+	v.closeVideo()
+	if vid.retry != 0 {
+		coreglib.SourceRemove(vid.retry)
+		vid.retry = 0
+	}
+	vid.gaveUp = false
+	vid.askedAt = time.Time{}
+	vid.do(func() {
+		_ = client.StopMediaStream()
+		err := client.SetHDR(hdr)
+		onMain(func() { v.report(message, err) })
+	})
+	v.retryVideoAfter(videoSettleVirtual)
 }
 
 func decoderNames(kinds []decoderKind) string {
@@ -220,7 +260,7 @@ func (v *sessionView) pollVideo() {
 	if vid.on && now.Sub(vid.loggedAt) >= videoLogInterval {
 		vid.loggedAt = now
 		stats := v.videoStatistics()
-		v.g.app.logger.Info("video stats", "decoder", videoLabel(stats.Codec, stats.Kind), "output", stats.Output.String(),
+		v.g.app.logger.Info("video stats", "decoder", streamLabel(stats.Codec, stats.Color, stats.Kind), "output", stats.Output.String(),
 			"units", stats.Units, "frames", stats.Frames, "presented", stats.Presented, "dropped", stats.Dropped,
 			"decode_ms", float64(stats.DecodeAvg.Microseconds())/1000, "decode_max_ms", float64(stats.DecodeMax.Microseconds())/1000,
 			"age_ms", float64(stats.AgeAvg.Microseconds())/1000, "size", fmt.Sprintf("%dx%d", stats.Width, stats.Height),
@@ -238,7 +278,7 @@ func (v *sessionView) handleVideoEvent(stream *videoStream, event videoEvent) {
 		vid.onSince = time.Now()
 		v.screen.setVideo(true)
 		stats := stream.stats()
-		logger.Info("video", "state", "showing", "decoder", videoLabel(stats.Codec, stats.Kind), "output", stats.Output.String())
+		logger.Info("video", "state", "showing", "decoder", streamLabel(stats.Codec, stats.Color, stats.Kind), "output", stats.Output.String())
 	case videoDecoderChanged:
 		logger.Info("video", "state", "decoder changed", "reason", event.Text)
 	case videoFailed:

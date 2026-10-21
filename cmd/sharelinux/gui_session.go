@@ -136,7 +136,7 @@ func (g *gui) startSession(live *liveSession) {
 		h:           live.handler,
 		mode:        live.req.opts.Mode,
 		quality:     live.req.opts.Quality,
-		hdr:         live.req.opts.HDR,
+		hdr:         g.app.hdrEffective(live.req.opts.HDR),
 		keyboard:    newKeyboardLearner(live.req.opts.Keyboard),
 		held:        map[uint32]macKey{},
 		swallow:     map[uint32]bool{},
@@ -1360,10 +1360,7 @@ func (v *sessionView) runCommand(command command) {
 		err := v.client.SetVirtualDisplay(width, height, density, rfb.VirtualDisplayLargestSide, rfb.VirtualDisplayLargestSide)
 		v.report(fmt.Sprintf("Virtual display %d×%d", width, height), err)
 	case commandToggleHDR:
-		v.hdr = !v.hdr
-		v.hdrAction.SetState(glib.NewVariantBoolean(v.hdr))
-		err := v.client.SetHDR(v.hdr)
-		v.report(fmt.Sprint("HDR ", map[bool]string{true: "on", false: "off"}[v.hdr]), err)
+		v.toggleHDR()
 	case commandRefresh:
 		v.report("Refreshing", v.client.RequestRefresh())
 	case commandTypeClipboard:

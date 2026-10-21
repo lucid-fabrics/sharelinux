@@ -206,9 +206,22 @@ func (g *gui) displaysPage(prefs settings, change func(func(*settings))) *adw.Pr
 	}))
 	virtual.Add(sizeRow)
 	virtual.Add(hidpi)
-	virtual.Add(switchRow("HDR", "Show HDR content in its full range", prefs.HDR, func(on bool) {
-		change(func(s *settings) { s.HDR = on })
-	}))
+	virtual.Add(g.hdrRow(prefs, change))
 	page.Add(virtual)
 	return page
+}
+
+// hdrRow is the switch for HDR video. It is off and dimmed, with the reason underneath, where
+// this desktop cannot show HDR.
+func (g *gui) hdrRow(prefs settings, change func(func(*settings))) *adw.SwitchRow {
+	env := g.app.displayHDR()
+	look := hdrRowFor(prefs.HDR, g.app.hdrState(), env)
+	var row *adw.SwitchRow
+	row = switchRow("HDR", look.Subtitle, look.Active, func(on bool) {
+		change(func(s *settings) { s.HDR = on })
+		now := hdrRowFor(on, g.app.hdrState(), env)
+		row.SetSubtitle(now.Subtitle)
+	})
+	row.SetSensitive(look.Sensitive)
+	return row
 }
