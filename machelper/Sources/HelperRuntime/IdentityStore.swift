@@ -90,6 +90,27 @@ public final class IdentityStore {
         try AtomicFile.write(try JSONEncoder().encode(list), to: pairedURL)
     }
 
+    /// The key of the W2 file layout, or nil when there is none. Used once, to
+    /// move it into the Keychain (`KeychainKeyStore.importLegacyFiles`).
+    func legacyKey() throws -> Curve25519.KeyAgreement.PrivateKey? {
+        try prepareDirectory()
+        guard FileManager.default.fileExists(atPath: keyURL.path) else { return nil }
+        try checkPrivateFile(keyURL)
+        return try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: Data(contentsOf: keyURL))
+    }
+
+    /// Overwrites and deletes the old key file once the Keychain holds the key.
+    func removeLegacyKey() {
+        if let h = FileHandle(forWritingAtPath: keyURL.path) {
+            try? h.write(contentsOf: Data(count: 32))
+            try? h.synchronize()
+            try? h.close()
+        }
+        try? FileManager.default.removeItem(at: keyURL)
+    }
+
+    func removeLegacyPaired() { try? FileManager.default.removeItem(at: pairedURL) }
+
     /// The timestamp store and the pairing failure ledger live next to the key.
     public var timestampsURL: URL { dir.appendingPathComponent("handshake-timestamps.json") }
     public var pairingFailuresURL: URL { dir.appendingPathComponent("pairing-failures.json") }
