@@ -31,36 +31,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var grantItem: NSMenuItem!
     private var state = RuntimeState(allowRawMouse: false, device: nil, injecting: false, lastDeny: nil)
     private var notificationsAsked = false
-    // W2 reads the paired list; the pairing flow (W3) fills it. An unreadable
-    // file means nobody is paired.
-    private var paired: [IdentityStore.Paired] = []
+    private var pairing: PairingCoordinator!
+    private var pairingWindow: PairingWindowController!
+    private var pairingUpdates: StateCoalescer<PairingStatus>!
 
     func applicationDidFinishLaunching(_ note: Notification) {
+        // The identity key and the paired devices live in the login Keychain. Files in the
+        // support directory (timestamps, the failure cooldown) hold no secrets; an older
+        // build's key file is moved into the Keychain and deleted.
         let store = IdentityStore(directory: IdentityStore.defaultDirectory())
+        let keys = KeychainKeyStore()
         let key: Curve25519.KeyAgreement.PrivateKey
-        do { key = try store.loadOrCreateKey() } catch {
-            log.error("cannot load the identity key: \(String(describing: error), privacy: .public)")
+        do {
+            try keys.importLegacyFiles(from: store)
+            key = try keys.loadOrCreateIdentity()
+            pairing = try PairingCoordinator(
+                staticKey: key, store: keys,
+                ledger: PairingFailureLedger(store: FilePairingFailureStore(url: store.pairingFailuresURL)))
+        } catch {
+            log.error("cannot open the key store: \(String(describing: error), privacy: .public)")
             NSApp.terminate(nil)
             return
         }
-        paired = (try? store.loadPaired()) ?? []
 
         sessionSource = SystemSessionSource()
         runtime = HelperRuntime(
-            staticKey: key, pairedKeys: { [unowned self] in self.paired.compactMap { Data(hex: $0.key) } },
+            staticKey: key, pairedKeys: { [pairing] in pairing?.pairedKeys ?? [] },
             poster: CGEventPoster(),
             session: sessionSource, sharing: SystemScreenSharingSource(), access: SystemAccessSource(),
             ownUID: getuid(),
             clock: ChannelClock(monotonic: { ProcessInfo.processInfo.systemUptime }, wall: { Date() }),
             timestamps: FileTimestampStore(url: store.timestampsURL),
-            deviceName: { [unowned self] k in
-                self.paired.first { Data(hex: $0.key) == k }?.name ?? HelperRuntime.fingerprintName(k)
-            },
-            doubleClickInterval: { NSEvent.doubleClickInterval })
+            deviceName: { [pairing] k in pairing?.name(for: k) ?? HelperRuntime.fingerprintName(k) },
+            doubleClickInterval: { NSEvent.doubleClickInterval }, pairing: pairing)
         // Coalesced: a peer flipping allowed/denied per packet must not flood the main thread,
         // where the hotkey and "Stop now" run.
         runtime.observeState(on: .main) { [weak self] s in self?.apply(s) }
         runtime.onSessionStart = { [weak self] device in DispatchQueue.main.async { self?.notifySessionStart(device) } }
+
+        pairingWindow = PairingWindowController()
+        pairingWindow.onConfirm = { [unowned self] in runtime.queue.async { self.pairing.confirm() } }
+        pairingWindow.onReject = { [unowned self] in runtime.queue.async { self.pairing.reject() } }
+        pairingWindow.onClose = { [unowned self] in runtime.queue.async { self.pairing.close() } }
+        pairingWindow.onUnlock = { [unowned self] in runtime.queue.async { self.pairing.resetCooldown() } }
+        pairingWindow.onRemove = { [unowned self] d in
+            // Buttons up here, now; the runtime queue then deletes the key and ends the session.
+            _ = runtime.removePairedDevice(d.key)
+        }
+        pairingUpdates = StateCoalescer<PairingStatus>(target: .main, minInterval: 0.05) { [weak self] s in
+            self?.pairingWindow.update(s)
+        }
+        pairing.onChange = { [pairingUpdates] s in pairingUpdates?.push(s) }
+        pairingWindow.update(pairing.status)
 
         buildMenu()
         if let problem = registerKillHotKey() {
@@ -97,8 +119,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             title: "Request Accessibility access...", action: #selector(requestAccess), keyEquivalent: "")
         grantItem.target = self
         menu.addItem(grantItem)
-        let pair = NSMenuItem(title: "Pair new device... (not available yet)", action: nil, keyEquivalent: "")
-        pair.isEnabled = false
+        // The only way to open a pairing window: the owner's click, here.
+        let pair = NSMenuItem(title: "Pair a Linux device...", action: #selector(openPairing), keyEquivalent: "")
+        pair.target = self
         menu.addItem(pair)
         menu.addItem(.separator())
         let quit = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
@@ -148,6 +171,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Released on this thread at once; the runtime queue only ends the session afterwards.
     @objc private func stopNow() { runtime.emergencyStop(.kill) }
+
+    @objc private func openPairing() {
+        pairingWindow.present()
+        runtime.queue.async { self.pairing.open() }
+    }
 
     @objc private func requestAccess() {
         // The only place a permission is requested, and only on the owner's click.

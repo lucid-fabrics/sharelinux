@@ -29,6 +29,7 @@ public struct PairingStatus: Equatable, Sendable {
     public var anotherDeviceTrying = false
     public var notice: Notice?
     public var devices: [PairedDevice] = []
+    public init() {}
 }
 
 /// The Mac side of the pairing flow, without any AppKit: opens the pairing
