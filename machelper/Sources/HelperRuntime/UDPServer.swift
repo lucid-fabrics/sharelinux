@@ -97,10 +97,12 @@ public final class UDPServer {
         return boundPort
     }
 
+    /// Stops reading and the timer. Safe while the queue is busy: it only
+    /// cancels the sources (`fd` is set once in `start` and closed by the read
+    /// source's cancel handler after its last event, so the queue never sees it change).
     public func stop() {
         timer?.cancel(); timer = nil
         readSource?.cancel(); readSource = nil
-        fd = -1
     }
 
     /// Datagrams read per pass. The socket is read on the same serial queue as
