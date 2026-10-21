@@ -221,6 +221,30 @@ final class KillSwitchFloodTests: XCTestCase {
         XCTAssertTrue(runtime.guardedPoster.isStopped, "posting stays off until the queue has ended the session")
     }
 
+    /// Packets that were already queued behind a busy queue when the stop came
+    /// must not post: the switch is still ON (sleep keeps it), the session is
+    /// live and the gate accepts them, so only the poster's own stop flag
+    /// holds them back. Deleting the guard on moves, presses or scrolls fails here.
+    func testPacketsQueuedBeforeAStopDoNotPostWhileTheStopIsPending() {
+        let gate = DispatchSemaphore(value: 0)
+        runtime.queue.async { gate.wait() }
+        let before = poster.count
+        for p in [
+            InputPacket(type: .input, dx: 64, dy: 32),
+            InputPacket(type: .input, buttons: [.left], dx: 16, dy: 0),
+            InputPacket(type: .input, buttons: [.left], sx: 40, sy: 40),
+        ] {
+            let dg = try! client.seal(p.encode(), now: now())
+            runtime.queue.async { _ = self.runtime.handle(datagram: dg, from: Self.source) }
+        }
+        runtime.emergencyStop(.sleep)  // the flag is up before the queued packets run
+        XCTAssertTrue(runtime.allowRawMouse, "sleep keeps the switch: the gate would accept these packets")
+        gate.signal()
+        XCTAssertTrue(waitFor(2) { !self.runtime.guardedPoster.isStopped })
+        XCTAssertEqual(poster.count, before, "no move, press or scroll got through the pending stop")
+        XCTAssertEqual(poster.texts.suffix(from: min(before, poster.texts.count)).filter { $0 != "up" }, [])
+    }
+
     func testSleepAndQuitNeverBlockOnTheQueueAndStillRelease() {
         holdLeft()
         let gate = DispatchSemaphore(value: 0)
