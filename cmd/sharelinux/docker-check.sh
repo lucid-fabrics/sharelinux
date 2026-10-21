@@ -25,3 +25,21 @@ grep -q 'keysym=0x68' /tmp/mock.log || { echo "the key h did not arrive"; cat /t
 grep -q 'buttons=0x1' /tmp/mock.log || { echo "the click did not arrive"; cat /tmp/mock.log; exit 1; }
 kill $viewer 2>/dev/null || true
 echo "ok: logged in, picture shown, input delivered (screenshot in /tmp/session.png)"
+
+# The video stream: a mock Mac that plays a canned HEVC clip, decoded in software here (no GPU).
+# 127.0.0.2 because the viewer's media socket takes the server's port number.
+MOCKAPPLE_PASSWORD=check mockapple -video -listen 127.0.0.2:5991 -user mock >/tmp/mockapple.log 2>&1 &
+sleep 1
+sharelinux -hud -v -video software -password-file /tmp/check.pw mock@127.0.0.2:5991 >/tmp/viewer-video.log 2>&1 &
+viewer=$!
+i=0
+until grep -q 'state=showing' /tmp/viewer-video.log; do
+	i=$((i + 1))
+	[ $i -lt 30 ] || { echo "the video did not show"; cat /tmp/viewer-video.log; cat /tmp/mockapple.log; exit 1; }
+	sleep 1
+done
+sleep 3
+grep -q 'decoder="HEVC (software)"' /tmp/viewer-video.log || { echo "not decoded by libavcodec"; cat /tmp/viewer-video.log; exit 1; }
+import -window root /tmp/video.png
+kill $viewer 2>/dev/null || true
+echo "ok: video stream negotiated, decoded in software and shown (screenshot in /tmp/video.png)"
