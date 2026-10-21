@@ -82,6 +82,21 @@ public final class HelperRuntime {
 
     /// Called on `queue` whenever the visible state changes.
     public var onState: ((RuntimeState) -> Void)?
+    private var stateCoalescer: StateCoalescer<RuntimeState>?
+
+    /// Delivers visible-state changes to `target` (the main queue in the app)
+    /// through a `StateCoalescer`: at most one update pending and at most
+    /// `1 / minInterval` per second, whatever the peer does. Replaces `onState`.
+    @discardableResult
+    public func observeState(
+        on target: DispatchQueue, minInterval: Double = 0.1, _ handler: @escaping (RuntimeState) -> Void
+    ) -> StateCoalescer<RuntimeState> {
+        let c = StateCoalescer<RuntimeState>(target: target, minInterval: minInterval, deliver: handler)
+        stateCoalescer = c
+        onState = { [c] in c.push($0) }
+        return c
+    }
+
     /// Called on `queue` when a session starts (the app posts a notification).
     public var onSessionStart: ((String) -> Void)?
 

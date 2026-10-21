@@ -57,7 +57,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.paired.first { Data(hex: $0.key) == k }?.name ?? HelperRuntime.fingerprintName(k)
             },
             doubleClickInterval: { NSEvent.doubleClickInterval })
-        runtime.onState = { [weak self] s in DispatchQueue.main.async { self?.apply(s) } }
+        // Coalesced: a peer flipping allowed/denied per packet must not flood the main thread,
+        // where the hotkey and "Stop now" run.
+        runtime.observeState(on: .main) { [weak self] s in self?.apply(s) }
         runtime.onSessionStart = { [weak self] device in DispatchQueue.main.async { self?.notifySessionStart(device) } }
 
         buildMenu()
