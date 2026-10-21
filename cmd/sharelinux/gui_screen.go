@@ -3,7 +3,7 @@
 package main
 
 /*
-#cgo pkg-config: gtk4 gtk4-x11 gtk4-wayland wayland-client x11 xfixes xi
+#cgo pkg-config: gtk4 gtk4-x11 gtk4-wayland wayland-client x11 xfixes xi epoxy
 #cgo LDFLAGS: -lm
 #include "screen.h"
 #include "x11.h"
@@ -14,6 +14,7 @@ import (
 	"image"
 	"os"
 	"strconv"
+	"time"
 	"unsafe"
 
 	coreglib "github.com/diamondburned/gotk4/pkg/core/glib"
@@ -33,6 +34,9 @@ type screenView struct {
 	c *C.GtkWidget
 
 	width, height int
+
+	// dmabuf says GPU pictures may go to GTK as DMA-BUFs.
+	dmabuf bool
 }
 
 func newScreenView() *screenView {
@@ -53,7 +57,7 @@ func newScreenView() *screenView {
 		Buildable:        gtk.Buildable{Object: object},
 		ConstraintTarget: gtk.ConstraintTarget{Object: object},
 	}
-	return &screenView{Widget: widget, c: c}
+	return &screenView{Widget: widget, c: c, dmabuf: false}
 }
 
 // resize starts a new picture of the given size.
@@ -112,9 +116,10 @@ func (s *screenView) frames() uint64 {
 	return uint64(C.oss_screen_frames(s.c))
 }
 
-// clear frees the picture's tiles at once.
+// clear frees the picture's tiles, and the video pictures, at once.
 func (s *screenView) clear() {
 	s.resize(0, 0)
+	C.oss_screen_release_video(s.c)
 }
 
 // tileCount is the number of tiles that hold a picture, for tests.
@@ -139,4 +144,101 @@ func (s *screenView) shortcutsInhibited() bool {
 func gdkRect(x, y int) *gdk.Rectangle {
 	rect := gdk.NewRectangle(x, y, 1, 1)
 	return &rect
+}
+
+// setVideo shows the Mac's video (true) or the picture tiles. Turning it off
+// keeps the last video picture until the tiles change.
+func (s *screenView) setVideo(on bool) {
+	C.oss_screen_set_video(s.c, boolToC(on))
+}
+
+// renderer describes what draws this widget.
+type rendererInfo struct {
+	Name, GL    string
+	Accelerated bool
+}
+
+func (s *screenView) renderer() rendererInfo {
+	var info C.OssRenderer
+	C.oss_screen_renderer(s.c, &info)
+	return rendererInfo{Name: C.GoString(&info.renderer[0]), GL: C.GoString(&info.gl[0]), Accelerated: info.accelerated != 0}
+}
+
+// chooseDMABuf decides whether GPU pictures go to GTK as DMA-BUFs: only when a GPU draws the
+// widget and the display imports NV12 at all. SHARELINUX_DMABUF=1 or 0 forces the answer. It
+// returns the renderer it looked at.
+func (s *screenView) chooseDMABuf() rendererInfo {
+	info := s.renderer()
+	switch os.Getenv("SHARELINUX_DMABUF") {
+	case "1":
+		s.dmabuf = true
+	case "0":
+		s.dmabuf = false
+	default:
+		s.dmabuf = info.Accelerated && dmabufNV12Supported()
+	}
+	return info
+}
+
+// setDMABuf says whether GPU pictures may go to GTK as DMA-BUFs; it returns the old setting.
+func (s *screenView) setDMABuf(on bool) bool {
+	old := s.dmabuf
+	s.dmabuf = on
+	return old
+}
+
+// setOffload lets the compositor put the video on a plane of its own.
+func (s *screenView) setOffload(on bool) {
+	C.oss_screen_set_offload(s.c, boolToC(on))
+}
+
+// present makes a texture from a decoded picture and hands it to the widget; it
+// can run on any thread. The frame is freed.
+func (s *screenView) present(frame *videoFrame) outputKind {
+	defer frame.free()
+	var output C.OssOutput
+	texture := C.oss_frame_texture(frame.c, C.gdk_display_get_default(), boolToC(s.dmabuf), &output)
+	if texture == nil {
+		return outputNone
+	}
+	present := C.OssPresent{
+		src_x: 0, src_y: 0,
+		src_width: C.int(frame.Width), src_height: C.int(frame.Height),
+		received_us: frame.info.received_us,
+		decoded_us:  frame.info.decoded_us,
+		decode_us:   frame.info.decode_us,
+		output:      output,
+	}
+	C.oss_screen_present_video(s.c, texture, &present)
+	switch output {
+	case C.OSS_OUTPUT_DMABUF:
+		return outputDMABuf
+	case C.OSS_OUTPUT_COPY:
+		return outputCopy
+	}
+	return outputMemory
+}
+
+// screenVideo is what the widget knows about the video it draws.
+type screenVideo struct {
+	Active                      bool
+	Queued, Replaced, Presented uint64
+	AgeLast, AgeAverage         time.Duration
+}
+
+// videoCounters reads the widget's video counters.
+func (s *screenView) videoCounters() screenVideo {
+	var stats C.OssScreenVideo
+	C.oss_screen_video_stats(s.c, &stats)
+	result := screenVideo{
+		Active:    stats.active != 0,
+		Queued:    uint64(stats.queued),
+		Replaced:  uint64(stats.replaced),
+		Presented: uint64(stats.presented),
+		AgeLast:   time.Duration(stats.age_last_us) * time.Microsecond,
+	}
+	if stats.presented > 0 {
+		result.AgeAverage = time.Duration(stats.age_total_us/C.gint64(stats.presented)) * time.Microsecond
+	}
+	return result
 }

@@ -6,6 +6,8 @@
 #include <gtk/gtk.h>
 #include <math.h>
 
+#include "video.h"
+
 // OssScreen draws the Mac's framebuffer. The picture is cut into tiles, each a
 // GdkTexture, so a small change replaces one small texture and GSK repaints only
 // that part of the window.
@@ -43,6 +45,56 @@ guint64 oss_screen_frames(GtkWidget *screen);
 
 // oss_screen_tile_count is the number of tiles with a texture, for tests and measurements.
 int oss_screen_tile_count(GtkWidget *screen);
+
+// OssPresent says what a video texture shows and where it came from.
+typedef struct {
+	int src_x, src_y, src_width, src_height; // the visible part of the texture
+	gint64 received_us;                      // g_get_monotonic_time of the unit's first packet
+	gint64 decoded_us;
+	int decode_us;
+	OssOutput output;
+} OssPresent;
+
+// oss_screen_set_video chooses what the widget shows: the Mac's video (TRUE) or the
+// framebuffer tiles. Turning it off keeps the last video picture on screen until the
+// tiles change, so the picture does not jump back to an old one. Main thread.
+void oss_screen_set_video(GtkWidget *screen, gboolean on);
+
+// oss_screen_present_video hands over the next video picture. It may be called on any
+// thread, takes the caller's reference to texture, and shows only the latest picture:
+// one that was not drawn before a newer one arrived is dropped.
+void oss_screen_present_video(GtkWidget *screen, GdkTexture *texture, const OssPresent *present);
+
+// OssRenderer says what draws the widget: the GSK renderer, the GL renderer's name when it is
+// GL, and whether it is a GPU. A software renderer (llvmpipe, Cairo) cannot take a DMA-BUF
+// from the GPU decoder, and the display may still list the formats of a GPU it does not use.
+typedef struct {
+	char renderer[48];
+	char gl[128];
+	gboolean accelerated;
+} OssRenderer;
+
+// oss_screen_renderer looks at the renderer of the realized widget. Main thread.
+void oss_screen_renderer(GtkWidget *screen, OssRenderer *out);
+
+// oss_screen_release_video drops the video pictures the widget holds, drawn or waiting, and so the
+// decoder surfaces behind them. Main thread.
+void oss_screen_release_video(GtkWidget *screen);
+
+// oss_screen_set_offload turns on GtkGraphicsOffload for the video.
+void oss_screen_set_offload(GtkWidget *screen, gboolean on);
+
+typedef struct {
+	gboolean active;
+	guint64 queued;    // pictures handed over
+	guint64 replaced;  // pictures dropped before they were drawn
+	guint64 presented; // pictures drawn
+	gint64 age_last_us, age_total_us; // time from the first packet to the picture being drawn
+	OssOutput output;
+	int width, height; // the last picture's size
+} OssScreenVideo;
+
+void oss_screen_video_stats(GtkWidget *screen, OssScreenVideo *stats);
 
 // oss_inhibit_shortcuts asks the system to deliver its shortcuts to the window
 // (on) or takes the request back (off). It returns whether a toplevel was found.
