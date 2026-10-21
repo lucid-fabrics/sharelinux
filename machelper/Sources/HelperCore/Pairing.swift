@@ -23,6 +23,22 @@ public enum PairingError: Error, Equatable {
     /// A new attempt asked for before `ChannelLimits.pairingMinStartSpacing`
     /// passed since the last one started.
     case tooSoon
+    /// This source has used up its attempt starts for the window
+    /// (`ChannelLimits.pairingMaxStartsPerSource`).
+    case sourceExhausted
+    /// Pairing is locked by the cross-window failure cap (`PairingFailureLedger`).
+    case lockedOut
+}
+
+/// What the app should tell the person at the Mac about the window.
+public enum PairingWindowEvent: Equatable, Sendable {
+    /// A datagram from another address arrived while an attempt was in flight
+    /// (or waiting for the person): "another device is trying to pair".
+    case anotherDeviceTrying
+    /// A source asked to start again after its allowed starts were used up.
+    case sourceRefused
+    /// The failure cap closed the window; pairing is locked for a while.
+    case lockedOut
 }
 
 /// Plaintext tags of the pairing messages that follow the XX handshake.
@@ -225,8 +241,10 @@ public final class PairingResponder {
 /// without counting it. Within the attempt only a datagram that authenticates
 /// under the XX transport keys can fail it: a forged or garbled packet is
 /// dropped. A forger who copies the victim's own address can still restart or
-/// stall an attempt that has not reached r_M (limited by the start spacing and
-/// the attempt timeout) but can never charge it.
+/// stall an attempt that has not reached r_M (limited by the start spacing, the
+/// attempt timeout and `pairingMaxStartsPerSource` starts per window) but can
+/// never charge it: once r_M is out, a new message 1 from that source is dropped
+/// until the attempt finishes or times out.
 public final class PairingWindow {
     private let staticKey: Curve25519.KeyAgreement.PrivateKey
     private let clock: () -> Double
@@ -239,17 +257,29 @@ public final class PairingWindow {
     private var charged = false
     private var lastStart: Double?
     private var shut = false
+    private var startsBySource: [PeerAddress?: Int] = [:]
+    private let ledger: PairingFailureLedger?
     public private(set) var failures = 0
+    /// Called for the events above. Throttle on the app side: a hostile host
+    /// can fire it as often as it can send datagrams.
+    public var onEvent: ((PairingWindowEvent) -> Void)?
 
     public init(
         staticKey: Curve25519.KeyAgreement.PrivateKey, clock: @escaping () -> Double,
         nonceSource: @escaping () -> Data = randomPairingNonce,
-        ephemeralSource: @escaping () -> Curve25519.KeyAgreement.PrivateKey = { .init() }
+        ephemeralSource: @escaping () -> Curve25519.KeyAgreement.PrivateKey = { .init() },
+        ledger: PairingFailureLedger? = nil
     ) {
         self.staticKey = staticKey; self.clock = clock; self.nonceSource = nonceSource
         self.ephemeralSource = ephemeralSource
+        self.ledger = ledger
         openedAt = clock()
+        // Locked out by earlier windows: born shut, the app shows the cooldown.
+        if ledger?.isLockedOut == true { shut = true }
     }
+
+    /// Seconds of cooldown left from the cross-window cap, nil when none.
+    public var lockoutRemaining: Double? { ledger?.lockoutRemaining }
 
     public var isOpen: Bool {
         let now = clock()
@@ -268,20 +298,38 @@ public final class PairingWindow {
     /// - Parameter source: where the datagram came from. Pass the real UDP
     ///   source; nil only means "unknown" and is treated as one fixed source.
     public func receive(_ datagram: Data, from source: PeerAddress? = nil) throws -> Data? {
-        guard isOpen else { close(); throw PairingError.closed }
+        guard isOpen else { close(); throw lockedOutOrClosed() }
         retireStaleAttempt()
-        guard isOpen else { throw PairingError.closed }
-        if current?.isComplete == true { throw PairingError.busy }
+        guard isOpen else { throw lockedOutOrClosed() }
+        if current?.isComplete == true {
+            if source != currentSource { onEvent?(.anotherDeviceTrying) }
+            throw PairingError.busy
+        }
         // Another source cannot touch an attempt in flight, not even to count it.
-        if current != nil, source != currentSource { throw PairingError.otherSource }
+        if current != nil, source != currentSource {
+            onEvent?(.anotherDeviceTrying)
+            throw PairingError.otherSource
+        }
         if let (kind, _) = parseDatagram(datagram), kind == .xxMessage1 {
             let now = clock()
+            // Once r_M is out the attempt is charged and the source is fixed: a
+            // new message 1 (forgeable from the victim's own address) must not
+            // end it early and charge the honest device. It ends by finishing
+            // or by the attempt timeout, which has already run above.
+            if current != nil, charged { throw PairingError.unauthenticated }
+            // A source gets a few starts per window, no more: restarting for
+            // free every second would keep an honest device out for the window.
+            if startsBySource[source, default: 0] >= ChannelLimits.pairingMaxStartsPerSource {
+                onEvent?(.sourceRefused)
+                throw PairingError.sourceExhausted
+            }
             if let last = lastStart, now >= last, now - last < ChannelLimits.pairingMinStartSpacing {
                 throw PairingError.tooSoon
             }
             // Starting over abandons the old attempt: free before r_M, a failure after it.
             settleCurrent()
-            guard isOpen else { throw PairingError.closed }
+            guard isOpen else { throw lockedOutOrClosed() }
+            startsBySource[source, default: 0] += 1
             current = try PairingResponder(
                 staticKey: staticKey, clock: clock, nonceSource: nonceSource, ephemeralSource: ephemeralSource)
             currentSource = source
@@ -340,6 +388,14 @@ public final class PairingWindow {
 
     private func fail() {
         failures += 1
-        if failures >= ChannelLimits.pairingMaxFailures { shut = true; current = nil }
+        ledger?.recordFailure()
+        if ledger?.isLockedOut == true { onEvent?(.lockedOut) }
+        if failures >= ChannelLimits.pairingMaxFailures || ledger?.isLockedOut == true {
+            shut = true; current = nil
+        }
+    }
+
+    private func lockedOutOrClosed() -> PairingError {
+        ledger?.isLockedOut == true ? .lockedOut : .closed
     }
 }

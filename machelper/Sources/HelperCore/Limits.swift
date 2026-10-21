@@ -25,6 +25,16 @@ public enum ChannelLimits {
     /// Minimum time between two pairing attempts starting (message 1), so the
     /// window cannot be spun through attempts faster than a person could try.
     public static let pairingMinStartSpacing = 1.0
+    /// Attempt starts (message 1) one source may make per pairing window. A LAN
+    /// host using its own address could otherwise restart for free every
+    /// `pairingMinStartSpacing` and keep an honest device out for the whole
+    /// window. Past the cap that source is refused until the window ends.
+    public static let pairingMaxStartsPerSource = 3
+    /// Failed pairing attempts across windows: this many within
+    /// `pairingFailureHorizon` and pairing is locked until the oldest of them
+    /// is older than the horizon (the owner sees the cooldown).
+    public static let pairingFailureCap = 9
+    public static let pairingFailureHorizon = 24.0 * 3600
     /// An attempt that has not finished within this long is dropped. Charged
     /// attempts (r_M sent) count as a failure when it fires.
     public static let pairingAttemptTimeout = 20.0
