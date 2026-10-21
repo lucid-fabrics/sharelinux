@@ -90,18 +90,21 @@ func (r reachability) String() string {
 	return ""
 }
 
-// exclusiveTooltip says what Exclusive mode really does on this display server.
-// GTK 4 cannot hold the pointer on Wayland, and the button must not promise it.
-func exclusiveTooltip(confinesPointer bool) string {
-	if confinesPointer {
+// exclusiveTooltip says what Exclusive mode really does on this display server,
+// so the button never promises a lock the server would not give.
+func exclusiveTooltip(backend lockBackend) string {
+	switch {
+	case backend.relative():
+		return "Sends every key, Super and Alt+Tab included, to the Mac and locks the pointer to this window so it can move past the edge. Ctrl+Alt+Esc releases it"
+	case backend.holds():
 		return "Sends every key, Super and Alt+Tab included, to the Mac and keeps the pointer inside this window"
 	}
 	return "Captures the keyboard only: Super and Alt+Tab go to the Mac. This display server does not let an app hold the pointer, so it can still leave the window"
 }
 
 // exclusiveAnnouncement is the toast shown when Exclusive mode starts.
-func exclusiveAnnouncement(confinesPointer bool) string {
-	if confinesPointer {
+func exclusiveAnnouncement(backend lockBackend) string {
+	if backend.holds() {
 		return "Mode: exclusive"
 	}
 	return "Mode: exclusive (keyboard only, the pointer can leave the window)"

@@ -67,21 +67,34 @@ func TestTileColorIsStable(t *testing.T) {
 	}
 }
 
-func TestExclusiveTooltipIsHonestOnWayland(t *testing.T) {
-	x11, wayland := exclusiveTooltip(true), exclusiveTooltip(false)
-	if !strings.Contains(x11, "keeps the pointer inside") {
-		t.Fatalf("X11 holds the pointer: %q", x11)
+func TestExclusiveTooltipIsHonestWhereThePointerIsNotHeld(t *testing.T) {
+	none := exclusiveTooltip(lockNone)
+	if !strings.Contains(none, "Captures the keyboard only") {
+		t.Fatalf("without a lock only the keyboard is captured: %q", none)
 	}
-	if !strings.Contains(wayland, "Captures the keyboard only") {
-		t.Fatalf("Wayland captures the keyboard only: %q", wayland)
+	if strings.Contains(none, "keeps the pointer") || strings.Contains(none, "locks the pointer") {
+		t.Fatalf("must not promise what it cannot do: %q", none)
 	}
-	if strings.Contains(wayland, "keeps the pointer") {
-		t.Fatalf("Wayland must not promise what it cannot do: %q", wayland)
+	if !strings.Contains(exclusiveAnnouncement(lockNone), "keyboard only") {
+		t.Fatal(exclusiveAnnouncement(lockNone))
 	}
-	if exclusiveAnnouncement(true) == exclusiveAnnouncement(false) {
-		t.Fatal("the toast tells the two apart")
+}
+
+func TestExclusiveTooltipDropsTheKeyboardOnlyWordingWhereTheLockWorks(t *testing.T) {
+	for _, backend := range []lockBackend{lockConfine, lockX11, lockWayland} {
+		if strings.Contains(exclusiveTooltip(backend), "keyboard only") || strings.Contains(exclusiveTooltip(backend), "Captures the keyboard") {
+			t.Errorf("backend %d: %q", backend, exclusiveTooltip(backend))
+		}
+		if strings.Contains(exclusiveAnnouncement(backend), "keyboard only") {
+			t.Errorf("backend %d: %q", backend, exclusiveAnnouncement(backend))
+		}
 	}
-	if !strings.Contains(exclusiveAnnouncement(false), "keyboard only") {
-		t.Fatal(exclusiveAnnouncement(false))
+	if !strings.Contains(exclusiveTooltip(lockConfine), "keeps the pointer inside") {
+		t.Fatal("barriers keep the pointer inside the window")
+	}
+	for _, backend := range []lockBackend{lockX11, lockWayland} {
+		if !strings.Contains(exclusiveTooltip(backend), "locks the pointer") {
+			t.Fatalf("backend %d: %q", backend, exclusiveTooltip(backend))
+		}
 	}
 }

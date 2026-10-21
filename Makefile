@@ -99,3 +99,17 @@ install-linux:
 	install -Dm644 cmd/sharelinux/data/io.github.sharelinux.ScreenSharing.metainfo.xml $(PREFIX)/share/metainfo/io.github.sharelinux.ScreenSharing.metainfo.xml
 	-gtk-update-icon-cache -f -t $(PREFIX)/share/icons/hicolor
 	-update-desktop-database $(PREFIX)/share/applications
+
+# The Wayland pointer protocols sharelinux binds by hand, as C glue. cgo cannot run the
+# scanner, so the output is checked in. Needs wayland-scanner and wayland-protocols.
+WAYLAND_PROTOCOLS ?= /usr/share/wayland-protocols
+.PHONY: wayland-protocols
+wayland-protocols:
+	for path in unstable/pointer-constraints/pointer-constraints-unstable-v1 unstable/relative-pointer/relative-pointer-unstable-v1; do \
+		name=$$(basename $$path); \
+		for kind in client-header private-code; do \
+			case $$kind in client-header) out=cmd/sharelinux/$$name-client-protocol.h ;; *) out=cmd/sharelinux/$$name-protocol.c ;; esac; \
+			wayland-scanner $$kind $(WAYLAND_PROTOCOLS)/$$path.xml $$out.tmp; \
+			{ printf '//go:build linux\n\n'; cat $$out.tmp; } > $$out; rm $$out.tmp; \
+		done; \
+	done

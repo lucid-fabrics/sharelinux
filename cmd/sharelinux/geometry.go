@@ -73,10 +73,13 @@ func clampFloat(value, low, high float64) float64 {
 // arrives, so the position is kept here in framebuffer pixels.
 type relativePointer struct {
 	X, Y float64
+	// flight holds the positions sent to the Mac whose echo has not come back.
+	flight []sentPoint
 }
 
 func (p *relativePointer) set(x, y int) {
 	p.X, p.Y = float64(x), float64(y)
+	p.flight = p.flight[:0]
 }
 
 // move applies a motion in window pixels and keeps the pointer on the screen.

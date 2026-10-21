@@ -25,6 +25,8 @@ type handler struct {
 	cursor       *rfb.Cursor
 	cursorNew    bool
 	cursorX      int
+	cursorSeen   uint64
+	cursorTaken  uint64
 	cursorY      int
 	layout       *rfb.DisplayLayout
 	layoutNew    bool
@@ -98,6 +100,7 @@ func (h *handler) CursorChanged(cursor *rfb.Cursor) {
 func (h *handler) CursorMoved(x, y int) {
 	h.access.Lock()
 	h.cursorX, h.cursorY = x, y
+	h.cursorSeen++
 	h.access.Unlock()
 }
 
@@ -107,6 +110,16 @@ func (h *handler) takeCursor() (*rfb.Cursor, bool) {
 	changed := h.cursorNew
 	h.cursorNew = false
 	return h.cursor, changed
+}
+
+// takeCursorMove returns the Mac's cursor position when it has reported one
+// since the last call.
+func (h *handler) takeCursorMove() (int, int, bool) {
+	h.access.Lock()
+	defer h.access.Unlock()
+	changed := h.cursorSeen != h.cursorTaken
+	h.cursorTaken = h.cursorSeen
+	return h.cursorX, h.cursorY, changed
 }
 
 func (h *handler) remoteCursor() (int, int) {

@@ -3,7 +3,7 @@
 package main
 
 /*
-#cgo pkg-config: gtk4 gtk4-x11 x11 xfixes
+#cgo pkg-config: gtk4 gtk4-x11 gtk4-wayland wayland-client x11 xfixes xi
 #cgo LDFLAGS: -lm
 #include "screen.h"
 #include "x11.h"
@@ -134,22 +134,6 @@ func (s *screenView) inhibitShortcuts(on bool) bool {
 // shortcutsInhibited reports whether the window currently owns the system's shortcuts.
 func (s *screenView) shortcutsInhibited() bool {
 	return C.oss_shortcuts_inhibited(s.c) != 0
-}
-
-// confinePointer keeps the pointer inside the window on X11, where GDK has no
-// pointer grab. It reports whether it could; Wayland has nothing to offer here.
-func (s *screenView) confinePointer(on bool) bool {
-	value := C.gboolean(0)
-	if on {
-		value = 1
-	}
-	return C.oss_x11_confine(s.c, value) != 0
-}
-
-// pointerConfinable reports whether this display server lets the app hold the
-// pointer inside its window. Wayland does not, and the Exclusive mode says so.
-func pointerConfinable() bool {
-	return C.oss_pointer_confinable() != 0
 }
 
 func gdkRect(x, y int) *gdk.Rectangle {

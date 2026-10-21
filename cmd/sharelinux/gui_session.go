@@ -85,6 +85,14 @@ type sessionView struct {
 	clicks    clickFilter
 	focused   bool
 
+	// lockBackend is how Exclusive mode holds the pointer here. lockOn is set from
+	// the request until the release; locked once the pointer really is held, and
+	// only then does its relative motion drive the Mac's pointer.
+	lockBackend lockBackend
+	lockOn      bool
+	locked      bool
+	rel         relativePointer
+
 	pointerX, pointerY int
 	pointerInside      bool
 	pointerHeld        bool
@@ -113,17 +121,18 @@ type sessionView struct {
 // startSession shows a connected Mac on its own page.
 func (g *gui) startSession(live *liveSession) {
 	v := &sessionView{
-		g:        g,
-		live:     live,
-		client:   live.client,
-		h:        live.handler,
-		mode:     live.req.opts.Mode,
-		quality:  live.req.opts.Quality,
-		hdr:      live.req.opts.HDR,
-		keyboard: newKeyboardLearner(live.req.opts.Keyboard),
-		held:     map[uint32]macKey{},
-		swallow:  map[uint32]bool{},
-		focused:  true,
+		g:           g,
+		live:        live,
+		client:      live.client,
+		h:           live.handler,
+		mode:        live.req.opts.Mode,
+		quality:     live.req.opts.Quality,
+		hdr:         live.req.opts.HDR,
+		keyboard:    newKeyboardLearner(live.req.opts.Keyboard),
+		held:        map[uint32]macKey{},
+		swallow:     map[uint32]bool{},
+		focused:     true,
+		lockBackend: detectLockBackend(),
 	}
 	v.showStats = live.req.opts.HUD
 	g.session = v
@@ -185,7 +194,7 @@ func (v *sessionView) buildHeader(name string) *adw.HeaderBar {
 			toggle.SetTooltip("This Mac only allows viewing")
 		}
 	}
-	v.modes.ToggleByName("exclusive").SetTooltip(exclusiveTooltip(pointerConfinable()))
+	v.modes.ToggleByName("exclusive").SetTooltip(exclusiveTooltip(v.lockBackend))
 	v.modes.SetActiveName(modeID(allowedMode(v.mode, v.client.Info().Flags)))
 	header.PackStart(v.modes)
 
@@ -468,7 +477,7 @@ func (v *sessionView) end() {
 		v.clip.close()
 	}
 	v.screen.inhibitShortcuts(false)
-	v.screen.confinePointer(false)
+	v.setPointerLock(false)
 	coreglib.SourceRemove(v.pollTimer)
 	live := v.live
 	go func() {
@@ -526,6 +535,10 @@ func (v *sessionView) poll() {
 	if cursor, changed := v.h.takeCursor(); changed {
 		v.screen.setCursor(cursor)
 		v.updateSystemCursor()
+	}
+	if x, y, moved := v.h.takeCursorMove(); moved && v.locked && v.rel.resync(x, y, time.Now()) {
+		// A Mac app warped its cursor: carry on from there, not from where we thought it was.
+		v.pointerX, v.pointerY = x, y
 	}
 	v.placeCursor()
 	if clipboard := v.h.takeClipboard(); clipboard != nil && v.clip != nil {
@@ -788,7 +801,7 @@ func (v *sessionView) applyMode(mode rfb.Mode, announce bool) {
 	v.updateSystemCursor()
 	if announce {
 		if mode == rfb.ModeExclusiveControl {
-			v.notify(exclusiveAnnouncement(pointerConfinable()))
+			v.notify(exclusiveAnnouncement(v.lockBackend))
 		} else {
 			v.notify("Mode: " + mode.String())
 		}
@@ -806,7 +819,90 @@ func (v *sessionView) applyGrabs() {
 	grab := v.focused && v.controlling() && !v.g.app.opts.NoGrab
 	v.screen.inhibitShortcuts(grab)
 	exclusive := v.focused && v.mode == rfb.ModeExclusiveControl && !v.g.app.opts.NoGrab
-	v.screen.confinePointer(exclusive)
+	v.setPointerLock(exclusive)
+}
+
+// setPointerLock holds the pointer in the window (on) or lets it go. Every way
+// out of Exclusive mode, focus loss, unmap and the end of the session come here.
+func (v *sessionView) setPointerLock(on bool) {
+	if on == v.lockOn {
+		if on {
+			v.screen.refreshLock(v.lockBackend)
+		}
+		return
+	}
+	if !on {
+		v.lockOn, v.locked = false, false
+		lockSink.motion, lockSink.state = nil, nil
+		hint, x, y := v.unlockHint()
+		v.g.app.logger.Debug("pointer lock released", "backend", int(v.lockBackend), "hint", hint, "x", x, "y", y, "mac", v.pointerX, v.pointerY)
+		v.screen.unlockPointer(v.lockBackend, hint, x, y)
+		return
+	}
+	if !v.lockBackend.holds() {
+		return
+	}
+	// The running total starts at the Mac's own pointer, so locking moves nothing.
+	x, y := v.h.remoteCursor()
+	if x == 0 && y == 0 {
+		x, y = v.pointerX, v.pointerY
+	}
+	v.rel.set(x, y)
+	v.pointerX, v.pointerY = x, y
+	if v.lockBackend.relative() {
+		lockSink.motion = v.onLockedMotion
+		lockSink.state = v.onLockState
+	}
+	held, requested := v.screen.lockPointer(v.lockBackend)
+	if !requested && !held {
+		lockSink.motion, lockSink.state = nil, nil
+		return
+	}
+	v.lockOn = true
+	v.locked = held
+	v.g.app.logger.Debug("pointer lock requested", "backend", int(v.lockBackend), "held", held)
+}
+
+// unlockHint is where the pointer reappears when the lock ends: over the Mac's
+// cursor, so the local pointer does not jump away from it.
+func (v *sessionView) unlockHint() (bool, float64, float64) {
+	width, height := v.client.FramebufferSize()
+	port := v.viewport()
+	if port.empty() || width <= 0 || height <= 0 {
+		return false, 0, 0
+	}
+	x, y := port.toWindow(float64(v.pointerX), float64(v.pointerY), width, height)
+	return true, float64(x), float64(y)
+}
+
+// onLockState is the compositor's answer to the lock request.
+func (v *sessionView) onLockState(locked bool) {
+	if !v.lockOn || locked == v.locked {
+		return
+	}
+	v.g.app.logger.Debug("pointer lock", "locked", locked)
+	v.locked = locked
+	if locked {
+		v.notify("Pointer locked, Ctrl+Alt+Esc releases it")
+		return
+	}
+	v.notify("Pointer released by the system")
+}
+
+// onLockedMotion adds a motion of the locked pointer to the Mac's pointer. The
+// deltas arrive in window units and are scaled to the Mac's screen, with no edge
+// of the window to stop them; the total stays on the Mac's screen.
+func (v *sessionView) onLockedMotion(dx, dy float64) {
+	if !v.locked || !v.controlling() {
+		return
+	}
+	width, height := v.client.FramebufferSize()
+	x, y := v.rel.move(float32(dx), float32(dy), v.viewport(), width, height)
+	if x == v.pointerX && y == v.pointerY {
+		return
+	}
+	v.rel.sent(x, y, time.Now())
+	v.sendPointer(x, y)
 }
 
 // updateSystemCursor hides the local arrow while the Mac's own cursor is drawn over the picture.
@@ -880,9 +976,17 @@ func (v *sessionView) installInput() {
 		v.im.FocusOut()
 		v.releaseInput()
 		v.screen.inhibitShortcuts(false)
-		v.screen.confinePointer(false)
+		v.setPointerLock(false)
 	})
 	v.screen.AddController(focus)
+	// A window that is hidden or loses the focus never keeps the pointer.
+	v.screen.ConnectUnmap(func() { v.setPointerLock(false) })
+	active := v.g.window.NotifyProperty("is-active", func() {
+		if !v.g.window.IsActive() {
+			v.setPointerLock(false)
+		}
+	})
+	v.outliving.add(v.g.window, active)
 
 	drop := gtk.NewDropTarget(gdk.GTypeFileList, gdk.ActionCopy)
 	drop.ConnectEnter(func(x, y float64) gdk.DragAction { return v.dropHover(x, y) })
@@ -1004,6 +1108,10 @@ func (v *sessionView) onMotion(x, y float64) {
 	if !v.controlling() {
 		return
 	}
+	if v.locked && v.lockBackend.relative() {
+		// The locked pointer moves by deltas; its own position means nothing.
+		return
+	}
 	fx, fy, inside := v.toFramebuffer(x, y)
 	v.pointerInside = inside
 	v.updateSystemCursor()
@@ -1042,7 +1150,7 @@ func (v *sessionView) onButton(gesture *gtk.GestureSingle, x, y float64, down bo
 		fx, fy, inside := v.toFramebuffer(x, y)
 		if v.mode == rfb.ModeExclusiveControl {
 			fx, fy, inside = v.pointerX, v.pointerY, true
-			if px, py, ok := v.toFramebuffer(x, y); ok {
+			if px, py, ok := v.toFramebuffer(x, y); ok && !v.locked {
 				fx, fy = px, py
 			}
 		}
