@@ -127,8 +127,9 @@ func (m discoveredMac) subtitle() string {
 }
 
 // hostKey is a host or address in the one form two spellings of it share: lower
-// case, no trailing dot, no brackets or zone, an IP in its canonical text, and
-// a name without ".local".
+// case, no trailing dot, no brackets or zone, an IP in its canonical text. A
+// name is otherwise kept as written, ".local" included, because a plain DNS
+// name only matches the identical name.
 func hostKey(host string) string {
 	host = strings.ToLower(strings.TrimSpace(host))
 	host = strings.TrimSuffix(host, ".")
