@@ -167,3 +167,29 @@ func TestSentIsBounded(t *testing.T) {
 		t.Fatalf("the oldest go first: %d", p.flight[0].x)
 	}
 }
+
+func TestLockStart(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		reported     bool
+		rx, ry       int
+		newer, sent  bool
+		sx, sy       int
+		wantX, wantY int
+	}{
+		{"nothing known starts in the middle, not the corner", false, 0, 0, false, false, 0, 0, 1000, 500},
+		{"a report with no send is used", true, 300, 200, true, false, 0, 0, 300, 200},
+		{"our last send when the Mac never reported", false, 0, 0, false, true, 40, 50, 40, 50},
+		{"a warp after our last send wins", true, 700, 600, true, true, 40, 50, 700, 600},
+		{"our send after the last report wins", true, 700, 600, false, true, 40, 50, 40, 50},
+		{"a reported origin is a position, not unknown", true, 0, 0, true, false, 0, 0, 0, 0},
+	} {
+		x, y := lockStart(test.reported, test.rx, test.ry, test.newer, test.sent, test.sx, test.sy, 2000, 1000)
+		if x != test.wantX || y != test.wantY {
+			t.Errorf("%s: got %d,%d want %d,%d", test.name, x, y, test.wantX, test.wantY)
+		}
+	}
+	if x, y := lockStart(false, 0, 0, false, false, 0, 0, 0, 0); x != 0 || y != 0 {
+		t.Errorf("an empty picture: %d,%d", x, y)
+	}
+}

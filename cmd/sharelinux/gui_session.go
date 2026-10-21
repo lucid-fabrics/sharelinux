@@ -92,6 +92,10 @@ type sessionView struct {
 	lockOn      bool
 	locked      bool
 	rel         relativePointer
+	// sent is set once a pointer position went to the Mac; sentReports is how many
+	// cursor reports the Mac had made by then.
+	sent        bool
+	sentReports uint64
 
 	pointerX, pointerY int
 	pointerInside      bool
@@ -536,9 +540,13 @@ func (v *sessionView) poll() {
 		v.screen.setCursor(cursor)
 		v.updateSystemCursor()
 	}
-	if x, y, moved := v.h.takeCursorMove(); moved && v.locked && v.rel.resync(x, y, time.Now()) {
-		// A Mac app warped its cursor: carry on from there, not from where we thought it was.
-		v.pointerX, v.pointerY = x, y
+	if x, y, moved := v.h.takeCursorMove(); moved && v.locked {
+		warped := v.rel.resync(x, y, time.Now())
+		v.g.app.logger.Debug("mac cursor", "x", x, "y", y, "warped", warped)
+		if warped {
+			// A Mac app warped its cursor: carry on from there, not from where we thought it was.
+			v.pointerX, v.pointerY = x, y
+		}
 	}
 	v.placeCursor()
 	if clipboard := v.h.takeClipboard(); clipboard != nil && v.clip != nil {
@@ -812,9 +820,9 @@ func (v *sessionView) applyMode(mode rfb.Mode, announce bool) {
 }
 
 // applyGrabs hands the system's shortcuts to the window while controlling, and
-// in exclusive mode also keeps the pointer inside the window where the display
-// server allows it (X11). Wayland has no pointer confinement in GTK 4, so there
-// the pointer can still leave the window; Ctrl+Alt+Esc works either way.
+// in exclusive mode also locks the pointer to it (see setPointerLock). Where the
+// display server has no way to hold the pointer only the shortcuts are taken;
+// Ctrl+Alt+Esc works either way.
 func (v *sessionView) applyGrabs() {
 	grab := v.focused && v.controlling() && !v.g.app.opts.NoGrab
 	v.screen.inhibitShortcuts(grab)
@@ -835,18 +843,19 @@ func (v *sessionView) setPointerLock(on bool) {
 		v.lockOn, v.locked = false, false
 		lockSink.motion, lockSink.state = nil, nil
 		hint, x, y := v.unlockHint()
-		v.g.app.logger.Debug("pointer lock released", "backend", int(v.lockBackend), "hint", hint, "x", x, "y", y, "mac", v.pointerX, v.pointerY)
+		v.g.app.logger.Debug("pointer lock released", "backend", int(v.lockBackend), "hint", hint, "x", x, "y", y, "mac_x", v.pointerX, "mac_y", v.pointerY)
 		v.screen.unlockPointer(v.lockBackend, hint, x, y)
 		return
 	}
 	if !v.lockBackend.holds() {
 		return
 	}
-	// The running total starts at the Mac's own pointer, so locking moves nothing.
-	x, y := v.h.remoteCursor()
-	if x == 0 && y == 0 {
-		x, y = v.pointerX, v.pointerY
-	}
+	// The running total starts where the Mac's pointer is believed to be, so
+	// locking itself moves nothing.
+	reports := v.h.cursorReports()
+	rx, ry := v.h.remoteCursor()
+	width, height := v.client.FramebufferSize()
+	x, y := lockStart(reports > 0, rx, ry, reports > v.sentReports, v.sent, v.pointerX, v.pointerY, width, height)
 	v.rel.set(x, y)
 	v.pointerX, v.pointerY = x, y
 	if v.lockBackend.relative() {
@@ -1097,6 +1106,7 @@ func (v *sessionView) sendPointer(x, y int) {
 		v.pointerHeld = true
 		return
 	}
+	v.sent, v.sentReports = true, v.h.cursorReports()
 	v.live.echo.Sent(time.Now())
 	err := v.client.SendPointer(x, y, v.buttons)
 	if err != nil {

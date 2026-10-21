@@ -119,3 +119,20 @@ func absInt(value int) int {
 	}
 	return value
 }
+
+// lockStart is where the running total begins when the pointer is locked: the
+// Mac's reported cursor when it reported one after our last pointer message,
+// else the last position we sent, else the middle of the picture. The Mac
+// reports its cursor only when something other than us moved it, so on a fresh
+// connection neither is known, and the middle is a guess that the first motion
+// then moves from. Starting at the origin instead would throw the cursor into
+// a corner.
+func lockStart(reported bool, reportedX, reportedY int, reportedNewer bool, sent bool, sentX, sentY int, frameWidth, frameHeight int) (int, int) {
+	switch {
+	case reported && (reportedNewer || !sent):
+		return reportedX, reportedY
+	case sent:
+		return sentX, sentY
+	}
+	return max(frameWidth, 1) / 2, max(frameHeight, 1) / 2
+}

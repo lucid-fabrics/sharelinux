@@ -122,6 +122,13 @@ func (h *handler) takeCursorMove() (int, int, bool) {
 	return h.cursorX, h.cursorY, changed
 }
 
+// cursorReports counts the cursor positions the Mac has reported.
+func (h *handler) cursorReports() uint64 {
+	h.access.Lock()
+	defer h.access.Unlock()
+	return h.cursorSeen
+}
+
 func (h *handler) remoteCursor() (int, int) {
 	h.access.Lock()
 	defer h.access.Unlock()

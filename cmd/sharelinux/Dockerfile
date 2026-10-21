@@ -8,7 +8,7 @@ FROM debian:forky AS build
 COPY --from=golang:1.27 /usr/local/go /usr/local/go
 ENV PATH=/usr/local/go/bin:$PATH
 RUN apt-get update && apt-get install -y --no-install-recommends \
-	ca-certificates git gcc pkg-config libgtk-4-dev libadwaita-1-dev libgirepository1.0-dev libx11-dev libxfixes-dev \
+	ca-certificates git gcc pkg-config libgtk-4-dev libadwaita-1-dev libgirepository1.0-dev libx11-dev libxfixes-dev libxi-dev libwayland-dev \
 	&& rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY go.mod go.sum ./

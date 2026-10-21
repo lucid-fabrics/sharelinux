@@ -64,7 +64,7 @@ You can also switch to the Nightly track in the App settings of the macOS app an
 Build dependencies:
 
 * Go 1.26.8 or newer and a C compiler (the GTK binding uses cgo)
-* GTK **4.14** or newer and libadwaita **1.7** or newer, with their development files, plus `libgirepository1.0-dev` (gotk4 needs it), `libx11-dev`, `libxfixes-dev` and `pkg-config`. Ubuntu 26.04 and Debian 14: `apt install libgtk-4-dev libadwaita-1-dev libgirepository1.0-dev libx11-dev libxfixes-dev`
+* GTK **4.14** or newer and libadwaita **1.7** or newer, with their development files, plus `libgirepository1.0-dev` (gotk4 needs it), `libx11-dev`, `libxfixes-dev`, `libxi-dev`, `libwayland-dev` and `pkg-config`. Ubuntu 26.04 and Debian 14: `apt install libgtk-4-dev libadwaita-1-dev libgirepository1.0-dev libx11-dev libxfixes-dev libxi-dev libwayland-dev`
 * A Secret Service (GNOME Keyring, KWallet) if you want saved passwords; without one connections still save, the password is typed each time
 * Avahi or any mDNS-capable network for the "On this network" list (the viewer browses `_rfb._tcp` itself, it does not need the Avahi daemon)
 
@@ -88,7 +88,7 @@ The sandbox gets the network (the Mac, and the mDNS browse), Wayland and X11, th
 
 #### Using it
 
-Open **Preferences** (Ctrl+comma) for quality, the Command key (Super or Alt), natural scrolling, the clipboard and the download folder. In a session, **Exclusive** mode gives the keyboard (including Super and Alt+Tab) to the Mac and, on X11, keeps the pointer inside the window; press Ctrl+Alt+Esc to get them back. On Wayland GTK 4 cannot confine the pointer, so Exclusive grabs the keyboard shortcuts only. Hold Ctrl+Alt+Shift and press M (view, control, exclusive), H (stats), F (fullscreen), U (quality), D (display), V (virtual display at window size), X (HDR), R (refresh), T (type the local clipboard on the Mac), G (fetch files the Mac is dragging), S (screenshot) or Q (quit). Run `sharelinux -h` for all flags.
+Open **Preferences** (Ctrl+comma) for quality, the Command key (Super or Alt), natural scrolling, the clipboard and the download folder. In a session, **Exclusive** mode gives the keyboard (including Super and Alt+Tab) to the Mac and locks the pointer to the window, so the Mac's pointer keeps moving past the window edge (Wayland compositors with pointer-constraints and relative-pointer, and X11 with XInput 2); press Ctrl+Alt+Esc to get them back. Losing the focus or hiding the window releases the lock too. A compositor without those protocols gets the keyboard shortcuts only, and the button says so. Hold Ctrl+Alt+Shift and press M (view, control, exclusive), H (stats), F (fullscreen), U (quality), D (display), V (virtual display at window size), X (HDR), R (refresh), T (type the local clipboard on the Mac), G (fetch files the Mac is dragging), S (screenshot) or Q (quit). Run `sharelinux -h` for all flags.
 
 `cmd/sharelinux/Dockerfile` builds the viewer on Debian 14 and runs a check under Xvfb; `cmd/sharelinux/internal/mockrfb` is a tiny RFB server (`-size WxH`, `-damage N`) for checking it without a Mac.
 
