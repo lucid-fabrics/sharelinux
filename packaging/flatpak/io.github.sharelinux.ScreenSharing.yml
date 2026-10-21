@@ -15,7 +15,18 @@ finish-args:
   - --share=ipc
   - --socket=wayland
   - --socket=fallback-x11
-  # The picture is drawn by the GPU.
+  # The picture is drawn by the GPU, and the Mac's video is decoded on it (VA-API) and handed
+  # to GTK as a DMA-BUF. The group that owns /dev/dri/renderD128 (render or video) shows up
+  # as nobody inside the sandbox, which is fine: the kernel still checks the real group.
+  #
+  # The HEVC decoder is not in the runtime's libavcodec: it comes from the runtime's
+  # org.freedesktop.Platform.codecs-extra//25.08-extra extension (libavcodec 61 with HEVC), and the
+  # VA-API driver from org.freedesktop.Platform.VAAPI.Intel//25.08 (intel-media-driver, mounted in
+  # /usr/lib/x86_64-linux-gnu/dri/intel-vaapi-driver, found by libva on its own). Both are
+  # extension points of org.gnome.Platform, so nothing is declared here; flatpak installs them with
+  # the app (the Intel one only on a machine with an Intel GPU). Without codecs-extra the viewer
+  # starts and draws picture tiles. The GPU's own Mesa (Vulkan, VA-API for AMD) comes from
+  # org.freedesktop.Platform.GL.default.
   - --device=dri
   # Saved Mac passwords live in the system keyring (Secret Service).
   - --talk-name=org.freedesktop.secrets

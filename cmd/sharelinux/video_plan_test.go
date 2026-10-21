@@ -2,6 +2,7 @@ package main
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -204,6 +205,25 @@ func TestServerHasVideo(t *testing.T) {
 	for _, c := range cases {
 		if got := serverHasVideo(&c.info); got != c.want {
 			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestVideoHint(t *testing.T) {
+	cases := []struct {
+		name string
+		caps videoCaps
+		want string
+	}{
+		{"nothing", videoCaps{}, "org.freedesktop.Platform.codecs-extra"},
+		{"gpu", videoCaps{HEVCVAAPI: true, HEVCSoftware: true, Driver: "Intel iHD driver"}, "Decodes on the GPU: Intel iHD driver"},
+		{"gpu without a driver name", videoCaps{H264VAAPI: true}, "Decodes on the GPU"},
+		{"cpu with a reason", videoCaps{HEVCSoftware: true, Error: "VA-API: No such file"}, "no VA-API decoder here (VA-API: No such file)"},
+		{"cpu", videoCaps{HEVCSoftware: true}, "Decodes on the CPU"},
+	}
+	for _, c := range cases {
+		if got := videoHint(c.caps); !strings.Contains(got, c.want) {
+			t.Errorf("%s: %q lacks %q", c.name, got, c.want)
 		}
 	}
 }

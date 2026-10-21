@@ -120,6 +120,22 @@ func (c videoCaps) any() bool {
 	return c.HEVCVAAPI || c.HEVCSoftware || c.H264VAAPI || c.H264Software
 }
 
+// videoHint is the line under the Video preference that says what this machine can do.
+func videoHint(caps videoCaps) string {
+	switch {
+	case !caps.any():
+		return "No HEVC decoder was found. In the Flatpak it comes with org.freedesktop.Platform.codecs-extra"
+	case caps.HEVCVAAPI || caps.H264VAAPI:
+		if caps.Driver != "" {
+			return "Decodes on the GPU: " + caps.Driver
+		}
+		return "Decodes on the GPU"
+	case caps.Error != "":
+		return "Decodes on the CPU, there is no VA-API decoder here (" + caps.Error + ")"
+	}
+	return "Decodes on the CPU"
+}
+
 // videoPlan is what to ask the Mac for and how to decode what comes back.
 type videoPlan struct {
 	// Reason says why there is no plan, for the log and the preferences.

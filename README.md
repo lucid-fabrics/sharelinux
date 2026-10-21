@@ -64,7 +64,7 @@ You can also switch to the Nightly track in the App settings of the macOS app an
 Build dependencies:
 
 * Go 1.26.8 or newer and a C compiler (the GTK binding uses cgo)
-* GTK **4.14** or newer and libadwaita **1.7** or newer, with their development files, plus `libgirepository1.0-dev` (gotk4 needs it), `libx11-dev`, `libxfixes-dev`, `libxi-dev`, `libwayland-dev` and `pkg-config`. Ubuntu 26.04 and Debian 14: `apt install libgtk-4-dev libadwaita-1-dev libgirepository1.0-dev libx11-dev libxfixes-dev libxi-dev libwayland-dev`
+* GTK **4.14** or newer and libadwaita **1.7** or newer, with their development files, plus `libgirepository1.0-dev` (gotk4 needs it), `libx11-dev`, `libxfixes-dev`, `libxi-dev`, `libwayland-dev`, `libavcodec-dev`, `libswscale-dev`, `libva-dev`, `libepoxy-dev` and `pkg-config`. Ubuntu 26.04 and Debian 14: `apt install libgtk-4-dev libadwaita-1-dev libgirepository1.0-dev libx11-dev libxfixes-dev libxi-dev libwayland-dev libavcodec-dev libswscale-dev libva-dev libepoxy-dev`
 * A Secret Service (GNOME Keyring, KWallet) if you want saved passwords; without one connections still save, the password is typed each time
 * Avahi or any mDNS-capable network for the "On this network" list (the viewer browses `_rfb._tcp` itself, it does not need the Avahi daemon)
 
@@ -84,7 +84,15 @@ flatpak install --user dist/sharelinux.flatpak
 flatpak run io.github.sharelinux.ScreenSharing [user@mac.local]
 ```
 
+HEVC needs the runtime's `org.freedesktop.Platform.codecs-extra//25.08-extra` extension (the runtime's own libavcodec has no HEVC), and VA-API on an Intel GPU needs `org.freedesktop.Platform.VAAPI.Intel//25.08`; flatpak installs both along with the app when they apply. If one is missing, `flatpak install flathub org.freedesktop.Platform.codecs-extra//25.08-extra org.freedesktop.Platform.VAAPI.Intel//25.08`. The preferences say what the viewer found.
+
 The sandbox gets the network (the Mac, and the mDNS browse), Wayland and X11, the GPU, the Secret Service for saved passwords, and the Downloads folder (the default for "Files from the Mac"). Files you send to the Mac come from the file chooser or a drag, and another download folder is picked through the file chooser, so no other folder is opened up. `flatpak info --show-permissions io.github.sharelinux.ScreenSharing` lists them.
+
+#### Video stream
+
+When the Mac offers its media stream (the one the Apple apps call High Performance), the viewer asks for HEVC and decodes it with libavcodec instead of drawing picture tiles: far less CPU and network when the screen moves. It picks the decoder by probing the machine: VA-API on the GPU (Intel with `intel-media-va-driver`, AMD with Mesa's radeonsi), software libavcodec otherwise, and the picture tiles when the Mac has no media stream or this machine cannot decode HEVC. The stats card (Ctrl+Alt+Shift+H) names the decoder (`HEVC (VA-API)`, `HEVC (software)`), how long a picture took to decode, how it reached the screen and how many were dropped.
+
+A GPU picture is exported as a DMA-BUF and wrapped in a `GdkDmabufTexture`, drawn inside a `GtkGraphicsOffload` so a Wayland compositor can scan it out directly. That only happens when a GPU draws the window; under a software renderer (llvmpipe, Cairo) the picture is read back into a memory texture instead, and the stats card says `GPU copy`. The Mac's stream carries one display, so with several displays shown together (the default) the tiles stay in charge; choose one display in the Display menu, or `-display ID`, to use the video. `-video auto|software|off` (or `SHARELINUX_VIDEO`, or Preferences, Video) chooses the decoders. `SHARELINUX_VAAPI_DEVICE=/dev/dri/renderD129` names the VA-API node on a machine with several GPUs, `SHARELINUX_THREADS` sets the software decoder's threads, `SHARELINUX_DMABUF=0|1` forces the read back or the DMA-BUF path, and `SHARELINUX_OFFLOAD=0` turns the offload off. `mockapple -video` (in `cmd/sharelinux/internal/mockapple`) plays a canned HEVC clip as the Mac's stream, to try all of this without a Mac.
 
 #### Using it
 
