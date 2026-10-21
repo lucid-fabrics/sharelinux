@@ -12,3 +12,4 @@ AGENTS.md
 /cmd/sharelinux/sharelinux
 /dist/
 /packaging/flatpak/vendor.tar.xz
+/machelper/.build/
