@@ -299,7 +299,10 @@ extension ChannelTests {
                 timestamps: FileTimestampStore(url: file))
         }
         restart()
-        let c = try initiate()
+        // First run: the new file starts with a floor of "now", so the first
+        // initiation has to be newer than the helper's start.
+        XCTAssertTrue(channel.timestampStoreFirstRun)
+        let c = try initiate(at: env.wall.addingTimeInterval(1))
         XCTAssertNotNil(channel.receive(c.datagram, from: Self.addr).reply)
         let attrs = try FileManager.default.attributesOfItem(atPath: file.path)
         XCTAssertEqual(attrs[.posixPermissions] as? Int, 0o600)
@@ -310,7 +313,7 @@ extension ChannelTests {
         XCTAssertNil(again.reply)
         XCTAssertEqual(again.events, [.dropped(.staleTimestamp)])
         // A genuinely newer initiation is still welcome.
-        let fresh = try initiate(at: env.wall.addingTimeInterval(1))
+        let fresh = try initiate(at: env.wall.addingTimeInterval(2))
         XCTAssertNotNil(channel.receive(fresh.datagram, from: Self.addr).reply)
     }
 

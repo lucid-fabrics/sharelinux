@@ -402,6 +402,7 @@ final class PairingWindowTests: XCTestCase {
         for i in 0..<20 {
             now += ChannelLimits.pairingMinStartSpacing
             XCTAssertThrowsError(try window.receive(Data([DatagramKind.xxMessage3.rawValue]) + Data(count: 64 + i)))
+            if i > 0 { continue }  // a source has only a few starts per window; the stray junk is unlimited
             // Message 1 starts an attempt; starting another one abandons it before any code existed.
             let l = try LinuxPairer(key: PrivKey())
             _ = try window.receive(try l.message1())
@@ -423,7 +424,8 @@ final class PairingWindowTests: XCTestCase {
     func testAbandoningAnAttemptAfterTheNonceIsCharged() throws {
         _ = try toNonce(try LinuxPairer(key: PrivKey()))
         XCTAssertEqual(window.failures, 0, "charged when the attempt ends, not before")
-        now += ChannelLimits.pairingMinStartSpacing
+        // It ends by the timeout (a new message 1 from the same source cannot end it, see below).
+        now += ChannelLimits.pairingAttemptTimeout
         _ = try window.receive(try LinuxPairer(key: PrivKey()).message1())
         XCTAssertEqual(window.failures, 1)
     }
@@ -502,6 +504,8 @@ final class PairingWindowTests: XCTestCase {
             XCTAssertEqual(attacker.code?.count, 6)
             codesSeen += 1
             // The codes differ (the attacker would only go on if they matched): abort and retry.
+            // A new message 1 cannot end a charged attempt early, so he waits out the timeout.
+            now += ChannelLimits.pairingAttemptTimeout
         }
         XCTAssertEqual(codesSeen, ChannelLimits.pairingMaxFailures)
         XCTAssertNotNil(closedAfter, "the window must shut")

@@ -649,7 +649,9 @@ func TestInteropAbortGrindingMITMSeesAtMostThreeCodes(t *testing.T) {
 	codes := 0
 	var stopped string
 	for i := 0; i < 100; i++ {
-		p.command("!advance 1")
+		// A new message 1 cannot end a charged attempt early, so he has to
+		// wait out the attempt timeout (20 s) before each new try.
+		p.command("!advance 21")
 		ini, event := pairToNonce(t, p, mustKey(t))
 		if ini == nil {
 			stopped = event
@@ -662,6 +664,48 @@ func TestInteropAbortGrindingMITMSeesAtMostThreeCodes(t *testing.T) {
 	}
 	if codes != 3 || stopped != "pair-error closed" {
 		t.Fatalf("attacker saw %d codes, stopped with %q; want 3 and closed", codes, stopped)
+	}
+}
+
+// A forged message 1 from the victim's own address after r_M was sent is
+// dropped: it neither ends the attempt nor charges it, and the honest device
+// still finishes (third audit, LOW).
+func TestInteropMessage1AfterTheNonceIsDropped(t *testing.T) {
+	static := mustKey(t)
+	p := startPeer(t)
+	p.command("!pair open")
+	ini, event := pairToNonce(t, p, static)
+	if ini == nil {
+		t.Fatalf("honest attempt: %q", event)
+	}
+	for i := 0; i < 5; i++ {
+		p.command("!advance 1")
+		m1, _ := mustPairing(t, mustKey(t), "x").Start()
+		if event, _ := p.send(m1); event != "pair-error unauthenticated" {
+			t.Fatalf("forged message 1 #%d: %q", i, event)
+		}
+	}
+}
+
+// A host on its own address cannot keep restarting for free: three starts,
+// then it is refused for the window (third audit, MEDIUM).
+func TestInteropFreeRestartsAreCappedPerSource(t *testing.T) {
+	p := startPeer(t)
+	p.command("!pair open")
+	p.command("!src 7")
+	for i := 0; i < 3; i++ {
+		p.command("!advance 1")
+		m1, _ := mustPairing(t, mustKey(t), "x").Start()
+		if event, _ := p.send(m1); event != "pair-ok" {
+			t.Fatalf("start %d: %q", i, event)
+		}
+	}
+	for i := 0; i < 3; i++ {
+		p.command("!advance 1")
+		m1, _ := mustPairing(t, mustKey(t), "x").Start()
+		if event, _ := p.send(m1); event != "pair-error sourceExhausted" {
+			t.Fatalf("restart %d: %q", i, event)
+		}
 	}
 }
 
