@@ -695,6 +695,6 @@ func prepareHDR(a *app) {
 		_ = os.Setenv("GDK_DEBUG", value)
 	}
 	if renderer := os.Getenv("GSK_RENDERER"); renderer == "" {
-		_ = os.Setenv("GSK_RENDERER", rendererForHDR(renderer))
+		_ = os.Setenv("GSK_RENDERER", rendererForHDR(renderer, int(C.gtk_get_major_version()), int(C.gtk_get_minor_version())))
 	}
 }

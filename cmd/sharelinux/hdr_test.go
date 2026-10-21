@@ -656,10 +656,21 @@ func TestStreamLabel(t *testing.T) {
 }
 
 func TestRendererForHDR(t *testing.T) {
-	if got := rendererForHDR(""); got != "ngl" {
-		t.Fatalf("HDR video draws best with the GL renderer, got %q", got)
+	cases := []struct {
+		current      string
+		major, minor int
+		want         string
+	}{
+		{"", 4, 22, "gl"},
+		{"", 4, 18, "gl"},
+		{"", 4, 16, "ngl"},
+		{"", 5, 0, "gl"},
+		{"vulkan", 4, 22, "vulkan"},
+		{"cairo", 4, 16, "cairo"},
 	}
-	if got := rendererForHDR("vulkan"); got != "vulkan" {
-		t.Fatalf("a renderer the person chose stays, got %q", got)
+	for _, c := range cases {
+		if got := rendererForHDR(c.current, c.major, c.minor); got != c.want {
+			t.Errorf("rendererForHDR(%q, %d, %d) = %q, want %q", c.current, c.major, c.minor, got, c.want)
+		}
 	}
 }
