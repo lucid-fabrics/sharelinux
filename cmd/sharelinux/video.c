@@ -605,7 +605,9 @@ static void plane_copy(guint8 *to, gsize to_stride, const guint8 *from, int from
 	}
 }
 
-// Packs a decoded software picture into one buffer of the layout GTK takes.
+// Packs a decoded software picture into one buffer of the layout GTK takes. GTK before 4.20
+// has no planar YUV memory formats, so there everything goes through swscale.
+#if GTK_CHECK_VERSION(4, 20, 0)
 static gboolean pack_planar(const AVFrame *av, int width, int height, Pixels *pixels) {
 	int chroma_w = (width + 1) / 2, chroma_h = (height + 1) / 2;
 	if (width % 2 != 0 || height % 2 != 0) {
@@ -646,6 +648,11 @@ static gboolean pack_planar(const AVFrame *av, int width, int height, Pixels *pi
 	}
 	return FALSE;
 }
+#else
+static gboolean pack_planar(const AVFrame *av, int width, int height, Pixels *pixels) {
+	return FALSE;
+}
+#endif
 
 // Anything else is converted to BGRA by swscale.
 static gboolean convert_bgra(const AVFrame *av, int width, int height, OssColor color, Pixels *pixels) {
@@ -685,10 +692,12 @@ static GdkTexture *texture_from_memory(const AVFrame *av, const OssFrameInfo *in
 	gdk_memory_texture_builder_set_width(builder, info->width);
 	gdk_memory_texture_builder_set_height(builder, info->height);
 	gdk_memory_texture_builder_set_stride(builder, pixels.strides[0]);
+#if GTK_CHECK_VERSION(4, 20, 0)
 	for (int plane = 1; plane < pixels.planes; plane++) {
 		gdk_memory_texture_builder_set_offset(builder, plane, pixels.offsets[plane]);
 		gdk_memory_texture_builder_set_stride_for_plane(builder, plane, pixels.strides[plane]);
 	}
+#endif
 	if (pixels.yuv) {
 		gdk_memory_texture_builder_set_color_state(builder, oss_color_state(info->color));
 	}

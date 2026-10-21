@@ -64,7 +64,7 @@ You can also switch to the Nightly track in the App settings of the macOS app an
 Build dependencies:
 
 * Go 1.26.8 or newer and a C compiler (the GTK binding uses cgo)
-* GTK **4.14** or newer and libadwaita **1.7** or newer, with their development files, plus `libgirepository1.0-dev` (gotk4 needs it), `libx11-dev`, `libxfixes-dev`, `libxi-dev`, `libwayland-dev`, `libavcodec-dev`, `libswscale-dev`, `libva-dev`, `libepoxy-dev` and `pkg-config`. Ubuntu 26.04 and Debian 14: `apt install libgtk-4-dev libadwaita-1-dev libgirepository1.0-dev libx11-dev libxfixes-dev libxi-dev libwayland-dev libavcodec-dev libswscale-dev libva-dev libepoxy-dev`
+* GTK **4.14** or newer (4.20 draws software-decoded video from planar YUV; older versions convert it with swscale) and libadwaita **1.7** or newer, with their development files, plus `libgirepository1.0-dev` (gotk4 needs it), `libx11-dev`, `libxfixes-dev`, `libxi-dev`, `libwayland-dev`, `libavcodec-dev`, `libswscale-dev`, `libva-dev`, `libepoxy-dev` and `pkg-config`. Ubuntu 26.04 and Debian 14: `apt install libgtk-4-dev libadwaita-1-dev libgirepository1.0-dev libx11-dev libxfixes-dev libxi-dev libwayland-dev libavcodec-dev libswscale-dev libva-dev libepoxy-dev`
 * A Secret Service (GNOME Keyring, KWallet) if you want saved passwords; without one connections still save, the password is typed each time
 * Avahi or any mDNS-capable network for the "On this network" list (the viewer browses `_rfb._tcp` itself, it does not need the Avahi daemon)
 
