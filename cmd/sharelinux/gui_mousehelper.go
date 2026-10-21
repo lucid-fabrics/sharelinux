@@ -210,7 +210,8 @@ func (p *pairDialog) build() {
 	waiting := page(spinner, wrapLabel("Waiting for the Mac", "title-3"), cancelWaiting)
 
 	// 3. compare the code
-	p.code = wrapLabel("", "title-1", "numeric", "monospace")
+	p.code = wrapLabel("", "numeric")
+	p.code.SetSelectable(true)
 	p.codeNote = wrapLabel("", "dim-label")
 	confirm := pillButton("Confirm", true)
 	confirm.ConnectClicked(p.confirm)
@@ -230,7 +231,10 @@ func (p *pairDialog) build() {
 	p.doneText = wrapLabel("", "title-3")
 	finish := pillButton("Done", true)
 	finish.ConnectClicked(func() { p.dialog.Close() })
-	done := page(gtk.NewImageFromIconName("emblem-ok-symbolic"), p.doneText,
+	mark := gtk.NewImageFromIconName("object-select-symbolic")
+	mark.SetPixelSize(48)
+	mark.AddCSSClass("success")
+	done := page(mark, p.doneText,
 		wrapLabel("If the Mac still shows its pairing window, click Confirm there as well. The Mac only trusts this computer once you do.", "dim-label"), finish)
 
 	// 5. it did not work
@@ -241,6 +245,7 @@ func (p *pairDialog) build() {
 
 	p.stack = gtk.NewStack()
 	p.stack.SetTransitionType(gtk.StackTransitionTypeCrossfade)
+	p.stack.SetVhomogeneous(false)
 	p.stack.AddNamed(form, "form")
 	p.stack.AddNamed(waiting, "waiting")
 	p.stack.AddNamed(compare, "compare")
@@ -310,7 +315,7 @@ func (p *pairDialog) begin() {
 				return
 			}
 			onMain(func() {
-				p.code.SetLabel(code[:3] + " " + code[3:])
+				p.code.SetMarkup(`<span size="300%" weight="bold">` + code[:3] + " " + code[3:] + `</span>`)
 				p.codeNote.SetLabel("This computer shows up on the Mac as " + quoteName(selfName) + ".")
 				p.stack.SetVisibleChildName("compare")
 			})
