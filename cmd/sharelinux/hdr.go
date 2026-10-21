@@ -67,7 +67,7 @@ type hdrRow struct {
 }
 
 const (
-	hdrSubtitle = "Ask the Mac for HDR video and show it in its full range"
+	hdrSubtitle = "Ask the Mac for HDR video. The Mac sends it for a virtual display"
 	// hdrRestart is shown when the switch was turned on in this run: GTK decides about color
 	// management when it starts.
 	hdrRestart = "Turned on. Restart Screen Sharing to show HDR"

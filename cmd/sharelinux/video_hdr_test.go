@@ -285,6 +285,7 @@ func TestVAAPIHDRThroughTheVideoProcessor(t *testing.T) {
 	if renderer := view.chooseDMABuf(); !renderer.Accelerated {
 		t.Skipf("the renderer %s does not draw on the GPU", renderer.Name)
 	}
+	before := videoLive()
 	frames := decodeHDR(t, decoderVAAPI, clip, media.TransferPQ, 3)
 	frame := frames[len(frames)-1]
 	expect := hdrColor(media.TransferPQ)
@@ -323,5 +324,13 @@ func TestVAAPIHDRThroughTheVideoProcessor(t *testing.T) {
 	}
 	for _, frame := range frames {
 		frame.free()
+	}
+	// The textures went with the test's pictures: no descriptor or frame is left.
+	view.clear()
+	if !pump(func() bool {
+		live := videoLive()
+		return live.FDs == before.FDs && live.Textures == before.Textures && live.Frames == before.Frames
+	}, 5*time.Second) {
+		t.Fatalf("left behind: %+v, before %+v", videoLive(), before)
 	}
 }
