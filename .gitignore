@@ -10,3 +10,5 @@ AGENTS.md
 /screenshots/
 .verify/
 /cmd/sharelinux/sharelinux
+/dist/
+/packaging/flatpak/vendor.tar.xz

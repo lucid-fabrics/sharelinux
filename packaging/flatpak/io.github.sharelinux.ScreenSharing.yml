@@ -1,0 +1,64 @@
+app-id: io.github.sharelinux.ScreenSharing
+runtime: org.gnome.Platform
+# GNOME 50 ships libadwaita 1.9 and GTK 4.22. The viewer needs libadwaita 1.7
+# (AdwToggleGroup) and GTK 4.14.
+runtime-version: '50'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.golang
+command: sharelinux
+
+finish-args:
+  # Reach the Mac (TCP 5900) and browse _rfb._tcp with the built-in mDNS client.
+  - --share=network
+  # X11 shared memory for the fallback X11 socket.
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  # The picture is drawn by the GPU.
+  - --device=dri
+  # Saved Mac passwords live in the system keyring (Secret Service).
+  - --talk-name=org.freedesktop.secrets
+  # The default folder for "Files from the Mac" is Downloads. Any other folder is
+  # chosen through the file chooser portal, and files sent to the Mac come from the
+  # file chooser or a drag, so nothing else on disk is opened up.
+  - --filesystem=xdg-download
+
+build-options:
+  append-path: /usr/lib/sdk/golang/bin
+  env:
+    CGO_ENABLED: '1'
+    GOTOOLCHAIN: local
+    GOFLAGS: -mod=vendor -trimpath
+    GOPATH: /run/build/sharelinux/go
+
+modules:
+  - name: sharelinux
+    buildsystem: simple
+    build-commands:
+      - go build -o /app/bin/sharelinux ./cmd/sharelinux
+      - install -Dm644 cmd/sharelinux/data/io.github.sharelinux.ScreenSharing.svg /app/share/icons/hicolor/scalable/apps/io.github.sharelinux.ScreenSharing.svg
+      - install -Dm644 cmd/sharelinux/data/io.github.sharelinux.ScreenSharing.desktop /app/share/applications/io.github.sharelinux.ScreenSharing.desktop
+      - install -Dm644 cmd/sharelinux/data/io.github.sharelinux.ScreenSharing.metainfo.xml /app/share/metainfo/io.github.sharelinux.ScreenSharing.metainfo.xml
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - .git
+          - .idea
+          - .verify
+          - Frameworks
+          - OpenScreenSharing
+          - OpenScreenSharing.xcodeproj
+          - OpenScreenSharingUITests
+          - assets
+          - build
+          - dist
+          - examples
+          - libsharing
+          - packaging
+      # Go modules, from `go mod vendor` (see build.sh). The build has no network.
+      - type: archive
+        path: vendor.tar.xz
+        dest: vendor
+        strip-components: 0

@@ -8,11 +8,22 @@
   <description>
     <p>Connect to the built-in Screen Sharing of a Mac, see its screen and control it with your keyboard and mouse. Copy and paste between the two computers and drag files across.</p>
   </description>
+  <developer id="io.github.sharelinux">
+    <name>sharelinux</name>
+  </developer>
+  <url type="homepage">https://github.com/nekohasekai/open-screen-sharing</url>
   <launchable type="desktop-id">io.github.sharelinux.ScreenSharing.desktop</launchable>
   <content_rating type="oars-1.1"/>
   <requires>
     <display_length compare="ge">360</display_length>
   </requires>
+  <releases>
+    <release version="0.1.0" date="2026-10-20">
+      <description>
+        <p>First release.</p>
+      </description>
+    </release>
+  </releases>
   <provides>
     <binary>sharelinux</binary>
   </provides>
