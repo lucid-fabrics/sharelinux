@@ -716,10 +716,12 @@ func (c *Client) receiveRectangles(count int) (Update, error) {
 		if !deferred && rectangle.Encoding.carriesPixels() && !rectangle.Empty() {
 			update.add(rectangle, c.framebuffer)
 		}
-		err = c.decoders.flushMVS(c.framebuffer, func(done Rectangle) { update.add(done, c.framebuffer) })
-		if err != nil {
-			return update, E.Cause(err, "read ", EncodingMVS, " rectangle after resize")
-		}
+	}
+	// Waiting rectangles are decoded against the geometry the update ends
+	// with, after every resize in it has reset the decoder.
+	err := c.decoders.flushMVS(c.framebuffer, func(done Rectangle) { update.add(done, c.framebuffer) })
+	if err != nil {
+		return update, E.Cause(err, "read ", EncodingMVS, " rectangle after resize")
 	}
 	return update, c.decoders.endUpdate(c.width, c.height)
 }

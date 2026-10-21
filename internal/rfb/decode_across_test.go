@@ -58,3 +58,25 @@ func TestMVSHeldFailsAfterUpdateLimit(t *testing.T) {
 		t.Fatal("the queue was not dropped after the failure")
 	}
 }
+
+// Two resizes in one update: a waiting rectangle is decoded against the final
+// geometry, after the last resize reset the decoder, so the cache entry it
+// inserts survives for the cache hit that follows.
+func TestMVSHeldDecodesAgainstFinalGeometry(t *testing.T) {
+	client := smallClient(concat(
+		mvsRectangle(24, 0, mvsFullRefine(false, 3)),
+		resize32,
+		rectangleBytes(0, 0, 64, 64, EncodingDesktopSize),
+		mvsRectangle(0, 8, mvsFullCache(1)),
+	))
+	if _, err := client.receiveRectangles(4); err != nil {
+		t.Fatal(err)
+	}
+	if client.framebuffer.Width != 64 {
+		t.Fatalf("framebuffer %dx%d, want 64x64", client.framebuffer.Width, client.framebuffer.Height)
+	}
+	first := drawn(t, client, 24, 0)
+	if got := drawn(t, client, 0, 8); !bytes.Equal(got, first) {
+		t.Fatalf("cache entry 1 drew %v, want the held tile %v", got, first)
+	}
+}
