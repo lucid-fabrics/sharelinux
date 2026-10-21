@@ -25,6 +25,11 @@ type deferredMVS struct {
 const (
 	maximumCompressedRectangle = 128 << 20
 	maximumInflatedRectangle   = 512 << 20
+	// maximumDeferredPayload bounds the payload bytes that wait for a resize,
+	// all rectangles together. The rectangles of one update can add up to far
+	// more than a single rectangle may carry.
+	maximumDeferredPayload    = maximumCompressedRectangle
+	maximumDeferredRectangles = 256
 )
 
 type decoders struct {
@@ -37,6 +42,11 @@ type decoders struct {
 	payload   []byte
 	tile      []byte
 	deferred  []deferredMVS
+	// deferredBytes is the payload size held in deferred. The limits are
+	// fields so a test can lower them; zero means the maximum constants.
+	deferredBytes          int
+	deferredPayloadLimit   int
+	deferredRectangleLimit int
 }
 
 func (d *decoders) resetMVS(width, height int) {
@@ -65,8 +75,33 @@ func (d *decoders) decodeMVS(payload []byte, x, y, width, height int, framebuffe
 	if len(d.deferred) == 0 && mvsFits(payload, x, y, width, height, framebuffer) {
 		return d.mvs.Decode(payload, x, y, width, height, framebuffer)
 	}
+	err := d.holdMVS(len(payload))
+	if err != nil {
+		return err
+	}
 	d.deferred = append(d.deferred, deferredMVS{x, y, width, height, bytes.Clone(payload)})
+	d.deferredBytes += len(payload)
 	return errMVSDeferred
+}
+
+// holdMVS fails when one more waiting payload of the given size would go over
+// the limits. A server that never sends the resize must not grow the queue
+// without bound.
+func (d *decoders) holdMVS(size int) error {
+	rectangleLimit, payloadLimit := d.deferredRectangleLimit, d.deferredPayloadLimit
+	if rectangleLimit == 0 {
+		rectangleLimit = maximumDeferredRectangles
+	}
+	if payloadLimit == 0 {
+		payloadLimit = maximumDeferredPayload
+	}
+	if len(d.deferred) >= rectangleLimit {
+		return E.New("rfb: more than ", rectangleLimit, " mvs rectangles wait for a resize")
+	}
+	if d.deferredBytes+size > payloadLimit {
+		return E.New("rfb: mvs rectangles waiting for a resize hold over ", payloadLimit, " bytes")
+	}
+	return nil
 }
 
 // flushMVS decodes the waiting rectangles that fit the framebuffer now, in
@@ -78,6 +113,7 @@ func (d *decoders) flushMVS(framebuffer *bgra.Image, done func(Rectangle)) error
 			return nil
 		}
 		d.deferred = d.deferred[1:]
+		d.deferredBytes -= len(next.payload)
 		err := d.mvs.Decode(next.payload, next.x, next.y, next.width, next.height, framebuffer)
 		if err != nil {
 			return err
@@ -87,6 +123,7 @@ func (d *decoders) flushMVS(framebuffer *bgra.Image, done func(Rectangle)) error
 		}
 	}
 	d.deferred = nil
+	d.deferredBytes = 0
 	return nil
 }
 
