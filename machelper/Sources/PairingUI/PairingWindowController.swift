@@ -6,12 +6,12 @@ import HelperRuntime
 /// owner's menu item. All words come from `PairingText`; all decisions are the
 /// `PairingCoordinator`'s, reached through the closures below. Not exercised
 /// by tests (AppKit); its logic is.
-final class PairingWindowController: NSWindowController, NSWindowDelegate {
-    var onConfirm: () -> Void = {}
-    var onReject: () -> Void = {}
-    var onClose: () -> Void = {}
-    var onUnlock: () -> Void = {}
-    var onRemove: (PairedDevice) -> Void = { _ in }
+public final class PairingWindowController: NSWindowController, NSWindowDelegate {
+    public var onConfirm: () -> Void = {}
+    public var onReject: () -> Void = {}
+    public var onClose: () -> Void = {}
+    public var onUnlock: () -> Void = {}
+    public var onRemove: (PairedDevice) -> Void = { _ in }
 
     private let headline = NSTextField(labelWithString: "")
     private let code = NSTextField(labelWithString: "")
@@ -24,7 +24,7 @@ final class PairingWindowController: NSWindowController, NSWindowDelegate {
     private let devicesStack = NSStackView()
     private var current = PairingStatus()
 
-    init() {
+    public init() {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 440, height: 420), styleMask: [.titled, .closable],
             backing: .buffered, defer: false)
@@ -36,7 +36,7 @@ final class PairingWindowController: NSWindowController, NSWindowDelegate {
         window.center()
     }
 
-    required init?(coder: NSCoder) { nil }
+    public required init?(coder: NSCoder) { nil }
 
     private func build() {
         headline.font = .boldSystemFont(ofSize: 17)
@@ -83,13 +83,13 @@ final class PairingWindowController: NSWindowController, NSWindowDelegate {
     }
 
     /// Shows the window in front. The caller has already opened the pairing window in the coordinator.
-    func present() {
+    public func present() {
         NSApp.activate(ignoringOtherApps: true)
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
     }
 
-    func update(_ s: PairingStatus) {
+    public func update(_ s: PairingStatus) {
         current = s
         headline.stringValue = PairingText.headline(s)
         detail.stringValue = PairingText.detail(s) ?? ""
@@ -118,7 +118,9 @@ final class PairingWindowController: NSWindowController, NSWindowDelegate {
             button.bezelStyle = .rounded
             let row = NSStackView(views: [name, button])
             row.spacing = 12
+            row.distribution = .fill
             devicesStack.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalToConstant: 400).isActive = true
         }
     }
 
@@ -145,7 +147,20 @@ final class PairingWindowController: NSWindowController, NSWindowDelegate {
         if alert.runModal() == .alertSecondButtonReturn { onRemove(d) }
     }
 
-    func windowWillClose(_ notification: Notification) { onClose() }
+    public func windowWillClose(_ notification: Notification) { onClose() }
+
+    /// Renders the window's content to PNG data without showing anything (the
+    /// layout preview and its test use it; no screen capture permission is needed).
+    public func renderPNG() -> Data? {
+        guard let view = window?.contentView else { return nil }
+        window?.appearance = NSAppearance(named: .aqua)
+        window?.backgroundColor = .windowBackgroundColor
+        view.layoutSubtreeIfNeeded()
+        window?.displayIfNeeded()
+        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        return rep.representation(using: .png, properties: [:])
+    }
 }
 
 extension NSBox {

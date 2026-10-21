@@ -4,6 +4,7 @@ import CryptoKit
 import Foundation
 import HelperCore
 import HelperRuntime
+import PairingUI
 import UserNotifications
 import os
 

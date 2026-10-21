@@ -10,6 +10,7 @@ let package = Package(
         .executable(name: "corepeer", targets: ["corepeer"]),
         .executable(name: "MouseHelper", targets: ["MouseHelper"]),
         .executable(name: "runtimeharness", targets: ["runtimeharness"]),
+        .executable(name: "pairingpreview", targets: ["pairingpreview"]),
     ],
     targets: [
         .target(name: "HelperCore"),
@@ -22,7 +23,12 @@ let package = Package(
         // never instantiated by tests.
         .target(name: "HelperRuntime", dependencies: ["HelperCore", "CTCPTable"]),
         // The menu bar app (AppKit, Carbon hotkey). Not exercised by tests.
-        .executableTarget(name: "MouseHelper", dependencies: ["HelperRuntime"]),
+        .executableTarget(name: "MouseHelper", dependencies: ["HelperRuntime", "PairingUI"]),
+        // The pairing window (AppKit). Split out so a preview can render it.
+        .target(name: "PairingUI", dependencies: ["HelperRuntime"]),
+        // Renders the pairing window's states to PNG files, offscreen, with made-up
+        // data: no window is shown, no key store, no permission. Not shipped.
+        .executableTarget(name: "pairingpreview", dependencies: ["PairingUI", "HelperRuntime"]),
         // Line-driven test peer for the Go interop test. Not shipped.
         .executableTarget(name: "corepeer", dependencies: ["HelperCore"]),
         // The app's runtime on a real UDP socket with a fake poster and fake
