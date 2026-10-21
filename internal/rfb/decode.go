@@ -30,6 +30,9 @@ const (
 	// more than a single rectangle may carry.
 	maximumDeferredPayload    = maximumCompressedRectangle
 	maximumDeferredRectangles = 256
+	// maximumDeferredUpdates is how many updates a rectangle may wait for the
+	// resize that makes it fit.
+	maximumDeferredUpdates = 16
 )
 
 type decoders struct {
@@ -47,6 +50,9 @@ type decoders struct {
 	deferredBytes          int
 	deferredPayloadLimit   int
 	deferredRectangleLimit int
+	// deferredUpdates counts the updates that ended with a rectangle waiting.
+	deferredUpdates     int
+	deferredUpdateLimit int
 }
 
 func (d *decoders) resetMVS(width, height int) {
@@ -124,6 +130,28 @@ func (d *decoders) flushMVS(framebuffer *bgra.Image, done func(Rectangle)) error
 	}
 	d.deferred = nil
 	d.deferredBytes = 0
+	d.deferredUpdates = 0
+	return nil
+}
+
+// endUpdate is called when an update ends. Waiting rectangles stay queued for
+// the next update, because the resize can arrive in a later one. They fail
+// the session when no resize that fits has come after the limit.
+func (d *decoders) endUpdate(width, height int) error {
+	if len(d.deferred) == 0 {
+		d.deferredUpdates = 0
+		return nil
+	}
+	limit := d.deferredUpdateLimit
+	if limit == 0 {
+		limit = maximumDeferredUpdates
+	}
+	d.deferredUpdates++
+	if d.deferredUpdates > limit {
+		next := d.deferred[0]
+		d.deferred, d.deferredBytes, d.deferredUpdates = nil, 0, 0
+		return E.New("rfb: mvs rectangle ", next.width, "x", next.height, " at ", next.x, ",", next.y, " is outside the ", width, "x", height, " framebuffer and no resize that fits came in ", limit, " updates")
+	}
 	return nil
 }
 

@@ -197,13 +197,19 @@ func TestMVSQuantizationOutsideFramebufferApplies(t *testing.T) {
 	}
 }
 
-// A rectangle that still does not fit when the update ends is an error.
+// A rectangle that still does not fit when the update ends waits for the next
+// update, and only fails after the update limit.
 func TestMVSRectangleStillOutsideAtEndOfUpdate(t *testing.T) {
 	var data []byte
 	data = append(data, mvsRectangle(24, 0, mvsFullRefine(false, 3))...)
 	data = append(data, rectangleBytes(0, 0, 1, 1, EncodingRaw, 1, 2, 3, 255)...)
 	client := smallClient(data)
+	client.decoders.deferredUpdateLimit = 1
 	_, err := client.receiveRectangles(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.receiveRectangles(0)
 	if err == nil || !strings.Contains(err.Error(), "outside") {
 		t.Fatalf("error %v, want a rectangle outside the framebuffer", err)
 	}

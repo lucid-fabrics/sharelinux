@@ -721,12 +721,7 @@ func (c *Client) receiveRectangles(count int) (Update, error) {
 			return update, E.Cause(err, "read ", EncodingMVS, " rectangle after resize")
 		}
 	}
-	if len(c.decoders.deferred) > 0 {
-		next := c.decoders.deferred[0]
-		c.decoders.deferred, c.decoders.deferredBytes = nil, 0
-		return update, E.New("read ", EncodingMVS, " rectangle ", next.width, "x", next.height, " at ", next.x, ",", next.y, " outside the ", c.width, "x", c.height, " framebuffer")
-	}
-	return update, nil
+	return update, c.decoders.endUpdate(c.width, c.height)
 }
 
 func (u *Update) add(rectangle Rectangle, framebuffer *bgra.Image) {
