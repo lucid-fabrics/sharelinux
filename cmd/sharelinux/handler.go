@@ -33,6 +33,7 @@ type handler struct {
 	drag         *rfb.RemoteDrag
 	dragChanged  bool
 	destinations []dropDestination
+	abandoned    map[uint32]bool
 	updates      uint64
 	encoding     rfb.Encoding
 	states       chan rfb.State
@@ -175,8 +176,30 @@ func (h *handler) takeDrag() (*rfb.RemoteDrag, bool) {
 
 func (h *handler) DropDestinationReceived(id uint32, path string) {
 	h.access.Lock()
+	defer h.access.Unlock()
+	if h.abandoned[id] {
+		delete(h.abandoned, id)
+		return
+	}
 	h.destinations = append(h.destinations, dropDestination{ID: id, Path: path})
-	h.access.Unlock()
+}
+
+// abandonDestination is called when a drop ends without its destination. One
+// that is already here is dropped, and one that arrives later is ignored, so
+// it does not stay in the list for the rest of the session.
+func (h *handler) abandonDestination(id uint32) {
+	h.access.Lock()
+	defer h.access.Unlock()
+	for index, destination := range h.destinations {
+		if destination.ID == id {
+			h.destinations = append(h.destinations[:index], h.destinations[index+1:]...)
+			return
+		}
+	}
+	if h.abandoned == nil {
+		h.abandoned = make(map[uint32]bool)
+	}
+	h.abandoned[id] = true
 }
 
 func (h *handler) takeDestination(id uint32) (string, bool) {

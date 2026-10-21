@@ -287,6 +287,7 @@ func (t *transfers) drop(paths []string, x, y int) {
 		t.gesture.End()
 		destination, err := t.waitDestination(id)
 		if err != nil {
+			t.handler.abandonDestination(id)
 			t.abortDrop(err, func() error { return t.client.CancelDrag(id) })
 			return
 		}
