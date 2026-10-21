@@ -58,6 +58,15 @@ func videoLive() liveVideo {
 	return liveVideo{int(live.decoders), int(live.frames), int(live.av_frames), int(live.fds), int(live.textures)}
 }
 
+// gpuFailureFatal says whether an error code of libavcodec (a negative errno, or AVERROR_INVALIDDATA)
+// from the GPU decoder means it cannot work. failures counts the I/O errors in a row.
+func gpuFailureFatal(avError int, failures *int) bool {
+	count := C.int(*failures)
+	fatal := C.oss_hardware_failure_is_fatal(C.int(avError), &count) != 0
+	*failures = int(count)
+	return fatal
+}
+
 // dmabufNV12Supported says whether the default display imports NV12 DMA-BUFs at all.
 func dmabufNV12Supported() bool {
 	return C.oss_dmabuf_nv12_supported(C.gdk_display_get_default()) != 0

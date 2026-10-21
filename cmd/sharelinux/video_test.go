@@ -639,3 +639,48 @@ func TestStreamIgnoresTheCoreAfterClose(t *testing.T) {
 		t.Fatalf("%+v, before %+v", after, before)
 	}
 }
+
+// Bad data is never the GPU decoder's fault, one I/O error may be a frame the driver choked on,
+// and anything else means it cannot decode here.
+func TestGPUDecoderFailureClassification(t *testing.T) {
+	const (
+		eio     = -5
+		enomem  = -12
+		einval  = -22
+		invalid = -1094995529 // AVERROR_INVALIDDATA, FFERRTAG('I','N','D','A') negated
+	)
+	failures := 0
+	for range 5 {
+		if gpuFailureFatal(invalid, &failures) {
+			t.Fatal("bad data is not fatal")
+		}
+	}
+	if failures != 0 {
+		t.Fatal("bad data does not count")
+	}
+	if gpuFailureFatal(eio, &failures) || gpuFailureFatal(eio, &failures) {
+		t.Fatal("two I/O errors may be one bad frame")
+	}
+	if !gpuFailureFatal(eio, &failures) {
+		t.Fatal("three I/O errors in a row are a broken decoder")
+	}
+	for _, code := range []int{enomem, einval} {
+		failures = 0
+		if !gpuFailureFatal(code, &failures) {
+			t.Fatalf("error %d is final", code)
+		}
+	}
+}
+
+// An app made without a logger (as tests and tools make one) still probes for decoders.
+func TestVideoCapabilitiesNeedNoLogger(t *testing.T) {
+	a := &app{}
+	first := a.videoCapabilities()
+	if second := a.videoCapabilities(); second != first {
+		t.Fatal("the probe runs once")
+	}
+	plan := planVideo(videoAuto, first, true)
+	if plan.enabled() != first.any() {
+		t.Fatalf("plan %v for capabilities %+v", plan.enabled(), first)
+	}
+}

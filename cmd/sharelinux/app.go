@@ -104,6 +104,9 @@ func (a *app) videoCapabilities() videoCaps {
 			return
 		}
 		a.caps = videoProbe(os.Getenv("SHARELINUX_VAAPI_DEVICE"))
+		if a.logger == nil {
+			return
+		}
 		a.logger.Info("video decoders", "hevc-vaapi", a.caps.HEVCVAAPI, "hevc-software", a.caps.HEVCSoftware,
 			"h264-vaapi", a.caps.H264VAAPI, "h264-software", a.caps.H264Software, "driver", a.caps.Driver, "vaapi-error", a.caps.Error)
 	})

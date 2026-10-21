@@ -115,8 +115,26 @@ struct OssVideoDecoder {
 	gint64 submitted_us;
 	gint64 received_us;
 	gsize unit_bytes;
+	int failures; // I/O errors in a row from the GPU decoder
 	OssVideoStats stats;
 };
+
+// How many I/O errors in a row make the GPU decoder count as broken.
+#define HARDWARE_FAILURE_LIMIT 3
+
+// oss_hardware_failure_is_fatal says whether an error from the GPU decoder means it cannot
+// work. Bad data is the Mac's fault and a keyframe fixes it. An I/O error can be one bad frame
+// the driver choked on, so it has to repeat (failures counts them). Anything else (no format
+// for the surface, no memory) is final.
+gboolean oss_hardware_failure_is_fatal(int av_error, int *failures) {
+	if (av_error == AVERROR_INVALIDDATA) {
+		return FALSE;
+	}
+	if (av_error == AVERROR(EIO)) {
+		return ++*failures >= HARDWARE_FAILURE_LIMIT;
+	}
+	return TRUE;
+}
 
 struct OssFrame {
 	AVFrame *av;
@@ -373,13 +391,12 @@ int oss_video_decode(OssVideoDecoder *decoder, const guint8 *data, gsize length,
 		decoder->stats.errors++;
 		decoder->want_sync = TRUE;
 		avcodec_flush_buffers(decoder->context);
-		// A bad stream is the Mac's fault and a keyframe fixes it. Anything else on the GPU
-		// decoder (no format, no memory, a lost device) means this decoder cannot work.
-		if (decoder->kind == OSS_DECODER_VAAPI && result != AVERROR_INVALIDDATA) {
+		if (decoder->kind == OSS_DECODER_VAAPI && oss_hardware_failure_is_fatal(result, &decoder->failures)) {
 			return OSS_ERR_FATAL;
 		}
 		return OSS_ERR_BAD_DATA;
 	}
+	decoder->failures = 0;
 	if (sync) {
 		decoder->want_sync = FALSE;
 	}

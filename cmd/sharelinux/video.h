@@ -129,6 +129,10 @@ typedef struct {
 
 void oss_video_live(OssVideoLive *live);
 
+// oss_hardware_failure_is_fatal classifies an error of the GPU decoder: bad data and a
+// first few I/O errors are not fatal, anything else is. failures counts the I/O errors in a row.
+gboolean oss_hardware_failure_is_fatal(int av_error, int *failures);
+
 // oss_video_test_break_dmabuf makes every DMA-BUF import fail at the builder, for tests of the
 // failure path.
 void oss_video_test_break_dmabuf(gboolean broken);
