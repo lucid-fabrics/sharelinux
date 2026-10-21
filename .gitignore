@@ -13,3 +13,4 @@ AGENTS.md
 /dist/
 /packaging/flatpak/vendor.tar.xz
 /machelper/.build/
+/machelper/build/

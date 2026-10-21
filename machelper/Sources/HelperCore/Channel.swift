@@ -28,7 +28,13 @@ public enum ChannelEvent: Equatable, Sendable {
     case handshakeAnswered
 }
 
-public enum EndReason: Equatable, Sendable { case bye, silence, expired, replaced, unpaired }
+public enum EndReason: Equatable, Sendable {
+    case bye, silence, expired, replaced, unpaired
+    /// The runtime saw the Screen Sharing connection from this peer go away (design 3.3 rule 3).
+    case screenSharingEnded
+    /// Local decision: kill switch, toggle off, sleep, key removed.
+    case local
+}
 
 public struct ChannelResult: Equatable, Sendable {
     public var reply: Data?
