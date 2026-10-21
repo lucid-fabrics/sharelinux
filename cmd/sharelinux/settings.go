@@ -33,6 +33,7 @@ type settings struct {
 	VirtualSize      string `json:"virtual_size"`
 	HiDPI            bool   `json:"hidpi"`
 	HDR              bool   `json:"hdr"`
+	Video            string `json:"video"`
 }
 
 func defaultSettings() settings {
@@ -43,6 +44,7 @@ func defaultSettings() settings {
 		NaturalScrolling: true,
 		SharedClipboard:  true,
 		VirtualSize:      virtualSizeWindow,
+		Video:            string(videoAuto),
 	}
 }
 
@@ -55,6 +57,7 @@ func (s *settings) sanitize() {
 	if s.CommandKey != commandKeySuper && s.CommandKey != commandKeyAlt {
 		s.CommandKey = defaults.CommandKey
 	}
+	s.Video = string(parseVideoMode(s.Video))
 	known := false
 	for _, size := range virtualSizes {
 		known = known || size == s.VirtualSize

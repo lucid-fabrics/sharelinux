@@ -55,3 +55,18 @@ func TestBandwidthLineByDialect(t *testing.T) {
 		t.Fatalf("Apple bandwidth line = %q", got)
 	}
 }
+
+// A new video stream starts its byte counter over; the rate must not jump to the size of a uint64.
+func TestMeterSurvivesACounterThatStartsOver(t *testing.T) {
+	var m meter
+	start := time.Unix(1000, 0)
+	m.Tick(start, 0, 0, 5_000_000)
+	m.Tick(start.Add(time.Second), 60, 0, 6_000_000)
+	if m.BitsPS != 8e6 {
+		t.Fatalf("%v", m.BitsPS)
+	}
+	m.Tick(start.Add(2*time.Second), 120, 0, 125_000)
+	if m.BitsPS != 1e6 {
+		t.Fatalf("after a restart the rate counts from zero: %v", m.BitsPS)
+	}
+}

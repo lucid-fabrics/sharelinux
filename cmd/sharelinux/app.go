@@ -80,6 +80,31 @@ type app struct {
 	settings settings
 
 	access sync.Mutex
+
+	videoOnce sync.Once
+	caps      videoCaps
+}
+
+// videoMode is the video mode for new connections: the environment wins over the preferences.
+func (a *app) videoMode() videoMode {
+	if value := os.Getenv("SHARELINUX_VIDEO"); value != "" {
+		return parseVideoMode(value)
+	}
+	return parseVideoMode(a.preferences().Video)
+}
+
+// videoCapabilities probes the decoders once. SHARELINUX_VAAPI_DEVICE names the
+// VA-API render node to use when the machine has more than one GPU.
+func (a *app) videoCapabilities() videoCaps {
+	a.videoOnce.Do(func() {
+		if videoProbe == nil {
+			return
+		}
+		a.caps = videoProbe(os.Getenv("SHARELINUX_VAAPI_DEVICE"))
+		a.logger.Info("video decoders", "hevc-vaapi", a.caps.HEVCVAAPI, "hevc-software", a.caps.HEVCSoftware,
+			"h264-vaapi", a.caps.H264VAAPI, "h264-software", a.caps.H264Software, "driver", a.caps.Driver, "vaapi-error", a.caps.Error)
+	})
+	return a.caps
 }
 
 // preferences returns the current preferences.

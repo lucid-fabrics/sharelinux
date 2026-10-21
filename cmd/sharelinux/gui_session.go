@@ -114,6 +114,9 @@ type sessionView struct {
 	pollTimer coreglib.SourceHandle
 	ended     bool
 
+	// vid is the session's use of the Mac's video stream.
+	vid videoSession
+
 	layoutSeen   bool
 	lastWidth    int
 	lastHeight   int
@@ -485,6 +488,8 @@ func (v *sessionView) end() {
 	v.screen.inhibitShortcuts(false)
 	v.setPointerLock(false)
 	coreglib.SourceRemove(v.pollTimer)
+	// The decoder presents into the widget: it stops before the widget can go.
+	v.stopVideo()
 	live := v.live
 	go func() {
 		live.cancel()
@@ -531,6 +536,7 @@ func (v *sessionView) poll() {
 		v.pointerHeld = false
 		v.sendPointer(v.pointerX, v.pointerY)
 	}
+	v.pollVideo()
 	v.syncPicture()
 	if width, height := v.screen.Width(), v.screen.Height(); width != v.lastWidth || height != v.lastHeight {
 		v.lastWidth, v.lastHeight = width, height
@@ -629,7 +635,14 @@ func (v *sessionView) askVirtualDisplay() {
 // The size is read from the framebuffer inside its lock, so what is copied
 // always matches the buffer, even when the Mac resized meanwhile.
 func (v *sessionView) syncPicture() {
-	dirty, full := v.h.takeDirty()
+	// While the video shows, the framebuffer is not updated; just after it stops, the
+	// widget keeps the last video picture until the Mac sends a new one.
+	tiles := !v.videoActive() && !v.videoWaiting()
+	var dirty image.Rectangle
+	var full bool
+	if tiles {
+		dirty, full = v.h.takeDirty()
+	}
 	v.client.Framebuffer(func(framebuffer *bgra.Image) {
 		if framebuffer == nil || framebuffer.Bounds().Empty() {
 			return
@@ -637,6 +650,9 @@ func (v *sessionView) syncPicture() {
 		resize, area := planPicture(framebuffer.Bounds(), image.Pt(v.screen.width, v.screen.height), dirty, full)
 		if resize {
 			v.screen.resize(framebuffer.Width, framebuffer.Height)
+		}
+		if !tiles {
+			return
 		}
 		if !v.screen.update(framebuffer, area) {
 			v.g.app.logger.Warn("picture does not fit the widget", "width", framebuffer.Width, "height", framebuffer.Height)
@@ -677,7 +693,11 @@ func (v *sessionView) toFramebuffer(x, y float64) (int, int, bool) {
 
 func (v *sessionView) updateStats() {
 	now := time.Now()
-	v.meter.Tick(now, int(v.screen.frames()), v.h.updateCount(), v.client.Statistics().WireBytes)
+	drawn := int(v.screen.frames())
+	if v.videoActive() {
+		drawn = int(v.screen.videoCounters().Presented)
+	}
+	v.meter.Tick(now, drawn, v.h.updateCount(), v.client.Statistics().WireBytes+v.videoBytes())
 	v.fps = v.meter.Frames
 	if now.Sub(v.loggedAt) >= time.Second {
 		v.loggedAt = now
@@ -689,6 +709,7 @@ func (v *sessionView) updateStats() {
 	}
 	frameWidth, frameHeight := v.client.FramebufferSize()
 	rows := statRows(v.client.Info(), v.meter.Frames, float64(v.live.echo.Value())/float64(time.Millisecond), v.meter.BitsPS, v.h.lastEncoding(), frameWidth, frameHeight)
+	rows = applyVideoRows(rows, v.videoStatistics())
 	for len(v.statNames) < len(rows) {
 		name := gtk.NewLabel("")
 		name.AddCSSClass("name")

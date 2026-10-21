@@ -30,6 +30,10 @@ func (m *meter) Tick(now time.Time, frames int, updates, wire uint64) {
 	if elapsed < 1 {
 		return
 	}
+	if wire < m.wire {
+		// A counter that started over (a new video stream): count from its start.
+		m.wire = 0
+	}
 	m.Frames = float64(frames-m.frames) / elapsed
 	m.Updates = float64(updates-m.updates) / elapsed
 	m.BitsPS = float64(wire-m.wire) * 8 / elapsed

@@ -65,6 +65,17 @@ func (g *gui) generalPage(prefs settings, change func(func(*settings))) *adw.Pre
 		qualityRow.SetSubtitle(qualityHint(qualities[index]))
 	})
 	picture.Add(qualityRow)
+	var videoNames []string
+	videoSelected := 0
+	for index, mode := range videoModes {
+		videoNames = append(videoNames, videoModeLabel(mode))
+		if string(mode) == prefs.Video {
+			videoSelected = index
+		}
+	}
+	picture.Add(comboRow("Video", "Uses the Mac's video stream when this computer can decode it. Applies to the next connection", videoNames, videoSelected, func(index int) {
+		change(func(s *settings) { s.Video = string(videoModes[index]) })
+	}))
 	picture.Add(switchRow("Fit the Mac to the window", "Off shows the screen at its real size and scrolls", prefs.FitWindow, func(on bool) {
 		change(func(s *settings) { s.FitWindow = on })
 	}))

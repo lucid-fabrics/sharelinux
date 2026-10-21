@@ -164,3 +164,16 @@ func TestDownloadFolder(t *testing.T) {
 		t.Fatal("falls back to the downloads folder")
 	}
 }
+
+func TestVideoSettingSanitized(t *testing.T) {
+	if defaultSettings().Video != string(videoAuto) {
+		t.Fatalf("the default is automatic, not %q", defaultSettings().Video)
+	}
+	for in, want := range map[string]string{"": "auto", "software": "software", "off": "off", "tiles": "off", "bogus": "auto"} {
+		s := settings{Quality: "adaptive", CommandKey: commandKeySuper, VirtualSize: virtualSizeWindow, Video: in}
+		s.sanitize()
+		if s.Video != want {
+			t.Errorf("%q became %q, want %q", in, s.Video, want)
+		}
+	}
+}

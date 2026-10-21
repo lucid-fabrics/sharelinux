@@ -82,6 +82,13 @@ func (h *handler) FramebufferUpdated(update rfb.Update) {
 	h.access.Unlock()
 }
 
+// invalidate asks for the whole picture to be copied to the widget again.
+func (h *handler) invalidate() {
+	h.access.Lock()
+	h.fullRedraw = true
+	h.access.Unlock()
+}
+
 // takeDirty returns the area changed since the last call, and whether the whole picture changed.
 func (h *handler) takeDirty() (image.Rectangle, bool) {
 	h.access.Lock()
