@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -26,10 +27,29 @@ import (
 // Pairing is always one explicit attempt per click. Nothing in this file, and
 // nothing it calls, retries a pairing by itself.
 const (
-	helperClientKeyID = "mouse-helper/client-key"
-	helperMacsID      = "mouse-helper/macs"
+	helperClientKeyID = helperSecretPrefix + "client-key"
+	helperMacsID      = helperSecretPrefix + "macs"
 	maxPairedMacs     = 16
 )
+
+// keyFingerprint is the short fingerprint of a public key, the same string the
+// Mac helper shows for this computer: the first 8 bytes of SHA-256 in four
+// groups of four hex digits ("72cd 6e84 22c4 07fb"). It lets a person tell
+// two devices with the same or a look-alike name apart.
+func keyFingerprint(key []byte) string {
+	sum := sha256.Sum256(key)
+	h := hex.EncodeToString(sum[:8])
+	return h[0:4] + " " + h[4:8] + " " + h[8:12] + " " + h[12:16]
+}
+
+// fingerprintOfHex is keyFingerprint for a key kept as hex; "" when it is not one.
+func fingerprintOfHex(key string) string {
+	raw, err := hex.DecodeString(key)
+	if err != nil || len(raw) != 32 {
+		return ""
+	}
+	return keyFingerprint(raw)
+}
 
 // pairedMac is one Mac this computer trusts.
 type pairedMac struct {
@@ -186,6 +206,8 @@ type pairingRunner interface {
 	Done() <-chan struct{}
 	Err() error
 	Confirm() ([]byte, error)
+	// PeerKey is the Mac's static key; valid once the code has been delivered.
+	PeerKey() []byte
 	Reject()
 	Cancel()
 }
@@ -266,6 +288,10 @@ func (a *pairingAttempt) Done() <-chan struct{} { return a.run.Done() }
 
 // Err is why it failed, nil if it did not.
 func (a *pairingAttempt) Err() error { return a.run.Err() }
+
+// Fingerprint is the short fingerprint of the Mac's key, to show next to the
+// code. Only meaningful after the code has been delivered.
+func (a *pairingAttempt) Fingerprint() string { return keyFingerprint(a.run.PeerKey()) }
 
 // Confirm is the person saying the codes match: the Mac's key is pinned in the keyring.
 func (a *pairingAttempt) Confirm(name string) (pairedMac, error) {

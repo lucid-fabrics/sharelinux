@@ -14,6 +14,7 @@ import (
 
 	"github.com/flynn/noise"
 	"github.com/nekohasekai/open-screen-sharing/internal/machelper"
+	"github.com/zalando/go-keyring"
 )
 
 // fakeRun is a pairing attempt with no network.
@@ -40,8 +41,9 @@ func (f *fakeRun) Confirm() ([]byte, error) {
 	f.confirms++
 	return f.macKey, nil
 }
-func (f *fakeRun) Reject() { f.mu.Lock(); f.rejected = true; f.mu.Unlock() }
-func (f *fakeRun) Cancel() { f.mu.Lock(); f.canceled = true; f.mu.Unlock() }
+func (f *fakeRun) PeerKey() []byte { return f.macKey }
+func (f *fakeRun) Reject()         { f.mu.Lock(); f.rejected = true; f.mu.Unlock() }
+func (f *fakeRun) Cancel()         { f.mu.Lock(); f.canceled = true; f.mu.Unlock() }
 
 func testKeys() *helperKeys { return &helperKeys{secrets: memorySecrets{}} }
 
@@ -294,5 +296,76 @@ func TestDefaultsForTheDialog(t *testing.T) {
 	}
 	if _, err := machelper.NormalizeDeviceName(defaultDeviceName()); err != nil {
 		t.Fatalf("the default name is not allowed on the Mac: %v", err)
+	}
+}
+
+// A program that put an item under the legacy service name must not be able to
+// supply this computer's key or a trusted Mac: helper items never read it.
+func TestHelperItemsAreNeverReadFromOrDeletedInTheLegacyService(t *testing.T) {
+	keyring.MockInit()
+	secrets := keyringSecrets{}
+	foreignKey := hex.EncodeToString(bytes.Repeat([]byte{0x42}, 32))
+	foreignMacs := `[{"name":"Evil Mac","address":"203.0.113.9:5961","key":"` + macKeyHex(9) + `"}]`
+	if err := keyring.Set(legacyKeyringService, helperClientKeyID, foreignKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := keyring.Set(legacyKeyringService, helperMacsID, foreignMacs); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := secrets.Get(helperClientKeyID); !errors.Is(err, errNoSecret) {
+		t.Fatalf("the legacy client key was served: %v", err)
+	}
+	keys := &helperKeys{secrets: secrets}
+	macs, err := keys.Macs()
+	if err != nil || len(macs) != 0 {
+		t.Fatalf("a Mac from the legacy service was trusted: %v %v", macs, err)
+	}
+	key, err := keys.ClientKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hex.EncodeToString(key.Private) == foreignKey {
+		t.Fatal("the client key came from the legacy service")
+	}
+	if stored, err := keyring.Get(keyringService, helperClientKeyID); err != nil || stored != hex.EncodeToString(key.Private) {
+		t.Fatalf("the fresh key was not stored under the current service: %v", err)
+	}
+	// Removing a helper item leaves the legacy service alone.
+	if err := secrets.Delete(helperClientKeyID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := keyring.Get(legacyKeyringService, helperClientKeyID); err != nil {
+		t.Fatalf("a helper delete touched the legacy service: %v", err)
+	}
+
+	// Saved connection passwords still fall back and are cleaned up in both places.
+	if err := keyring.Set(legacyKeyringService, "user@host:5900", "old-password"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := secrets.Get("user@host:5900"); err != nil || got != "old-password" {
+		t.Fatalf("a saved password lost its legacy fallback: %q %v", got, err)
+	}
+	if err := secrets.Delete("user@host:5900"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := keyring.Get(legacyKeyringService, "user@host:5900"); !errors.Is(err, keyring.ErrNotFound) {
+		t.Fatalf("the legacy password survived a delete: %v", err)
+	}
+}
+
+func TestKeyFingerprintIsTheSameStringTheMacShows(t *testing.T) {
+	// Pinned in the Swift tests (DeviceIdentityTests) for 32 bytes of 0x01.
+	if got := keyFingerprint(bytes.Repeat([]byte{1}, 32)); got != "72cd 6e84 22c4 07fb" {
+		t.Fatalf("fingerprint %q", got)
+	}
+	if got := fingerprintOfHex(macKeyHex(1)); got != "72cd 6e84 22c4 07fb" {
+		t.Fatalf("hex fingerprint %q", got)
+	}
+	if fingerprintOfHex("zz") != "" || fingerprintOfHex("abcd") != "" {
+		t.Fatal("a bad key got a fingerprint")
+	}
+	if keyFingerprint(bytes.Repeat([]byte{2}, 32)) == keyFingerprint(bytes.Repeat([]byte{1}, 32)) {
+		t.Fatal("two keys share a fingerprint")
 	}
 }

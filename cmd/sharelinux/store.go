@@ -20,7 +20,16 @@ const (
 	// legacyKeyringService is where an earlier build kept passwords. It is still
 	// read, so saved Macs keep working, but nothing is written to it.
 	legacyKeyringService = "open-screen-sharing"
+	// helperSecretPrefix starts the id of every Mouse helper item (the client key
+	// and the pinned Macs). Those were never kept under the legacy service name,
+	// so they are never read from or deleted there: a program that put an item
+	// under the old name must not be able to supply a key or a Mac.
+	helperSecretPrefix = "mouse-helper/"
 )
+
+// hasLegacyCopy says whether an earlier build could have saved this id under
+// the legacy service. Only saved connection passwords could.
+func hasLegacyCopy(id string) bool { return !strings.HasPrefix(id, helperSecretPrefix) }
 
 // savedConnection is one entry of connections.json. It never holds a password.
 type savedConnection struct {
@@ -56,7 +65,7 @@ type keyringSecrets struct{}
 
 func (keyringSecrets) Get(id string) (string, error) {
 	password, err := keyring.Get(keyringService, id)
-	if errors.Is(err, keyring.ErrNotFound) {
+	if errors.Is(err, keyring.ErrNotFound) && hasLegacyCopy(id) {
 		password, err = keyring.Get(legacyKeyringService, id)
 	}
 	if errors.Is(err, keyring.ErrNotFound) {
@@ -73,6 +82,9 @@ func (keyringSecrets) Delete(id string) error {
 	err := keyring.Delete(keyringService, id)
 	if errors.Is(err, keyring.ErrNotFound) {
 		err = nil
+	}
+	if !hasLegacyCopy(id) {
+		return err
 	}
 	legacyErr := keyring.Delete(legacyKeyringService, id)
 	if errors.Is(legacyErr, keyring.ErrNotFound) {

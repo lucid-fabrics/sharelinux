@@ -151,6 +151,11 @@ func (r *PairingRun) DatagramsSent() int {
 	return r.sent
 }
 
+// PeerKey is the Mac's static key as the handshake produced it. It is only
+// shown (as a fingerprint) to the person; pinning still happens through
+// Confirm, after the codes were compared. Valid once Code has delivered.
+func (r *PairingRun) PeerKey() []byte { return r.ini.PeerStatic() }
+
 // Confirm is the person saying the codes match. It returns the Mac's static
 // key, which the caller pins. Only valid while a code is waiting.
 func (r *PairingRun) Confirm() ([]byte, error) {

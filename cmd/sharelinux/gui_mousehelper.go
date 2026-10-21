@@ -61,7 +61,7 @@ func (h *helperGroup) apply(macs []pairedMac, err error) {
 	for _, mac := range macs {
 		row := adw.NewActionRow()
 		row.SetTitle(glib.MarkupEscapeText(mac.Name))
-		row.SetSubtitle(glib.MarkupEscapeText(mac.Address))
+		row.SetSubtitle(glib.MarkupEscapeText(mac.Address + " \u00b7 " + fingerprintOfHex(mac.Key)))
 		remove := gtk.NewButtonWithLabel("Remove")
 		remove.SetVAlign(gtk.AlignCenter)
 		remove.AddCSSClass("flat")
@@ -315,7 +315,7 @@ func (p *pairDialog) begin() {
 			}
 			onMain(func() {
 				p.code.SetMarkup(`<span size="300%" weight="bold">` + code[:3] + " " + code[3:] + `</span>`)
-				p.codeNote.SetLabel("This computer shows up on the Mac as " + quoteName(selfName) + ".")
+				p.codeNote.SetLabel("This computer shows up on the Mac as " + quoteName(selfName) + ".\nThe Mac's key: " + attempt.Fingerprint())
 				p.stack.SetVisibleChildName("compare")
 			})
 			<-attempt.Done()
