@@ -129,6 +129,9 @@ public final class HelperRuntime {
             clock: clock, timestamps: timestamps)
         controller.onInjectingChange = { [weak self] _ in self?.publish() }
         pairing?.onPairedChanged = { [weak self] in self?.pairedKeysChanged() }
+        // Called on `queue`, where `device` lives. A live session means the person's own
+        // clicks may be landing on the pairing window: no new pairing meanwhile.
+        pairing?.isSessionActive = { [weak self] in self?.device != nil }
         mon.refresh()
     }
 

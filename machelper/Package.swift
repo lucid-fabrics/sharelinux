@@ -40,5 +40,7 @@ let package = Package(
             resources: [.copy("Resources/noise-vectors.json")]
         ),
         .testTarget(name: "HelperRuntimeTests", dependencies: ["HelperRuntime", "HelperCore"]),
+        // The pairing window's rules (no default Confirm, one-second click guard, covered window).
+        .testTarget(name: "PairingUITests", dependencies: ["PairingUI", "HelperRuntime", "HelperCore"]),
     ]
 )

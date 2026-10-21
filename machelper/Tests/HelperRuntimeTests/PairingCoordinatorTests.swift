@@ -55,6 +55,15 @@ final class PairingCoordinatorTests: XCTestCase {
         return true
     }
 
+    /// The person looks at the code for a moment, then clicks Confirm on what is on screen.
+    @discardableResult
+    func confirmDisplayed(_ rig: RuntimeRig, wait: Double = 1.1) -> ConfirmRefusal? {
+        advance(rig, wait)
+        let s = rig.coordinator!.status
+        guard let code = s.phaseCode, let key = s.pendingKey else { return .noAttempt }
+        return rig.coordinator!.confirm(code: code, peerKey: key)
+    }
+
     func advance(_ rig: RuntimeRig, _ s: Double) { rig.mono += s; rig.wall = rig.wall.addingTimeInterval(s); rig.runtime.tick() }
 
     /// Pairing is something only the owner's local click starts.
@@ -77,7 +86,7 @@ final class PairingCoordinatorTests: XCTestCase {
         XCTAssertTrue(try pair(rig, l))
         let code = try XCTUnwrap(l.code)
         XCTAssertEqual(rig.coordinator?.status.phase, .confirm(code: code, device: "Desk PC"))
-        rig.coordinator?.confirm()
+        confirmDisplayed(rig)
         XCTAssertEqual(rig.coordinator?.status.phase, .closed)
         XCTAssertEqual(rig.coordinator?.status.notice, .paired("Desk PC"))
         XCTAssertEqual(rig.coordinator?.status.devices, [PairedDevice(name: "Desk PC", key: rig.linuxKey.publicKey.rawRepresentation)])
@@ -153,7 +162,7 @@ final class PairingCoordinatorTests: XCTestCase {
         rig.keyStore?.failWrites = true
         rig.coordinator?.open()
         try pair(rig, try LinuxPairer(key: rig.linuxKey))
-        rig.coordinator?.confirm()
+        confirmDisplayed(rig)
         XCTAssertEqual(rig.coordinator?.status.devices, [])
         guard case .storeFailed = rig.coordinator!.status.notice else { return XCTFail("no store failure notice") }
         XCTAssertNil(try rig.connectIfAnswered())
@@ -164,7 +173,7 @@ final class PairingCoordinatorTests: XCTestCase {
         let rig = RuntimeRig(pairing: true)
         rig.coordinator?.open()
         try pair(rig, try LinuxPairer(key: rig.linuxKey, name: "Desk PC"))
-        rig.coordinator?.confirm()
+        confirmDisplayed(rig)
         rig.runtime.setAllowRawMouse(true)
         rig.run(0.2)
         let c = try rig.connect()
@@ -186,7 +195,7 @@ final class PairingCoordinatorTests: XCTestCase {
         let rig = RuntimeRig(pairing: true)
         rig.coordinator?.open()
         try pair(rig, try LinuxPairer(key: rig.linuxKey))
-        rig.coordinator?.confirm()
+        confirmDisplayed(rig)
         rig.runtime.setAllowRawMouse(true)
         rig.run(0.2)
         let c = try rig.connect()
@@ -209,12 +218,142 @@ final class PairingCoordinatorTests: XCTestCase {
             XCTAssertTrue(rig.coordinator!.open(), "round \(round)")
             let l = try LinuxPairer(key: rig.linuxKey, name: "Desk PC")
             try pair(rig, l)
-            rig.coordinator?.confirm()
+            confirmDisplayed(rig)
             XCTAssertEqual(rig.coordinator?.status.devices.count, 1, "round \(round)")
             rig.runtime.queue.sync { _ = rig.runtime.removePairedDevice(rig.linuxKey.publicKey.rawRepresentation) }
             rig.runtime.queue.sync {}
             XCTAssertEqual(rig.coordinator?.status.devices, [], "round \(round)")
         }
+    }
+
+    // MARK: Confirm must match what is on screen (security audit W3, finding 1)
+
+    /// A click aimed at one attempt must never pair another one: the attempt on screen
+    /// was replaced while the person was moving the mouse.
+    func testAConfirmForAnAttemptThatIsNoLongerOnScreenPairsNothing() throws {
+        let rig = RuntimeRig(pairing: true)
+        rig.coordinator?.open()
+        try pair(rig, try LinuxPairer(key: rig.linuxKey, name: "Desk PC"))
+        advance(rig, 2)
+        let first = rig.coordinator!.status
+        let staleCode = try XCTUnwrap(first.phaseCode), staleKey = try XCTUnwrap(first.pendingKey)
+        // The first attempt is rejected and another device (Mallory) takes its place.
+        rig.coordinator?.reject()
+        advance(rig, 2)
+        let mallory = PrivKey()
+        try pair(rig, try LinuxPairer(key: mallory, name: "Desk PC"), from: other)
+        advance(rig, 2)
+        let shown = rig.coordinator!.status
+        XCTAssertNotEqual(shown.pendingKey, staleKey)
+        // The old tuple (code and key of attempt 1) must not confirm attempt 2.
+        XCTAssertEqual(rig.coordinator?.confirm(code: staleCode, peerKey: staleKey), .staleAttempt)
+        // Right code, wrong key; right key, wrong code.
+        XCTAssertEqual(rig.coordinator?.confirm(code: try XCTUnwrap(shown.phaseCode), peerKey: staleKey), .staleAttempt)
+        XCTAssertEqual(rig.coordinator?.confirm(code: staleCode, peerKey: try XCTUnwrap(shown.pendingKey)), .staleAttempt)
+        XCTAssertEqual(rig.coordinator?.status.devices, [], "nothing was paired")
+        XCTAssertEqual(try rig.keyStore?.loadPaired(), [])
+        XCTAssertEqual(rig.coordinator?.status.notice, .refused(.staleAttempt))
+        if case .confirm = rig.coordinator!.status.phase {} else { XCTFail("the attempt is still open for the right click") }
+        // The matching tuple works.
+        XCTAssertNil(rig.coordinator?.confirm(code: try XCTUnwrap(shown.phaseCode), peerKey: try XCTUnwrap(shown.pendingKey)))
+        XCTAssertEqual(rig.coordinator?.status.devices.map(\.key), [mallory.publicKey.rawRepresentation])
+    }
+
+    func testAConfirmWithNothingWaitingIsRefused() {
+        let rig = RuntimeRig(pairing: true)
+        XCTAssertEqual(rig.coordinator?.confirm(code: "123456", peerKey: Data(count: 32)), .noAttempt)
+        rig.coordinator?.open()
+        XCTAssertEqual(rig.coordinator?.confirm(code: "123456", peerKey: Data(count: 32)), .noAttempt)
+        XCTAssertEqual(rig.coordinator?.status.devices, [])
+    }
+
+    func testAClickWithinOneSecondOfTheCodeAppearingIsIgnoredAndTheClockRestartsOnANewCode() throws {
+        let rig = RuntimeRig(pairing: true)
+        rig.coordinator?.open()
+        try pair(rig, try LinuxPairer(key: rig.linuxKey, name: "Desk PC"))
+        XCTAssertEqual(confirmDisplayed(rig, wait: 0.5), .tooSoon)
+        XCTAssertEqual(rig.coordinator?.status.devices, [])
+        XCTAssertEqual(rig.coordinator?.status.notice, .refused(.tooSoon))
+        XCTAssertNil(confirmDisplayed(rig, wait: 0.6), "1.1 s after the code appeared")
+        XCTAssertEqual(rig.coordinator?.status.devices.count, 1)
+
+        // A new code after a long wait starts the second again.
+        let rig2 = RuntimeRig(pairing: true)
+        rig2.coordinator?.open()
+        try pair(rig2, try LinuxPairer(name: "First"))
+        advance(rig2, 60)
+        rig2.coordinator?.reject()
+        advance(rig2, 3)
+        try pair(rig2, try LinuxPairer(name: "Second"))
+        XCTAssertEqual(confirmDisplayed(rig2, wait: 0.3), .tooSoon, "the new code has been up for 0.3 s, not 60")
+    }
+
+    // MARK: a live session blocks pairing (finding 6)
+
+    func testWhileASessionIsLiveNoWindowOpensAndNoConfirmWorks() throws {
+        let rig = RuntimeRig(pairing: true)
+        // Pair the first device and start its session.
+        rig.coordinator?.open()
+        try pair(rig, try LinuxPairer(key: rig.linuxKey, name: "Desk PC"))
+        XCTAssertNil(confirmDisplayed(rig))
+        rig.runtime.setAllowRawMouse(true)
+        rig.run(0.2)
+        _ = try rig.connect()
+        XCTAssertEqual(rig.runtime.state.device, "Desk PC")
+        // A click from that session cannot open a second pairing.
+        XCTAssertFalse(rig.coordinator!.open())
+        XCTAssertEqual(rig.coordinator?.status.notice, .refused(.sessionActive))
+        XCTAssertEqual(rig.coordinator?.status.phase, .closed)
+        XCTAssertFalse(try pair(rig, try LinuxPairer(name: "Intruder")), "no window, no reply")
+    }
+
+    func testAnAlreadyOpenWindowRefusesConfirmOnceASessionStarts() throws {
+        let rig = RuntimeRig(pairing: true)
+        rig.coordinator?.open()
+        try pair(rig, try LinuxPairer(key: rig.linuxKey, name: "Desk PC"))
+        XCTAssertNil(confirmDisplayed(rig))
+        // Window two, with a second device waiting; then the first device starts a session.
+        advance(rig, 3)
+        XCTAssertTrue(rig.coordinator!.open())
+        let second = PrivKey()
+        try pair(rig, try LinuxPairer(key: second, name: "Second PC"), from: other)
+        advance(rig, 1.1)  // the code has been up long enough, so only the session can refuse
+        rig.runtime.setAllowRawMouse(true)
+        rig.run(0.2)
+        _ = try rig.connect()
+        let shown = rig.coordinator!.status
+        XCTAssertEqual(rig.coordinator?.confirm(code: try XCTUnwrap(shown.phaseCode), peerKey: try XCTUnwrap(shown.pendingKey)), .sessionActive)
+        XCTAssertEqual(rig.coordinator?.status.devices.count, 1, "the second device was not paired")
+    }
+
+    // MARK: look-alike names (finding 5)
+
+    func testALookAlikeOfAPairedDeviceCannotBePaired() throws {
+        let rig = RuntimeRig(pairing: true)
+        rig.coordinator?.open()
+        try pair(rig, try LinuxPairer(key: rig.linuxKey, name: "Desk PC"))
+        XCTAssertNil(confirmDisplayed(rig))
+        advance(rig, 3)
+        rig.coordinator?.open()
+        let impostor = PrivKey()
+        try pair(rig, try LinuxPairer(key: impostor, name: "Desk \u{0420}\u{0421}"), from: other)  // Cyrillic P and C
+        XCTAssertEqual(rig.coordinator?.status.nameCollision, "Desk PC", "the window can say why before the click")
+        XCTAssertEqual(confirmDisplayed(rig), .nameCollision("Desk PC"))
+        XCTAssertEqual(rig.coordinator?.status.devices.count, 1)
+        XCTAssertNotNil(PairingText.notice(rig.coordinator!.status))
+        // The same device (same key) coming back with the same name is not a collision.
+        rig.coordinator?.reject()
+        advance(rig, 3)
+        try pair(rig, try LinuxPairer(key: rig.linuxKey, name: "Desk PC"))
+        XCTAssertNil(rig.coordinator?.status.nameCollision)
+        XCTAssertNil(confirmDisplayed(rig))
+    }
+
+    func testRecordsTheStoreIgnoredAreShownToTheOwner() {
+        let rig = RuntimeRig(pairing: true)
+        rig.keyStore?.ignoredRecords = 2
+        XCTAssertEqual(rig.coordinator?.status.ignoredRecords, 2)
+        XCTAssertTrue(PairingText.notice(rig.coordinator!.status)!.contains("2 unrecognised"))
     }
 
     // MARK: man in the middle

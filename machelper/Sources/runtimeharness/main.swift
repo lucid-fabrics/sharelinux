@@ -151,7 +151,19 @@ while let line = readLine(strippingNewline: true) {
             guard let c = coordinator else { out("ERR started without --pairing"); break }
             switch parts.count > 1 ? parts[1] : "" {
             case "open": c.open()
-            case "confirm": c.confirm()
+            case "confirm":
+                // Confirms the code and key now on screen, like the window does; the
+                // one-second rule means a script that confirms at once waits for it.
+                var refusal: ConfirmRefusal? = .tooSoon
+                for _ in 0..<30 where refusal == .tooSoon {
+                    guard case .confirm(let code, _) = c.status.phase, let key = c.status.pendingKey else {
+                        refusal = .noAttempt
+                        break
+                    }
+                    refusal = c.confirm(code: code, peerKey: key)
+                    if refusal == .tooSoon { Thread.sleep(forTimeInterval: 0.1) }
+                }
+                if let refusal { out("ERR confirm refused: \(refusal)") }
             case "reject": c.reject()
             case "close": c.close()
             case "reset": c.resetCooldown()

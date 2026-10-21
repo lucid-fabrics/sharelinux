@@ -30,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var stateItem: NSMenuItem!
     private var toggleItem: NSMenuItem!
     private var grantItem: NSMenuItem!
+    private var pairItem: NSMenuItem!
     private var state = RuntimeState(allowRawMouse: false, device: nil, injecting: false, lastDeny: nil)
     private var notificationsAsked = false
     private var pairing: PairingCoordinator!
@@ -71,7 +72,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         runtime.onSessionStart = { [weak self] device in DispatchQueue.main.async { self?.notifySessionStart(device) } }
 
         pairingWindow = PairingWindowController()
-        pairingWindow.onConfirm = { [unowned self] in runtime.queue.async { self.pairing.confirm() } }
+        pairingWindow.onConfirm = { [unowned self] code, key in
+            runtime.queue.async { self.pairing.confirm(code: code, peerKey: key) }
+        }
         pairingWindow.onReject = { [unowned self] in runtime.queue.async { self.pairing.reject() } }
         pairingWindow.onClose = { [unowned self] in runtime.queue.async { self.pairing.close() } }
         pairingWindow.onUnlock = { [unowned self] in runtime.queue.async { self.pairing.resetCooldown() } }
@@ -121,9 +124,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         grantItem.target = self
         menu.addItem(grantItem)
         // The only way to open a pairing window: the owner's click, here.
-        let pair = NSMenuItem(title: "Pair a Linux device...", action: #selector(openPairing), keyEquivalent: "")
-        pair.target = self
-        menu.addItem(pair)
+        pairItem = NSMenuItem(title: PairingText.pairMenuItem, action: #selector(openPairing), keyEquivalent: "")
+        pairItem.target = self
+        menu.addItem(pairItem)
         menu.addItem(.separator())
         let quit = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
         quit.target = self
@@ -151,6 +154,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             stateItem.title = s.allowRawMouse ? "Raw mouse is on, waiting for a device" : "Raw mouse is off"
         }
         grantItem.isHidden = SystemAccessSource().granted()
+        // While any session is live, no new pairing can be started from the menu.
+        pairItem.isEnabled = s.device == nil
+        pairItem.title = s.device == nil ? PairingText.pairMenuItem : PairingText.pairMenuItemBusy
     }
 
     private static func describe(_ s: HelperState) -> String {
@@ -174,7 +180,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func stopNow() { runtime.emergencyStop(.kill) }
 
     @objc private func openPairing() {
-        pairingWindow.present()
+        // Not while a helper session is live: that session's clicks could be the ones landing here.
+        guard state.device == nil else { return }
+        pairingWindow.presentFromOwnerClick()
         runtime.queue.async { self.pairing.open() }
     }
 

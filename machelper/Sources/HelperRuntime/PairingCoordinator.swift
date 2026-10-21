@@ -23,13 +23,38 @@ public struct PairingStatus: Equatable, Sendable {
         case expired
         case closedAfterFailures
         case storeFailed(String)
+        /// A Confirm (or a new window) was refused; the reason is shown.
+        case refused(ConfirmRefusal)
     }
     public var phase: Phase = .closed
     /// Another address tried to start or finish a pairing while one was in progress.
     public var anotherDeviceTrying = false
     public var notice: Notice?
     public var devices: [PairedDevice] = []
+    /// The key of the device whose code is on screen (set with `.confirm`). A
+    /// Confirm must name this key and that code, or it is refused.
+    public var pendingKey: Data?
+    /// The paired device whose name looks like the pending device's name, if any.
+    public var nameCollision: String?
+    /// Items in the key store that this app did not write (they grant nothing).
+    public var ignoredRecords = 0
     public init() {}
+}
+
+/// Why a Confirm did nothing. Each is a plain sentence in `PairingText`.
+public enum ConfirmRefusal: Equatable, Sendable {
+    /// Nothing is waiting for a decision.
+    case noAttempt
+    /// The Confirm named another device or code than the one now on screen.
+    case staleAttempt
+    /// The click came within a second of the code appearing or changing.
+    case tooSoon
+    /// A helper session is live: its clicks could be the ones landing here.
+    case sessionActive
+    /// The pending device's name looks like that of a device already paired.
+    case nameCollision(String)
+    /// Another window covers the pairing window (checked by the window).
+    case windowCovered
 }
 
 /// The Mac side of the pairing flow, without any AppKit: opens the pairing
@@ -52,7 +77,17 @@ public final class PairingCoordinator {
     private var notice: PairingStatus.Notice?
     private var anotherDeviceTrying = false
     private var lastPublished: PairingStatus?
+    /// What the person is looking at, and since when (monotonic seconds).
+    private var displayed: (code: String, key: Data, since: Double)?
     private let log = Logger(subsystem: "io.github.sharelinux.mousehelper", category: "pairing")
+
+    /// A click on Confirm within this many seconds of the code appearing or
+    /// changing is ignored: it was aimed at something else.
+    public static let minConfirmDelay = 1.0
+
+    /// True while a helper session is live (the runtime sets this). Its clicks
+    /// may be what lands on the window, so pairing is refused meanwhile.
+    public var isSessionActive: () -> Bool = { false }
 
     /// Called on the runtime queue whenever the status changes.
     public var onChange: ((PairingStatus) -> Void)?
@@ -80,16 +115,27 @@ public final class PairingCoordinator {
         s.devices = devices
         s.anotherDeviceTrying = anotherDeviceTrying
         s.notice = notice
+        s.ignoredRecords = store.ignoredRecords
         if let remaining = ledger.lockoutRemaining {
             s.phase = .lockedOut(seconds: remaining.rounded(.up))
         } else if let w = window, w.isOpen {
             if let p = w.pending, let code = p.sas, let name = p.deviceName {
                 s.phase = .confirm(code: code, device: name)
+                s.pendingKey = p.remoteStatic
+                s.nameCollision = collidingDevice(name: name, key: p.remoteStatic)
             } else {
                 s.phase = .waiting
             }
         }
         return s
+    }
+
+    /// A paired device (under another key) whose name looks like `name`.
+    private func collidingDevice(name: String, key: Data?) -> String? {
+        devices.first { d in
+            if let key, constantTimeEqual(d.key, key) { return false }
+            return DeviceIdentity.looksAlike(d.name, name)
+        }?.name
     }
 
     // MARK: local actions (the owner, at the Mac)
@@ -102,6 +148,11 @@ public final class PairingCoordinator {
         window = nil
         notice = nil
         anotherDeviceTrying = false
+        if isSessionActive() {
+            notice = .refused(.sessionActive)
+            publish()
+            return false
+        }
         if ledger.isLockedOut { publish(); return false }
         let w = PairingWindow(staticKey: staticKey, clock: monotonic, nonceSource: nonceSource, ledger: ledger)
         w.onEvent = { [weak self] e in self?.windowEvent(e) }
@@ -118,12 +169,29 @@ public final class PairingCoordinator {
         publish()
     }
 
-    /// "Confirm": the person says the codes match. Pins the device in the key
-    /// store; if the store refuses, nothing is paired and the notice says so.
-    public func confirm() {
-        guard let w = window, let paired = w.confirm() else { return }
+    /// "Confirm": the person says the codes match. It must name the code and
+    /// the device key now on screen: a Confirm for anything else (an attempt
+    /// that was replaced while the person was clicking) is refused and pairs
+    /// nothing. Also refused within `minConfirmDelay` of the code appearing or
+    /// changing, while a helper session is live, and when the device's name
+    /// looks like one already paired. Pins the device in the key store; if the
+    /// store refuses, nothing is paired and the notice says so.
+    /// - Returns: nil when the device was handed to the store, otherwise why not.
+    @discardableResult
+    public func confirm(code: String, peerKey: Data) -> ConfirmRefusal? {
+        track()
+        let refusal = confirmRefusal(code: code, peerKey: peerKey)
+        if let refusal {
+            // A refusal keeps the attempt open (the person can look again), except
+            // that the reason is shown.
+            notice = .refused(refusal)
+            publish()
+            return refusal
+        }
+        guard let w = window, let paired = w.confirm() else { return .noAttempt }
         window = nil
         anotherDeviceTrying = false
+        displayed = nil
         do {
             try store.addPaired(PairedDevice(name: paired.name, key: paired.key))
             devices = try store.loadPaired()
@@ -135,6 +203,28 @@ public final class PairingCoordinator {
             notice = .storeFailed("The Keychain did not accept the key.")
             log.error("could not store a paired key")
             publish()
+        }
+        return nil
+    }
+
+    private func confirmRefusal(code: String, peerKey: Data) -> ConfirmRefusal? {
+        guard let w = window, w.isOpen, let p = w.pending, let sas = p.sas, let key = p.remoteStatic,
+            let name = p.deviceName
+        else { return .noAttempt }
+        guard code == sas, constantTimeEqual(key, peerKey) else { return .staleAttempt }
+        if isSessionActive() { return .sessionActive }
+        if let shown = displayed, monotonic() - shown.since < Self.minConfirmDelay { return .tooSoon }
+        if let other = collidingDevice(name: name, key: key) { return .nameCollision(other) }
+        return nil
+    }
+
+    /// Notes when the code on screen appeared or changed.
+    private func track() {
+        if let w = window, w.isOpen, let p = w.pending, let sas = p.sas, let key = p.remoteStatic {
+            if let d = displayed, d.code == sas, constantTimeEqual(d.key, key) { return }
+            displayed = (sas, key, monotonic())
+        } else {
+            displayed = nil
         }
     }
 
@@ -205,6 +295,7 @@ public final class PairingCoordinator {
     }
 
     private func publish() {
+        track()
         let s = status
         guard s != lastPublished else { return }
         lastPublished = s
