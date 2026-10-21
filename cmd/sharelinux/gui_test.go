@@ -3,6 +3,7 @@
 package main
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
@@ -19,6 +20,10 @@ func requireDisplay(t *testing.T) {
 	if !gtk.InitCheck() || gdk.DisplayGetDefault() == nil {
 		t.Skip("GTK needs a display (run under Xvfb)")
 	}
+	// A GL context belongs to one thread, so a test that draws must not hop between threads: on
+	// llvmpipe a hop aborts in epoxy ("Couldn't find current GLX or EGL context").
+	runtime.LockOSThread()
+	t.Cleanup(runtime.UnlockOSThread)
 }
 
 func TestModifiersFoldGDKState(t *testing.T) {

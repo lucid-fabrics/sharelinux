@@ -3,7 +3,6 @@
 package main
 
 import (
-	"runtime"
 	"testing"
 	"time"
 
@@ -16,9 +15,6 @@ import (
 func shownScreen(t *testing.T, clip *mockmedia.Clip) *screenView {
 	t.Helper()
 	requireDisplay(t)
-	// GL contexts belong to a thread: the goroutine that draws must stay on one.
-	runtime.LockOSThread()
-	t.Cleanup(runtime.UnlockOSThread)
 	view := newScreenView()
 	window := gtk.NewWindow()
 	window.SetDefaultSize(400, 300)
