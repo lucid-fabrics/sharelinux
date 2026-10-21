@@ -3,7 +3,14 @@ import Foundation
 /// Newest accepted handshake timestamp per paired device. It survives a helper
 /// restart, so a captured initiation cannot be replayed inside the 300 s clock
 /// window just because the in-memory table was lost.
+public enum TimestampStoreError: Error, Equatable {
+    /// There is no stored table at all: the first run (or the file was removed).
+    /// The channel then starts a floor at "now" instead of trusting nothing.
+    case missing
+}
+
 public protocol TimestampStore: AnyObject {
+    /// Throws `TimestampStoreError.missing` when nothing was ever stored.
     func load() throws -> [Data: Data]
     /// Must be durable before it returns; a throw makes the channel refuse the handshake.
     func save(peer: Data, timestamp: Data) throws
@@ -26,8 +33,11 @@ public final class MemoryTimestampStore: TimestampStore {
     public func moveCorruptAside() throws { table = [:] }
 }
 
-/// JSON file {peerKeyHex: timestampHex}, replaced atomically, mode 0600. A
-/// missing file is an empty table; an unreadable or malformed one throws, and
+/// JSON file {peerKeyHex: timestampHex}, replaced atomically, created with
+/// mode 0600 (see `AtomicFile`). A missing file throws `.missing`, which the
+/// channel treats as a first run: it stores a "now" floor at once, so a
+/// datagram captured before the file existed (or before it was deleted) is
+/// not replayable. An unreadable or malformed one throws, and
 /// the channel then moves it aside (`moveCorruptAside`) and restarts with a
 /// fresh floor, or refuses handshakes if even that fails.
 public final class FileTimestampStore: TimestampStore {
@@ -38,7 +48,7 @@ public final class FileTimestampStore: TimestampStore {
 
     public func load() throws -> [Data: Data] {
         if let table { return table }
-        guard FileManager.default.fileExists(atPath: url.path) else { table = [:]; return [:] }
+        guard FileManager.default.fileExists(atPath: url.path) else { throw TimestampStoreError.missing }
         let raw = try JSONDecoder().decode([String: String].self, from: Data(contentsOf: url))
         var out: [Data: Data] = [:]
         for (k, v) in raw {
@@ -64,12 +74,12 @@ public final class FileTimestampStore: TimestampStore {
     }
 
     public func save(peer: Data, timestamp: Data) throws {
-        var t = try load()
+        var t: [Data: Data]
+        do { t = try load() } catch TimestampStoreError.missing { t = [:] }
         t[peer] = timestamp
         let raw = Dictionary(uniqueKeysWithValues: t.map { ($0.key.hex, $0.value.hex) })
         let data = try JSONEncoder().encode(raw)
-        try data.write(to: url, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        try AtomicFile.write(data, to: url)
         table = t
     }
 }

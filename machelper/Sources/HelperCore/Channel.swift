@@ -146,6 +146,8 @@ public final class HelperChannel {
     /// wall clock passes the recovery time no initiation is newer than the
     /// floor, so nothing captured earlier can be replayed.
     public private(set) var timestampStoreRecovered = false
+    /// True when there was no store at all (first run): same floor rule.
+    public private(set) var timestampStoreFirstRun = false
     /// Not a real peer: the entry that holds the recovery floor. Persisted like
     /// any timestamp so a second restart cannot lose it.
     static let timestampFloorKey = Data(count: 32)
@@ -171,7 +173,9 @@ public final class HelperChannel {
         self.ephemeralSource = ephemeralSource
         self.timestamps = timestamps
         mac1Key = Mac1.key(macPublic: staticKey.publicKey.rawRepresentation)
-        if let loaded = try? timestamps.load() { lastTimestamp = loaded } else { recoverTimestampStore() }
+        do { lastTimestamp = try timestamps.load() } catch TimestampStoreError.missing {
+            startTimestampFloor(firstRun: true)
+        } catch { recoverTimestampStore() }
     }
 
     public var activePeerKey: Data? { active?.peerKey }
@@ -183,18 +187,35 @@ public final class HelperChannel {
     /// cannot be moved or the floor cannot be stored, handshakes stay refused.
     private func recoverTimestampStore() {
         timestampsTrusted = false
+        do { try timestamps.moveCorruptAside() } catch {
+            Logger(subsystem: "io.github.sharelinux.mousehelper", category: "channel").error(
+                "handshake timestamp store is unreadable and could not be recovered: handshakes refused")
+            return
+        }
+        startTimestampFloor(firstRun: false)
+    }
+
+    /// Stores "now" as the floor (first run, or after recovery). Until the
+    /// floor is stored handshakes stay refused. A first run is not an error, so
+    /// it is logged as plain information.
+    private func startTimestampFloor(firstRun: Bool) {
+        timestampsTrusted = false
         do {
-            try timestamps.moveCorruptAside()
             let floor = TAI64N.encode(clock.wall())
             try timestamps.save(peer: HelperChannel.timestampFloorKey, timestamp: floor)
             lastTimestamp = [HelperChannel.timestampFloorKey: floor]
             timestampsTrusted = true
-            timestampStoreRecovered = true
-            Logger(subsystem: "io.github.sharelinux.mousehelper", category: "channel").warning(
-                "handshake timestamp store was unreadable: moved aside and restarted with a fresh floor")
+            let log = Logger(subsystem: "io.github.sharelinux.mousehelper", category: "channel")
+            if firstRun {
+                timestampStoreFirstRun = true
+                log.info("no handshake timestamp store yet: created one with a floor of now")
+            } else {
+                timestampStoreRecovered = true
+                log.warning("handshake timestamp store was unreadable: moved aside and restarted with a fresh floor")
+            }
         } catch {
             Logger(subsystem: "io.github.sharelinux.mousehelper", category: "channel").error(
-                "handshake timestamp store is unreadable and could not be recovered: handshakes refused")
+                "handshake timestamp floor could not be stored: handshakes refused")
         }
     }
 
