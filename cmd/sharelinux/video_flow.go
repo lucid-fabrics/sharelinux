@@ -221,8 +221,22 @@ type restartPolicy struct {
 	Limit int
 	// Base is the first wait; each one doubles it.
 	Base time.Duration
+	// Cap is how many restarts are allowed within Window, whatever healthy() said in between: a stream
+	// that runs a few seconds and fails again must not be able to start over for ever. Zero means no cap.
+	Cap    int
+	Window time.Duration
 
 	attempts int
+	history  []time.Time
+	// clock is time.Now except in tests.
+	clock func() time.Time
+}
+
+func (p *restartPolicy) now() time.Time {
+	if p.clock != nil {
+		return p.clock()
+	}
+	return time.Now()
 }
 
 // next says what to do after a stream stopped: wait delay and start again, or
@@ -235,6 +249,20 @@ func (p *restartPolicy) next(kind stopKind) (delay time.Duration, restart bool) 
 	if p.attempts >= p.Limit {
 		return 0, false
 	}
+	if p.Cap > 0 {
+		now := p.now()
+		kept := p.history[:0]
+		for _, at := range p.history {
+			if now.Sub(at) < p.Window {
+				kept = append(kept, at)
+			}
+		}
+		p.history = kept
+		if len(p.history) >= p.Cap {
+			return 0, false
+		}
+		p.history = append(p.history, now)
+	}
 	delay = p.Base << p.attempts
 	p.attempts++
 	return delay, true
@@ -243,4 +271,105 @@ func (p *restartPolicy) next(kind stopKind) (delay time.Duration, restart bool) 
 // healthy is called when pictures have flowed for a while: the next trouble starts the count again.
 func (p *restartPolicy) healthy() {
 	p.attempts = 0
+}
+
+// streamPulse is what a session knows of a running stream at one moment.
+type streamPulse struct {
+	// QuietFor is the time since the core delivered an access unit.
+	QuietFor time.Duration
+	// IdleFor is the time since a decoded picture was handed to the widget.
+	IdleFor time.Duration
+	// HeardFor is the time since the Mac's media transport showed any sign of life: a packet or a sender report.
+	HeardFor time.Duration
+}
+
+var (
+	errVideoStalled = errors.New("the Mac stopped sending video")
+	errVideoFrozen  = errors.New("the video arrives but no picture is shown")
+)
+
+// stallKind says what is wrong with a stream.
+type stallKind int
+
+const (
+	stallNone stallKind = iota
+	// stallSilent: the Mac stopped sending and its transport is dead too.
+	stallSilent
+	// stallFrozen: units keep arriving and no picture reaches the widget.
+	stallFrozen
+)
+
+// judgeStall says whether a stream that should be showing is stuck. A Mac that has nothing new
+// to show may send no units, so silence alone is not a stall while its transport still answers;
+// units that arrive and are not shown are one, whatever the transport says.
+func judgeStall(pulse streamPulse, limit time.Duration) stallKind {
+	if pulse.QuietFor >= limit && pulse.HeardFor >= limit {
+		return stallSilent
+	}
+	if pulse.QuietFor < limit && pulse.IdleFor >= limit {
+		return stallFrozen
+	}
+	return stallNone
+}
+
+// heardWatch turns the media transport's counters into the time since they last moved.
+type heardWatch struct {
+	packets, reports uint64
+	changed          time.Time
+}
+
+// see takes the counters at now and returns how long it has been since either grew.
+func (h *heardWatch) see(packets, reports uint64, now time.Time) time.Duration {
+	if h.changed.IsZero() || packets != h.packets || reports != h.reports {
+		h.packets, h.reports, h.changed = packets, reports, now
+		return 0
+	}
+	return now.Sub(h.changed)
+}
+
+// callQueue runs calls one after the other on a goroutine of its own, in the order they were
+// queued. It never blocks the caller and never reorders: a start and a stop must reach the Mac
+// in the order the session made them.
+type callQueue struct {
+	access  sync.Mutex
+	calls   []func()
+	running bool
+	closed  bool
+}
+
+// do queues a call. After close it does nothing.
+func (q *callQueue) do(call func()) {
+	q.access.Lock()
+	defer q.access.Unlock()
+	if q.closed {
+		return
+	}
+	q.calls = append(q.calls, call)
+	if !q.running {
+		q.running = true
+		go q.drain()
+	}
+}
+
+func (q *callQueue) drain() {
+	for {
+		q.access.Lock()
+		if len(q.calls) == 0 {
+			q.running = false
+			q.access.Unlock()
+			return
+		}
+		call := q.calls[0]
+		q.calls[0] = nil
+		q.calls = q.calls[1:]
+		q.access.Unlock()
+		call()
+	}
+}
+
+// close refuses new calls; the ones already queued still run.
+func (q *callQueue) close() {
+	q.access.Lock()
+	q.closed = true
+	q.access.Unlock()
 }

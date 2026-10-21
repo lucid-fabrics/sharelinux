@@ -8,7 +8,6 @@ import (
 	"time"
 
 	coreglib "github.com/diamondburned/gotk4/pkg/core/glib"
-	E "github.com/sagernet/sing/common/exceptions"
 )
 
 const (
@@ -19,8 +18,8 @@ const (
 	videoSettleVirtual = 1500 * time.Millisecond
 	// videoHealthy is how long pictures must flow before earlier trouble is forgotten.
 	videoHealthy = 5 * time.Second
-	// videoStall is how long a running stream may deliver nothing before it is started over. The Mac
-	// sends 60 units a second even for a still screen.
+	// videoStall is how long a running stream may deliver nothing, or deliver without a picture reaching
+	// the widget, before it is started over (see judgeStall).
 	videoStall = 6 * time.Second
 	// videoLogInterval is how often a running stream logs its counters.
 	videoLogInterval = 5 * time.Second
@@ -47,28 +46,23 @@ type videoSession struct {
 	loggedAt    time.Time
 	waitLogged  bool
 	// work runs the calls that start and stop the stream in order, off the main loop.
-	work   chan func()
-	closed bool
+	work callQueue
+	// heard tracks when the Mac's transport last showed a sign of life.
+	heard heardWatch
 }
 
 // do queues a call on the stream's worker, which runs them one after the other.
 func (vid *videoSession) do(call func()) {
-	if vid.closed {
-		return
-	}
-	if vid.work == nil {
-		vid.work = make(chan func(), 16)
-		go func() {
-			for call := range vid.work {
-				call()
-			}
-		}()
-	}
-	select {
-	case vid.work <- call:
-	default:
-		go call()
-	}
+	vid.work.do(call)
+}
+
+// retryDue is what the end of the wait before a restart decides: the stream starts again only
+// while the person is still on one display and the session wants it. When they went back to all
+// displays meanwhile, nothing starts and the retry is forgotten, so choosing a display again starts
+// it from maybeStartVideo.
+func (vid *videoSession) retryDue(ended, oneDisplay bool) bool {
+	vid.retry = 0
+	return !ended && !vid.gaveUp && oneDisplay
 }
 
 // settled says whether it is time to ask for the stream: the picture has been up for a
@@ -132,7 +126,7 @@ func (v *sessionView) startVideo() {
 	vid := &v.vid
 	app := v.g.app
 	if vid.policy.Limit == 0 {
-		vid.policy = restartPolicy{Limit: 4, Base: time.Second}
+		vid.policy = restartPolicy{Limit: 4, Base: time.Second, Cap: 8, Window: 10 * time.Minute}
 	}
 	info := v.client.Info()
 	caps := app.videoCapabilities()
@@ -160,6 +154,7 @@ func (v *sessionView) startVideo() {
 	stream := newVideoStream(app.logger, plan, caps.Device, videoThreads(), v.screen, keyframe)
 	vid.stream = stream
 	vid.changes = 0
+	vid.heard = heardWatch{}
 	app.logger.Info("video", "plan", "stream", "codec", codecName(plan.Codec), "decoders", decoderNames(plan.Kinds), "device", caps.Device, "driver", caps.Driver)
 	vid.do(func() {
 		err := client.StartMediaStream(plan.Offer, stream)
@@ -204,12 +199,20 @@ func (v *sessionView) pollVideo() {
 		vid.changes = changes
 		v.live.echo.Updated(now)
 	}
-	// A Mac that stops sending without closing the stream (a network that dropped the UDP for a
-	// while, ports the Mac closed) leaves the last picture on screen for good: start over.
-	if vid.on && stream.quietFor(now) >= videoStall {
-		v.g.app.logger.Warn("video", "state", "stalled", "quiet", stream.quietFor(now).String())
-		v.restartStalledVideo(errVideoStalled)
-		return
+	// A stream that stops sending without closing (a network that dropped the UDP for a while, ports the
+	// Mac closed), or sends what never reaches the screen, leaves the last picture up for good: start over.
+	pulse := streamPulse{QuietFor: stream.quietFor(now), IdleFor: stream.idle(now), HeardFor: v.videoHeardFor(now)}
+	if vid.on {
+		switch judgeStall(pulse, videoStall) {
+		case stallSilent:
+			v.g.app.logger.Warn("video", "state", "stalled", "quiet", pulse.QuietFor.String(), "heard", pulse.HeardFor.String())
+			v.restartStalledVideo(errVideoStalled)
+			return
+		case stallFrozen:
+			v.g.app.logger.Warn("video", "state", "frozen", "idle", pulse.IdleFor.String(), "quiet", pulse.QuietFor.String())
+			v.restartStalledVideo(errVideoFrozen)
+			return
+		}
 	}
 	if vid.on && !vid.onSince.IsZero() && now.Sub(vid.onSince) >= videoHealthy {
 		vid.policy.healthy()
@@ -220,7 +223,8 @@ func (v *sessionView) pollVideo() {
 		v.g.app.logger.Info("video stats", "decoder", videoLabel(stats.Codec, stats.Kind), "output", stats.Output.String(),
 			"units", stats.Units, "frames", stats.Frames, "presented", stats.Presented, "dropped", stats.Dropped,
 			"decode_ms", float64(stats.DecodeAvg.Microseconds())/1000, "decode_max_ms", float64(stats.DecodeMax.Microseconds())/1000,
-			"age_ms", float64(stats.AgeAvg.Microseconds())/1000, "size", fmt.Sprintf("%dx%d", stats.Width, stats.Height))
+			"age_ms", float64(stats.AgeAvg.Microseconds())/1000, "size", fmt.Sprintf("%dx%d", stats.Width, stats.Height),
+			"quiet_ms", pulse.QuietFor.Milliseconds(), "heard_ms", pulse.HeardFor.Milliseconds(), "reports", v.videoReports())
 	}
 }
 
@@ -257,18 +261,38 @@ func (v *sessionView) handleVideoEvent(stream *videoStream, event videoEvent) {
 			return
 		}
 		v.closeVideo()
-		vid.retry = coreglib.TimeoutAdd(uint(delay.Milliseconds()), func() bool {
-			vid.retry = 0
-			if v.ended || vid.gaveUp {
-				return false
-			}
-			v.startVideo()
-			return false
-		})
+		v.retryVideoAfter(delay)
 	}
 }
 
-var errVideoStalled = E.New("the Mac stopped sending video")
+// retryVideoAfter starts the stream again after a pause, if it is still wanted by then.
+func (v *sessionView) retryVideoAfter(delay time.Duration) {
+	vid := &v.vid
+	vid.retry = coreglib.TimeoutAdd(uint(delay.Milliseconds()), func() bool {
+		if vid.retryDue(v.ended, videoDisplayReady(v.h.displayLayout())) {
+			v.startVideo()
+		}
+		return false
+	})
+}
+
+// videoReports counts the sender reports the Mac's media transport has sent.
+func (v *sessionView) videoReports() uint64 {
+	if stream := v.client.MediaStream(); stream != nil {
+		return stream.Stats().SenderReports
+	}
+	return 0
+}
+
+// videoHeardFor is how long the Mac's media transport has shown no sign of life (a packet or a sender report).
+func (v *sessionView) videoHeardFor(now time.Time) time.Duration {
+	var packets, reports uint64
+	if stream := v.client.MediaStream(); stream != nil {
+		stats := stream.Stats()
+		packets, reports = stats.VideoPackets, stats.SenderReports
+	}
+	return v.vid.heard.see(packets, reports, now)
+}
 
 // restartStalledVideo ends a stream that went quiet and, as for any stop that is not the Mac's
 // word, starts it again after a pause, or gives up for the session after a few.
@@ -284,14 +308,7 @@ func (v *sessionView) restartStalledVideo(cause error) {
 		v.notify("The video stream stopped, using the picture path")
 		return
 	}
-	vid.retry = coreglib.TimeoutAdd(uint(delay.Milliseconds()), func() bool {
-		vid.retry = 0
-		if v.ended || vid.gaveUp {
-			return false
-		}
-		v.startVideo()
-		return false
-	})
+	v.retryVideoAfter(delay)
 }
 
 // leaveVideo takes the video off the screen and lets the tiles resume where the
@@ -346,10 +363,7 @@ func (v *sessionView) stopVideo() {
 	}
 	v.closeVideo()
 	vid.on = false
-	vid.closed = true
-	if vid.work != nil {
-		close(vid.work)
-	}
+	vid.work.close()
 }
 
 // videoActive says the widget is showing the Mac's video.

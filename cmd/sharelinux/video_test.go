@@ -301,9 +301,17 @@ func TestDecoderTeardownAccounting(t *testing.T) {
 // address because the viewer's media socket takes the server's port number.
 func openMock(t *testing.T, clip *mockmedia.Clip) (*rfb.Client, func()) {
 	t.Helper()
+	client, _, closeAll := openMockMac(t, clip)
+	return client, closeAll
+}
+
+// openMockMac is openMock that also returns the Mac, to reach what it plays.
+func openMockMac(t *testing.T, clip *mockmedia.Clip) (*rfb.Client, *mockMac, func()) {
+	t.Helper()
+	mac := &mockMac{clip: clip}
 	server, err := rfb.NewServer(rfb.ServerOptions{
 		Name: "mock", Username: "mock", Password: "secret", Logger: quiet,
-		Handler: &mockMac{clip: clip},
+		Handler: mac,
 		Flags:   rfb.ServerFlagObserveOnly | rfb.ServerFlagExtended,
 		Media: media.ServerStreamConfig{
 			AllowLoopbackTarget: true, DisableAudioLeg: true,
@@ -330,7 +338,7 @@ func openMock(t *testing.T, clip *mockmedia.Clip) (*rfb.Client, func()) {
 		t.Fatal(err)
 	}
 	go client.Run()
-	return client, func() {
+	return client, mac, func() {
 		_ = client.Close()
 		server.Close()
 	}
@@ -341,6 +349,25 @@ type mockMac struct {
 	clip *mockmedia.Clip
 
 	source atomic.Pointer[mockmedia.Source]
+	// mute holds back the video packets, as a Mac with a still screen sends none; its sender reports go on.
+	mute atomic.Bool
+}
+
+// mutableSource is a mock Mac's video that can be held back.
+type mutableSource struct {
+	*mockmedia.Source
+	mute *atomic.Bool
+}
+
+func (m mutableSource) ReadPacket(ctx context.Context, buffer []byte) (int, bool, error) {
+	for m.mute.Load() {
+		select {
+		case <-ctx.Done():
+			return 0, false, ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	return m.Source.ReadPacket(ctx, buffer)
 }
 
 func (m *mockMac) Screen() rfb.ServerScreen {
@@ -357,6 +384,7 @@ func (m *mockMac) OpenVideo(ctx context.Context, request media.ServerVideoReques
 	source, err := m.clip.OpenVideo(60)(ctx, request)
 	if err == nil {
 		m.source.Store(source.(*mockmedia.Source))
+		source = mutableSource{source.(*mockmedia.Source), &m.mute}
 	}
 	return source, err
 }
