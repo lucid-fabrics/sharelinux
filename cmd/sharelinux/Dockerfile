@@ -14,7 +14,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN go vet ./cmd/sharelinux && go test ./cmd/sharelinux \
+RUN go vet ./cmd/sharelinux/... && go test ./cmd/sharelinux/... \
 	&& go build -o /out/sharelinux ./cmd/sharelinux \
 	&& go build -o /out/mockrfb ./cmd/sharelinux/internal/mockrfb
 
