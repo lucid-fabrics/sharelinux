@@ -74,6 +74,10 @@ type harness struct {
 	pub   []byte
 	conn  *net.UDPConn
 
+	port     int
+	lastIK   time.Time // when the last paced handshake went out
+	lastPair string    // the latest PAIRSTATUS line
+
 	mu      sync.Mutex
 	posts   []string
 	states  []string
@@ -83,7 +87,13 @@ type harness struct {
 
 func startHarness(t *testing.T, paired ...[]byte) *harness {
 	t.Helper()
-	args := []string{}
+	return startHarnessWith(t, nil, paired...)
+}
+
+// startHarnessWith passes extra arguments (for example --pairing) to the harness.
+func startHarnessWith(t *testing.T, extra []string, paired ...[]byte) *harness {
+	t.Helper()
+	args := append([]string{}, extra...)
 	for _, k := range paired {
 		args = append(args, "--paired", hex.EncodeToString(k))
 	}
@@ -129,6 +139,10 @@ func startHarness(t *testing.T, paired ...[]byte) *harness {
 				h.mu.Lock()
 				h.states = append(h.states, strings.TrimPrefix(line, "STATE "))
 				h.mu.Unlock()
+			case strings.HasPrefix(line, "PAIRSTATUS "):
+				h.mu.Lock()
+				h.lastPair = strings.TrimPrefix(line, "PAIRSTATUS ")
+				h.mu.Unlock()
 			case line == "OK":
 				h.okCh <- struct{}{}
 			case strings.HasPrefix(line, "PUB "):
@@ -146,6 +160,7 @@ func startHarness(t *testing.T, paired ...[]byte) *harness {
 		t.Fatal("harness did not start")
 	}
 	port := <-portCh
+	h.port = port
 	h.conn, err = net.DialUDP("udp", nil, &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: port})
 	if err != nil {
 		t.Fatal(err)
