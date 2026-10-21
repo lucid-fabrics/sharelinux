@@ -15,6 +15,10 @@ public enum ChannelLimits {
     public static let maxPinnedSources = 32
     /// Total |dx|+|dy| per second, in points * 16 (20 000 pt/s).
     public static let motionUnitsPerSecond = 20_000.0 * 16
+    /// Total |sx|+|sy| per second, in pixels. A packet may carry 2000 per axis
+    /// at 1000 packets per second, which would be 4 million pixels a second of
+    /// wheel events; this keeps a fast fling and nothing more.
+    public static let scrollUnitsPerSecond = 60_000.0
     /// Environment snapshots older than this are not trusted (design 3.3).
     public static let environmentMaxAge = 0.5
     /// Pairing window: one local click opens it for this long.

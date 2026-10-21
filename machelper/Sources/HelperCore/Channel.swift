@@ -143,6 +143,7 @@ public final class HelperChannel {
     private var sourceLimiter = SourceRateLimiter()
     private var inputLimiter = RateLimiter(perSecond: ChannelLimits.inputPacketsPerSecond)
     private var motionBudget = RateLimiter(perSecond: ChannelLimits.motionUnitsPerSecond)
+    private var scrollBudget = RateLimiter(perSecond: ChannelLimits.scrollUnitsPerSecond)
     private var lastTimestamp: [Data: Data] = [:]
     private let timestamps: TimestampStore
     /// False when the timestamp store could not be read and could not be
@@ -390,12 +391,14 @@ public final class HelperChannel {
         var inputs = environment(live.source, live.peerKey)
         inputs.peerPaired = isPaired(live.peerKey)
         if packet.type == .input {
-            // Both buckets are charged; either one running dry limits the packet.
-            let motion = packet.clamped()
-            let cost = Double(abs(Int(motion.dx)) + abs(Int(motion.dy)))
+            // All three buckets are charged; any one running dry limits the packet.
+            let clamped = packet.clamped()
+            let cost = Double(abs(Int(clamped.dx)) + abs(Int(clamped.dy)))
+            let scrollCost = Double(abs(Int(clamped.sx)) + abs(Int(clamped.sy)))
             let packetsOK = inputLimiter.allow(now: now)
             let motionOK = motionBudget.allow(now: now, cost: cost)
-            inputs.rateLimited = !(packetsOK && motionOK)
+            let scrollOK = scrollBudget.allow(now: now, cost: scrollCost)
+            inputs.rateLimited = !(packetsOK && motionOK && scrollOK)
         } else {
             inputs.rateLimited = false
         }

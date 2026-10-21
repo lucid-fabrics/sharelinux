@@ -433,6 +433,30 @@ extension ChannelTests {
         }
     }
 
+    /// Scroll had no per-second budget: 2000 pixels per axis at 1000 packets
+    /// per second let a paired device spin the wheel without limit.
+    func testScrollBudgetPerSecond() throws {
+        let s = try connect()
+        let big = InputPacket(type: .input, sx: .max, sy: .max)  // clamps to 2 * 2000 pixels
+        var delivered = 0, limited = 0
+        for _ in 0..<40 {
+            let r = try send(s, big)
+            if r.events.contains(.input(big.clamped())) { delivered += 1 }
+            if r.events.contains(.denied(.rateLimited)) { limited += 1 }
+        }
+        XCTAssertEqual(delivered, Int(ChannelLimits.scrollUnitsPerSecond / Double(2 * Int(WireLimits.maxScroll))))
+        XCTAssertEqual(delivered + limited, 40)
+        env.mono += 1
+        XCTAssertTrue(try send(s, big).events.contains(.input(big.clamped())), "the budget refills")
+        // An ordinary fling (100 px at 250 Hz) stays inside the budget.
+        env.mono += 1
+        let flick = InputPacket(type: .input, sy: 100)
+        for _ in 0..<500 {
+            XCTAssertTrue(try send(s, flick).events.contains(.input(flick)))
+            env.mono += 0.004
+        }
+    }
+
     func testPerPacketMotionClampIsTwoThousandFortySevenPoints() {
         XCTAssertEqual(WireLimits.maxMotion, 32752)
         XCTAssertEqual(Int(WireLimits.maxMotion), 2047 * 16)
