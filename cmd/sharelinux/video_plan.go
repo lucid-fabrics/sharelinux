@@ -2,6 +2,9 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -237,19 +240,23 @@ func (p videoPlan) withoutKind(kind decoderKind) videoPlan {
 const (
 	// rateVAAPI is 3840x2160 at 60 Hz: the media block of any Intel GPU since Gen 9.
 	rateVAAPI int64 = 3840 * 2160 * 60 * 3
-	// rateSoftware is 1920x1080 at 60 Hz.
-	rateSoftware int64 = 1920 * 1080 * 60 * 3
+	// rateSoftwareThread is what one thread of software decoding keeps up with, a quarter of
+	// 2560x1600 at 60 Hz. Measured on four cores of a 12th gen Intel with busy test video: 5120x1440
+	// decodes in 15 ms (about 480 megapixels a second), twice what this rate asks for.
+	rateSoftwareThread int64 = 2560 * 1600 * 60 * 3 / 4
+	softwareThreads          = 4
 )
 
-// decoderPixelRate is what the first decoder of the plan can keep up with.
-func (p videoPlan) decoderPixelRate() int64 {
+// decoderPixelRate is what the first decoder of the plan can keep up with, given the threads
+// software decoding may use.
+func (p videoPlan) decoderPixelRate(threads int) int64 {
 	if !p.enabled() {
 		return 0
 	}
 	if p.Kinds[0] == decoderVAAPI {
 		return rateVAAPI
 	}
-	return rateSoftware
+	return rateSoftwareThread * int64(max(1, min(threads, softwareThreads)))
 }
 
 // codecName is the stream's codec as a person writes it.
@@ -310,4 +317,12 @@ func applyVideoRows(rows []statRow, v videoStats) []statRow {
 
 func formatMillis(d time.Duration) string {
 	return fmt.Sprintf("%.1f ms", float64(d)/float64(time.Millisecond))
+}
+
+// videoThreads is how many threads software decoding may use.
+func videoThreads() int {
+	if value, err := strconv.Atoi(os.Getenv("SHARELINUX_THREADS")); err == nil && value > 0 {
+		return value
+	}
+	return min(runtime.NumCPU(), 4)
 }

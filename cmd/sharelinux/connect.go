@@ -47,7 +47,7 @@ func (a *app) rfbOptions(req *request, h *handler) rfb.Options {
 		SecurityTypes:        securityTypes(req),
 		// What the decoder can keep up with decides the frame rate the Mac picks for a
 		// virtual display, and the one it offers the stream.
-		DecoderMaxPixelRate: planVideo(a.videoMode(), a.videoCapabilities(), true).decoderPixelRate(),
+		DecoderMaxPixelRate: planVideo(a.videoMode(), a.videoCapabilities(), true).decoderPixelRate(videoThreads()),
 	}
 	if req.opts.Virtual != nil || req.opts.HDR {
 		virtual, hdr := req.opts.Virtual, req.opts.HDR

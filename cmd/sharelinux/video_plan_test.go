@@ -111,26 +111,26 @@ func TestPlanWithoutKind(t *testing.T) {
 }
 
 func TestDecoderPixelRate(t *testing.T) {
-	if (videoPlan{}).decoderPixelRate() != 0 {
+	if (videoPlan{}).decoderPixelRate(4) != 0 {
 		t.Fatal("no plan, no rate")
 	}
 	gpu := planVideo(videoAuto, videoCaps{HEVCVAAPI: true, HEVCSoftware: true}, true)
-	if gpu.decoderPixelRate() != rateVAAPI {
+	if gpu.decoderPixelRate(4) != rateVAAPI {
 		t.Fatal("the first decoder sets the rate")
 	}
 	software := planVideo(videoSoftware, videoCaps{HEVCVAAPI: true, HEVCSoftware: true}, true)
-	if software.decoderPixelRate() != rateSoftware {
-		t.Fatal("software decoding gets the software rate")
+	if software.decoderPixelRate(4) != 4*rateSoftwareThread || software.decoderPixelRate(1) != rateSoftwareThread || software.decoderPixelRate(64) != software.decoderPixelRate(4) {
+		t.Fatal("software decoding gets a rate per thread, up to four threads")
 	}
 	// The Mac keeps 60 Hz for a display while width x height x 3 x 60 fits the rate.
 	if !media.Supports60FPS(rateVAAPI, 3840, 2160) {
 		t.Fatal("the GPU rate must cover 4K at 60 Hz")
 	}
-	if media.Supports60FPS(rateSoftware, 2560, 1600) {
-		t.Fatal("the software rate asks for 30 Hz at 2560x1600")
+	if !media.Supports60FPS(software.decoderPixelRate(4), 2560, 1600) {
+		t.Fatal("four software threads cover 2560x1600 at 60 Hz")
 	}
-	if !media.Supports60FPS(rateSoftware, 1920, 1080) {
-		t.Fatal("the software rate must cover 1080p at 60 Hz")
+	if media.Supports60FPS(software.decoderPixelRate(1), 2560, 1600) {
+		t.Fatal("one software thread asks for 30 Hz at 2560x1600")
 	}
 }
 

@@ -12,8 +12,6 @@ import "C"
 
 import (
 	"log/slog"
-	"os"
-	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -513,12 +511,4 @@ func (s *videoStream) close() {
 	}
 	s.queue.close()
 	<-s.done
-}
-
-// videoThreads is how many threads software decoding may use.
-func videoThreads() int {
-	if value, err := strconv.Atoi(os.Getenv("SHARELINUX_THREADS")); err == nil && value > 0 {
-		return value
-	}
-	return min(runtime.NumCPU(), 4)
 }
