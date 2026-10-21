@@ -2,19 +2,29 @@ import CryptoKit
 import Foundation
 import HelperCore
 import Security
+import os
 
 /// The helper's static private key and the pinned Linux public keys as generic
 /// password items in the login Keychain, not files.
 ///
 ///  * Not synchronised: `kSecAttrSynchronizable` is false, so nothing goes to iCloud Keychain.
-///  * Access limited to this app: every item is created with an access object
-///    whose trusted-application list holds only the calling application, so
-///    another program asking for the key gets a prompt (or a refusal), and the
-///    private key is never readable from a plain file.
-///  * Integrity of the paired list: adding a trusted key is what authorises a
-///    remote device to move the mouse, so the list lives where other programs
-///    cannot quietly edit it. An item whose account (the hex key) and payload
-///    disagree is ignored.
+///  * Secret access limited to this app: every item is created with an access
+///    object whose trusted-application list holds only the calling application,
+///    so another program asking for the identity key gets a prompt (or a
+///    refusal), and the private key is never readable from a plain file.
+///  * What the Keychain does NOT do: it does not stop another program of the
+///    same user from adding a generic-password item under our service name, or
+///    from listing the attributes of ours. Adding a trusted key is what lets a
+///    remote device move the mouse, so the access list is not enough.
+///  * Authenticity of the paired list: each paired record carries an HMAC-SHA256
+///    over (device key, name, created-at). The HMAC key is derived (HKDF) from
+///    the helper's identity private key, which only this app can read without
+///    a prompt. A record without a valid HMAC (written by anything else, or
+///    altered) is never trusted; it is counted in `ignoredRecords` and logged by
+///    account prefix. Seeing the paired items, even reading all of them, gives
+///    no way to forge one. The residual risk (design 3.7): a program that
+///    plants the identity item before the first launch, or that the owner lets
+///    read it ("Always Allow"), holds the HMAC key.
 ///
 /// `keychain` is nil for the default (login) keychain; tests pass a throwaway
 /// keychain file so nothing touches the owner's.
@@ -23,6 +33,12 @@ public final class KeychainKeyStore: KeyStore {
     public static let pairedService = "io.github.sharelinux.mousehelper.paired"
     private static let identityAccount = "static-key"
     private let keychain: SecKeychain?
+    private let log = Logger(subsystem: "io.github.sharelinux.mousehelper", category: "keystore")
+    /// Derived from the identity key; held in memory once the identity is loaded.
+    private var macKeyCache: SymmetricKey?
+    public private(set) var ignoredRecords = 0
+    /// Accounts (hex device keys, or whatever a foreign item used) skipped by the last `loadPaired`.
+    public private(set) var ignoredAccounts: [String] = []
 
     public init(keychain: SecKeychain? = nil) { self.keychain = keychain }
 
@@ -94,6 +110,7 @@ public final class KeychainKeyStore: KeyStore {
             guard raw.count == 32, let key = try? Curve25519.KeyAgreement.PrivateKey(rawRepresentation: raw) else {
                 throw KeyStoreError.corrupt("the stored identity key is not a Curve25519 key")
             }
+            macKeyCache = Self.macKey(from: raw)
             return key
         }
         let key = Curve25519.KeyAgreement.PrivateKey()
@@ -103,12 +120,59 @@ public final class KeychainKeyStore: KeyStore {
         try add(
             service: Self.identityService, account: Self.identityAccount, label: "OSS Mouse Helper identity key",
             data: raw)
+        macKeyCache = Self.macKey(from: raw)
         return key
     }
 
+    // MARK: authenticated paired records
+
     private struct Record: Codable {
+        var v: Int
         var name: String
         var key: String
+        /// Seconds since 1970 when the device was paired.
+        var created: Int64
+        /// HMAC-SHA256 (hex) over `message(key:name:created:)`.
+        var mac: String
+    }
+
+    static func macKey(from identityRaw: Data) -> SymmetricKey {
+        HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: SymmetricKey(data: identityRaw), salt: Data("oss-mouse-helper".utf8),
+            info: Data("paired-record-mac-v1".utf8), outputByteCount: 32)
+    }
+
+    /// Length-prefixed so no two different (key, name, created) triples share a message.
+    static func message(key: Data, name: String, created: Int64) -> Data {
+        var m = Data("oss-paired-record-v2".utf8)
+        m.append(0)
+        m.append(key)
+        let n = Data(name.utf8)
+        m.append(contentsOf: withUnsafeBytes(of: UInt16(n.count).bigEndian) { Array($0) })
+        m.append(n)
+        m.append(contentsOf: withUnsafeBytes(of: created.bigEndian) { Array($0) })
+        return m
+    }
+
+    /// The MAC key for reading, or nil when this keychain has no identity yet (then
+    /// nothing in it can be authentic).
+    private func macKeyForReading() throws -> SymmetricKey? {
+        if let macKeyCache { return macKeyCache }
+        guard var raw = try read(service: Self.identityService, account: Self.identityAccount) else { return nil }
+        defer { raw.wipe() }
+        let k = Self.macKey(from: raw)
+        macKeyCache = k
+        return k
+    }
+
+    private func authentic(_ data: Data, account: String, macKey: SymmetricKey) -> PairedDevice? {
+        guard let rec = try? JSONDecoder().decode(Record.self, from: data), rec.v == 2,
+            let key = Data(hex: rec.key), key.count == 32, rec.key == account,
+            AuthorizationName.isPlain(rec.name), let mac = Data(hex: rec.mac)
+        else { return nil }
+        let msg = Self.message(key: key, name: rec.name, created: rec.created)
+        guard HMAC<SHA256>.isValidAuthenticationCode(mac, authenticating: msg, using: macKey) else { return nil }
+        return PairedDevice(name: rec.name, key: key)
     }
 
     public func loadPaired() throws -> [PairedDevice] {
@@ -123,23 +187,36 @@ public final class KeychainKeyStore: KeyStore {
         guard status == errSecSuccess, let items = out as? [[String: Any]] else {
             throw KeyStoreError.failed("Keychain list failed (\(status))")
         }
+        let macKey = try macKeyForReading()
         var list: [PairedDevice] = []
+        var ignored: [String] = []
         for item in items {
-            guard let account = item[kSecAttrAccount as String] as? String,
-                let data = try read(service: Self.pairedService, account: account),
-                let rec = try? JSONDecoder().decode(Record.self, from: data),
-                let key = Data(hex: rec.key), key.count == 32, rec.key == account,
-                AuthorizationName.isPlain(rec.name)
-            else { continue }  // not ours, or tampered: ignored
-            list.append(PairedDevice(name: rec.name, key: key))
+            let account = (item[kSecAttrAccount as String] as? String) ?? "?"
+            if let macKey, let data = try read(service: Self.pairedService, account: account),
+                let device = authentic(data, account: account, macKey: macKey)
+            {
+                list.append(device)
+            } else {
+                ignored.append(account)  // not written by this app, or altered: never trusted
+            }
         }
+        ignoredAccounts = ignored
+        ignoredRecords = ignored.count
+        for a in ignored { log.error("ignored an unrecognised paired item \(String(a.prefix(8)), privacy: .public)") }
         return list.sorted { $0.name < $1.name }
     }
 
     public func addPaired(_ device: PairedDevice) throws {
         guard device.key.count == 32 else { throw KeyStoreError.corrupt("a peer key is 32 bytes") }
         let account = device.key.hex
-        let payload = try JSONEncoder().encode(Record(name: device.name, key: account))
+        _ = try loadOrCreateIdentity()  // makes sure the MAC key is there
+        guard let macKey = macKeyCache else { throw KeyStoreError.failed("no identity key to authenticate the record") }
+        let created = Int64(Date().timeIntervalSince1970)
+        let mac = Data(
+            HMAC<SHA256>.authenticationCode(
+                for: Self.message(key: device.key, name: device.name, created: created), using: macKey))
+        let payload = try JSONEncoder().encode(
+            Record(v: 2, name: device.name, key: account, created: created, mac: mac.hex))
         try delete(service: Self.pairedService, account: account)  // re-pairing replaces the name
         try add(service: Self.pairedService, account: account, label: "OSS Mouse Helper: " + device.name, data: payload)
     }

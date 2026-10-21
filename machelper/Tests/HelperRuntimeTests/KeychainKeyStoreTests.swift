@@ -93,23 +93,109 @@ final class KeychainKeyStoreTests: XCTestCase {
         }
     }
 
+    /// What a foreign program of the same user can do: add generic-password items
+    /// under our service name through the plain Keychain API (not through this app).
+    private func plant(account: String, json: String, service: String = KeychainKeyStore.pairedService) {
+        let q: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+            kSecAttrAccount as String: account, kSecValueData as String: Data(json.utf8), kSecUseKeychain as String: kc.keychain,
+        ]
+        XCTAssertEqual(SecItemAdd(q as CFDictionary, nil), errSecSuccess)
+    }
+
+    private func hmac(_ macKey: SymmetricKey, key: Data, name: String, created: Int64) -> String {
+        Data(HMAC<SHA256>.authenticationCode(for: KeychainKeyStore.message(key: key, name: name, created: created), using: macKey)).hex
+    }
+
     func testAnItemWhoseAccountAndPayloadDisagreeIsIgnored() throws {
         let real = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
         try store.addPaired(PairedDevice(name: "Real", key: real))
-        // Planted items: account does not match the key inside, a bad name, a short key.
         let other = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
-        func plant(account: String, json: String) {
-            let q: [String: Any] = [
-                kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: KeychainKeyStore.pairedService,
-                kSecAttrAccount as String: account, kSecValueData as String: Data(json.utf8), kSecUseKeychain as String: kc.keychain,
-            ]
-            XCTAssertEqual(SecItemAdd(q as CFDictionary, nil), errSecSuccess)
-        }
         plant(account: "00" + other.hex.dropFirst(2), json: #"{"name":"Mismatch","key":"\#(other.hex)"}"#)
         plant(account: other.hex, json: #"{"name":"Bad\u{0}Name","key":"\#(other.hex)"}"#)
         plant(account: "abcd", json: #"{"name":"Short","key":"abcd"}"#)
         plant(account: "zz", json: "not json")
         XCTAssertEqual(try store.loadPaired().map(\.name), ["Real"])
+        XCTAssertEqual(store.ignoredRecords, 4)
+    }
+
+    /// Finding 2: any program of the same user could add a trusted device. A record this app did not write is never trusted.
+    func testAForeignItemInTheOldFormatIsNeverTrustedAndIsReported() throws {
+        _ = try store.loadOrCreateIdentity()
+        let real = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
+        try store.addPaired(PairedDevice(name: "Desk PC", key: real))
+        XCTAssertEqual(store.ignoredRecords, 0)
+        let attacker = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
+        // Well-formed in every respect except that this app did not write it.
+        plant(account: attacker.hex, json: #"{"name":"Trusted Laptop","key":"\#(attacker.hex)"}"#)
+        XCTAssertEqual(try store.loadPaired().map(\.key), [real], "the foreign key is not in the trusted list")
+        XCTAssertEqual(store.ignoredRecords, 1, "and the app knows it ignored something")
+        XCTAssertEqual(store.ignoredAccounts, [attacker.hex])
+    }
+
+    func testAForeignRecordWithAMacMadeFromTheWrongKeyOrAForgedFieldIsIgnored() throws {
+        _ = try store.loadOrCreateIdentity()
+        let attacker = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
+        let attackerMacKey = SymmetricKey(data: Data(repeating: 9, count: 32))  // not derived from the identity
+        let created: Int64 = 1_800_000_000
+        let wrong = hmac(attackerMacKey, key: attacker, name: "Evil", created: created)
+        plant(account: attacker.hex, json: #"{"v":2,"name":"Evil","key":"\#(attacker.hex)","created":\#(created),"mac":"\#(wrong)"}"#)
+        let other = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
+        plant(account: other.hex, json: #"{"v":2,"name":"Evil2","key":"\#(other.hex)","created":\#(created),"mac":"\#(String(repeating: "00", count: 32))"}"#)
+        XCTAssertEqual(try store.loadPaired(), [])
+        XCTAssertEqual(store.ignoredRecords, 2)
+    }
+
+    /// Reading every paired item (the attributes are not secret) lets a foreign program copy or edit them, not forge them.
+    func testTamperingWithAGenuineRecordMakesItUntrusted() throws {
+        _ = try store.loadOrCreateIdentity()
+        let k1 = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
+        let k2 = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
+        try store.addPaired(PairedDevice(name: "Desk PC", key: k1))
+        // Read the genuine payload the way any same-user program could be allowed to.
+        let q: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: KeychainKeyStore.pairedService,
+            kSecAttrAccount as String: k1.hex, kSecMatchSearchList as String: [kc.keychain],
+            kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var out: CFTypeRef?
+        XCTAssertEqual(SecItemCopyMatching(q as CFDictionary, &out), errSecSuccess)
+        var json = try XCTUnwrap(String(data: try XCTUnwrap(out as? Data), encoding: .utf8))
+        // 1. Rename the device, keeping its MAC.
+        let renamed = json.replacingOccurrences(of: "Desk PC", with: "Safe PC")
+        XCTAssertNotEqual(renamed, json)
+        XCTAssertEqual(SecItemDelete(q.filter { $0.key != kSecReturnData as String && $0.key != kSecMatchLimit as String } as CFDictionary), errSecSuccess)
+        plant(account: k1.hex, json: renamed)
+        XCTAssertEqual(try store.loadPaired(), [], "an altered name voids the MAC")
+        // 2. Move the genuine MAC onto another key.
+        json = json.replacingOccurrences(of: k1.hex, with: k2.hex)
+        plant(account: k2.hex, json: json)
+        XCTAssertEqual(try store.loadPaired(), [], "a MAC does not move to another key")
+        XCTAssertEqual(store.ignoredRecords, 2)
+    }
+
+    func testReplacingTheIdentityKeyUntrustsTheOldRecordsAndANewKeychainTrustsNothing() throws {
+        let key = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
+        // No identity yet: a planted record cannot be authentic, and reading does not create an identity.
+        plant(account: key.hex, json: #"{"v":2,"name":"X","key":"\#(key.hex)","created":1,"mac":"00"}"#)
+        XCTAssertEqual(try store.loadPaired(), [])
+        XCTAssertEqual(store.ignoredRecords, 1)
+        // A second install (another identity) does not accept the first one's genuine records.
+        let kc2 = try TestKeychain()
+        defer { kc2.destroy() }
+        let other = KeychainKeyStore(keychain: kc2.keychain)
+        _ = try other.loadOrCreateIdentity()
+        try other.addPaired(PairedDevice(name: "Elsewhere", key: key))
+        XCTAssertEqual(try other.loadPaired().count, 1)
+        XCTAssertEqual(try store.loadPaired(), [], "this keychain's identity is a different one")
+    }
+
+    func testGenuineRecordsSurviveARestartAndReportNothing() throws {
+        let k = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
+        try store.addPaired(PairedDevice(name: "Desk PC", key: k))
+        let again = KeychainKeyStore(keychain: kc.keychain)  // a new process: nothing cached
+        XCTAssertEqual(try again.loadPaired(), [PairedDevice(name: "Desk PC", key: k)])
+        XCTAssertEqual(again.ignoredRecords, 0)
     }
 
     func testTheOldFilesMoveIntoTheKeychainAndAreDeleted() throws {

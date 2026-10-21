@@ -28,6 +28,9 @@ public protocol KeyStore: AnyObject {
     /// Adds a device, or replaces the name of one already paired under the same key.
     func addPaired(_ device: PairedDevice) throws
     func removePaired(key: Data) throws
+    /// How many items the last `loadPaired` skipped because this app did not write
+    /// them (a foreign process planted them, or they were altered). They grant nothing.
+    var ignoredRecords: Int { get }
 }
 
 public final class MemoryKeyStore: KeyStore {
@@ -35,6 +38,7 @@ public final class MemoryKeyStore: KeyStore {
     private var paired: [PairedDevice] = []
     /// Tests: make the next writes fail.
     public var failWrites = false
+    public var ignoredRecords = 0
     public init(identity: Curve25519.KeyAgreement.PrivateKey? = nil, paired: [PairedDevice] = []) {
         self.identity = identity; self.paired = paired
     }
