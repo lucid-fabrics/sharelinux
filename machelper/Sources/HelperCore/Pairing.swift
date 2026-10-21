@@ -378,6 +378,15 @@ public final class PairingWindow {
     }
 
     /// Message 1 from `source` with no leader: gives it a slot (or refuses).
+    ///
+    /// Accepted residual: a LAN host that forges message 1 from many addresses
+    /// can fill the slots and delay an honest device for as long as it keeps up
+    /// (about 8 starts inside the honest round trip to message 3). It can
+    /// neither pair nor charge a failure, the window is local-only, opened by
+    /// the owner and ends after 2 minutes, and the owner sees "another device
+    /// is trying to pair". A cookie round trip before the Diffie-Hellman would
+    /// need a new datagram kind on both sides; not worth it for a denial that
+    /// the owner can see and that costs nothing but a retry.
     private func startAttempt(from source: PeerAddress?) throws {
         let now = clock()
         // A source gets a few starts per window, no more: restarting for

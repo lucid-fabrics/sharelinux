@@ -128,7 +128,9 @@ final class PairingSquatTests: XCTestCase {
     func testOneOrFewSpoofedStartsDoNotDisturbAnHonestAttemptInFlight() throws {
         let honest = try LinuxPairer(key: PrivKey())
         let m2 = try XCTUnwrap(try window.receive(try honest.message1(), from: Self.hostA))
-        for i in 0..<(ChannelLimits.pairingMaxConcurrentAttempts - 2) {
+        // A revert of the slot count must fail an assertion, not trap on an empty-range crash.
+        XCTAssertGreaterThanOrEqual(ChannelLimits.pairingMaxConcurrentAttempts, 4, "the window runs attempts side by side")
+        for i in 0..<max(0, ChannelLimits.pairingMaxConcurrentAttempts - 2) {
             now += ChannelLimits.pairingMinGlobalStartSpacing * 2
             _ = try window.receive(try LinuxPairer(key: PrivKey()).message1(), from: spoofed(i))
         }
