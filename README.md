@@ -74,6 +74,20 @@ go build -o sharelinux ./cmd/sharelinux
 make install-linux                        # icon and desktop entry under ~/.local/share
 ```
 
+#### Flatpak
+
+To run it on any Linux machine without installing the build dependencies, build the Flatpak once and install the single-file bundle. This needs `flatpak`, `flatpak-builder` and Go on the build machine (`apt install flatpak flatpak-builder`, then `flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo`); the build itself runs offline from vendored Go modules and pulls the GNOME 50 runtime and Go extension from Flathub on first use.
+
+```
+packaging/flatpak/build.sh               # writes dist/sharelinux.flatpak
+flatpak install --user dist/sharelinux.flatpak
+flatpak run io.github.sharelinux.ScreenSharing [user@mac.local]
+```
+
+The sandbox gets the network (the Mac, and the mDNS browse), Wayland and X11, the GPU, the Secret Service for saved passwords, and the Downloads folder (the default for "Files from the Mac"). Files you send to the Mac come from the file chooser or a drag, and another download folder is picked through the file chooser, so no other folder is opened up. `flatpak info --show-permissions io.github.sharelinux.ScreenSharing` lists them.
+
+#### Using it
+
 Open **Preferences** (Ctrl+comma) for quality, the Command key (Super or Alt), natural scrolling, the clipboard and the download folder. In a session, **Exclusive** mode gives the keyboard (including Super and Alt+Tab) to the Mac and, on X11, keeps the pointer inside the window; press Ctrl+Alt+Esc to get them back. On Wayland GTK 4 cannot confine the pointer, so Exclusive grabs the keyboard shortcuts only. Hold Ctrl+Alt+Shift and press M (view, control, exclusive), H (stats), F (fullscreen), U (quality), D (display), V (virtual display at window size), X (HDR), R (refresh), T (type the local clipboard on the Mac), G (fetch files the Mac is dragging), S (screenshot) or Q (quit). Run `sharelinux -h` for all flags.
 
 `cmd/sharelinux/Dockerfile` builds the viewer on Debian 14 and runs a check under Xvfb; `cmd/sharelinux/internal/mockrfb` is a tiny RFB server (`-size WxH`, `-damage N`) for checking it without a Mac.
