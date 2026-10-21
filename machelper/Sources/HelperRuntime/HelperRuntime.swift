@@ -70,6 +70,8 @@ public final class HelperRuntime {
     private let monotonic: () -> Double
     private let deviceName: (Data) -> String
     private let pairedKeys: () -> [Data]
+    /// The pairing flow, or nil (tests and the harness that do not pair).
+    public let pairing: PairingCoordinator?
     private let log = Logger(subsystem: "io.github.sharelinux.mousehelper", category: "runtime")
 
     private var activeKey: Data?
@@ -106,9 +108,11 @@ public final class HelperRuntime {
         ownUID: UInt32, clock: ChannelClock, timestamps: TimestampStore,
         deviceName: @escaping (Data) -> String = HelperRuntime.fingerprintName,
         doubleClickInterval: @escaping () -> Double = { 0.5 },
+        pairing: PairingCoordinator? = nil,
         queue: DispatchQueue = DispatchQueue(label: "io.github.sharelinux.mousehelper.runtime")
     ) {
         self.queue = queue
+        self.pairing = pairing
         staticPublicKey = staticKey.publicKey.rawRepresentation
         self.monotonic = clock.monotonic
         self.deviceName = deviceName
@@ -124,6 +128,7 @@ public final class HelperRuntime {
             environment: { peer, _ in mon.gateInputs(udpPeer: peer, toggleOn: sw.isOn) },
             clock: clock, timestamps: timestamps)
         controller.onInjectingChange = { [weak self] _ in self?.publish() }
+        pairing?.onPairedChanged = { [weak self] in self?.pairedKeysChanged() }
         mon.refresh()
     }
 
@@ -141,10 +146,20 @@ public final class HelperRuntime {
 
     /// One datagram from the socket. Returns the reply to send, if any.
     public func handle(datagram: Data, from source: PeerAddress?) -> Data? {
+        // Pairing handshake kinds go to the pairing window (open only after the
+        // owner's local click). A runtime without pairing ignores them.
+        if let kind = datagram.first, Self.pairingKinds.contains(kind) {
+            return pairing?.receive(datagram, from: source)
+        }
         let r = channel.receive(datagram, from: source)
         process(r.events, source: source)
         return r.reply
     }
+
+    static let pairingKinds: Set<UInt8> = [
+        DatagramKind.xxMessage1.rawValue, DatagramKind.xxMessage2.rawValue, DatagramKind.xxMessage3.rawValue,
+        DatagramKind.pairingTransport.rawValue,
+    ]
 
     /// Samples the environment. Call about every 100 ms and after any
     /// lock/console/sleep notification. A sample that makes things worse
@@ -156,6 +171,7 @@ public final class HelperRuntime {
 
     /// Watchdogs. Call at least every 100 ms.
     public func tick() {
+        pairing?.tick()
         if let e = channel.tick() { process([e], source: nil) }
         controller.tick()
         watchActiveSession()
@@ -330,6 +346,24 @@ public final class HelperRuntime {
     /// System going to sleep: buttons up, session over.
     public func willSleep() {
         stopEverything(.sleep)
+    }
+
+    /// Removes a paired device and ends its live session. Callable from any
+    /// thread: posting stops and held buttons come up on the calling thread
+    /// first (like the kill switch), then the runtime queue deletes the key and
+    /// ends the session, so a flooded queue cannot keep a removed device moving the mouse.
+    /// - Returns: true when the queue finished within `wait`.
+    @discardableResult
+    public func removePairedDevice(_ key: Data, wait: TimeInterval = 0) -> Bool {
+        guard let pairing else { return false }
+        guardedPoster.beginStop()
+        let done = DispatchSemaphore(value: 0)
+        queue.async { [self] in
+            pairing.remove(key: key)  // calls pairedKeysChanged on success
+            guardedPoster.endStop()
+            done.signal()
+        }
+        return wait > 0 && done.wait(timeout: .now() + wait) == .success
     }
 
     /// The paired list changed (a device was removed): drop a session whose key is gone.
