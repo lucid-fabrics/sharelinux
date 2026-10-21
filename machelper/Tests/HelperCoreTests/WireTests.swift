@@ -63,8 +63,8 @@ final class WireTests: XCTestCase {
 
     func testClamp() {
         let p = InputPacket(type: .input, dx: .min, dy: .max, sx: 5000, sy: -5000).clamped()
-        XCTAssertEqual(p.dx, -32767)
-        XCTAssertEqual(p.dy, 32767)
+        XCTAssertEqual(p.dx, -32752)
+        XCTAssertEqual(p.dy, 32752)
         XCTAssertEqual(p.sx, 2000)
         XCTAssertEqual(p.sy, -2000)
         let q = InputPacket(type: .input, dx: 100, dy: -100, sx: 1999, sy: -2000)
@@ -96,14 +96,16 @@ final class WireTests: XCTestCase {
     func testGateTruthTableMatchesReference() {
         let a = PeerAddress(bytes: [192, 0, 2, 1])!
         let b = PeerAddress(bytes: [192, 0, 2, 2])!
-        for mask in 0..<(1 << 8) {
+        for mask in 0..<(1 << 9) {
             func f(_ i: Int) -> Bool { mask & (1 << i) != 0 }
             let inputs = GateInputs(
                 toggleOn: f(0), peerPaired: f(1), udpPeer: a,
                 screenSharingPeers: f(2) ? [a, b] : [b], consoleUID: f(3) ? 501 : 502, ownUID: 501,
-                screenLocked: f(4) ? false : (f(5) ? true : nil), accessibilityGranted: f(6), rateLimited: f(7))
+                screenLocked: f(4) ? false : (f(5) ? true : nil), accessibilityGranted: f(6), rateLimited: f(7),
+                snapshotAt: f(8) ? 1000 : 998)
             let want: GateDecision
             if !f(1) { want = .dropSilently }
+            else if !f(8) { want = .deny(.locked) }  // stale snapshot
             else if !f(0) { want = .deny(.disabled) }
             else if !f(3) { want = .deny(.notConsole) }
             else if !f(4) { want = .deny(.locked) }
@@ -111,7 +113,7 @@ final class WireTests: XCTestCase {
             else if !f(6) { want = .deny(.needsGrant) }
             else if f(7) { want = .deny(.rateLimited) }
             else { want = .accept }
-            XCTAssertEqual(Gate.evaluate(inputs), want, "mask \(mask)")
+            XCTAssertEqual(Gate.evaluate(inputs, now: 1000), want, "mask \(mask)")
         }
     }
 

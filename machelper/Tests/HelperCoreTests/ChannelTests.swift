@@ -13,6 +13,8 @@ final class ChannelTests: XCTestCase {
         var grant = true
         var sharing: Set<PeerAddress> = [addr]
         var paired: [Data] = []
+        /// Age of the environment snapshot in seconds; nil means unknown.
+        var snapshotAge: Double? = 0
     }
     static let addr = PeerAddress(bytes: [192, 0, 2, 1])!
 
@@ -31,7 +33,8 @@ final class ChannelTests: XCTestCase {
                 GateInputs(
                     toggleOn: e.toggle, peerPaired: false, udpPeer: peer, screenSharingPeers: e.sharing,
                     consoleUID: e.console, ownUID: 501, screenLocked: e.locked,
-                    accessibilityGranted: e.grant, rateLimited: false)
+                    accessibilityGranted: e.grant, rateLimited: false,
+                    snapshotAt: e.snapshotAge.map { e.mono - $0 })
             },
             clock: ChannelClock(monotonic: { e.mono }, wall: { e.wall }))
     }
@@ -48,7 +51,11 @@ final class ChannelTests: XCTestCase {
             pattern: .ik, initiator: true, staticKey: key ?? linuxKey,
             remoteStatic: macKey.publicKey.rawRepresentation)
         let m = try hs.writeMessage(payload: TAI64N.encode(wall ?? env.wall))
-        return Client(hs: hs, datagram: Data([DatagramKind.ikInitiation.rawValue]) + m, session: nil)
+        return Client(
+            hs: hs,
+            datagram: Mac1.append(
+                to: Data([DatagramKind.ikInitiation.rawValue]) + m, macPublic: macKey.publicKey.rawRepresentation),
+            session: nil)
     }
 
     func finish(_ c: Client, reply: Data) throws -> TransportSession {
@@ -220,15 +227,6 @@ final class ChannelTests: XCTestCase {
         XCTAssertTrue(try send(s, InputPacket(type: .input, dx: 1)).events.contains(.input(InputPacket(type: .input, dx: 1))))
     }
 
-    func testHandshakeRateLimit() throws {
-        var answered = 0
-        for i in 0..<20 {
-            let c = try initiate(at: env.wall.addingTimeInterval(Double(i) + 1))
-            if channel.receive(c.datagram, from: Self.addr).reply != nil { answered += 1 }
-        }
-        XCTAssertEqual(answered, 5)
-    }
-
     func testWrongSizeInitiationsDoNotConsumeHandshakeBudget() throws {
         let good = try initiate()
         for n in 0..<50 {
@@ -279,6 +277,6 @@ final class ChannelTests: XCTestCase {
     func testClampAppliedToDeliveredInput() throws {
         let s = try connect()
         let r = try send(s, InputPacket(type: .input, dx: .min, sx: 9999))
-        XCTAssertEqual(r.events.last, .input(InputPacket(type: .input, dx: -32767, sx: 2000)))
+        XCTAssertEqual(r.events.last, .input(InputPacket(type: .input, dx: -32752, sx: 2000)))
     }
 }

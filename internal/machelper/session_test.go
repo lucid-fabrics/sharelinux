@@ -9,7 +9,7 @@ import (
 	"github.com/flynn/noise"
 )
 
-func mustKey(t *testing.T) noise.DHKey {
+func mustKey(t testing.TB) noise.DHKey {
 	t.Helper()
 	k, err := GenerateKeyPair()
 	if err != nil {
@@ -215,56 +215,6 @@ func TestHandshakeOrderEnforced(t *testing.T) {
 	}
 	if _, err := NewHandshake(HandshakeConfig{Pattern: PatternXX, Initiator: true, Static: a, RemoteStatic: b.Public}); err == nil {
 		t.Fatal("XX with a pinned key")
-	}
-}
-
-func xx(t *testing.T, a, b noise.DHKey, name string) (sasA, sasB string) {
-	t.Helper()
-	ini, _ := NewHandshake(HandshakeConfig{Pattern: PatternXX, Initiator: true, Static: a})
-	res, _ := NewHandshake(HandshakeConfig{Pattern: PatternXX, Static: b})
-	m1, _ := ini.Write(nil)
-	if _, err := res.Read(m1); err != nil {
-		t.Fatal(err)
-	}
-	m2, _ := res.Write(nil)
-	if _, err := ini.Read(m2); err != nil {
-		t.Fatal(err)
-	}
-	m3, _ := ini.Write([]byte(name))
-	pt, err := res.Read(m3)
-	if err != nil || string(pt) != name {
-		t.Fatalf("m3: %q %v", pt, err)
-	}
-	if !ini.Complete() || !res.Complete() {
-		t.Fatal("incomplete")
-	}
-	if !bytes.Equal(res.PeerStatic(), a.Public) || !bytes.Equal(ini.PeerStatic(), b.Public) {
-		t.Fatal("static keys not exchanged")
-	}
-	return SAS(ini.Hash()), SAS(res.Hash())
-}
-
-func TestXXPairingSASMatches(t *testing.T) {
-	sa, sb := xx(t, mustKey(t), mustKey(t), "Linux box")
-	if sa != sb || len(sa) != 6 {
-		t.Fatalf("SAS %q %q", sa, sb)
-	}
-}
-
-func TestSASDiffersUnderMITM(t *testing.T) {
-	alice, bob, mallory := mustKey(t), mustKey(t), mustKey(t)
-	aliceSide, _ := xx(t, alice, mallory, "x")
-	_, bobSide := xx(t, mallory, bob, "x")
-	if aliceSide == bobSide {
-		t.Fatalf("both sides show %s under a MITM", aliceSide)
-	}
-}
-
-func TestSASKnownAnswer(t *testing.T) {
-	// HMAC-SHA256(key "OSS-mousehelper-SAS-v1", 32 zero bytes), first 4 bytes
-	// big endian mod 10^6, computed with python's hmac; same value in Swift.
-	if got := SAS(make([]byte, 32)); got != "487222" {
-		t.Fatalf("SAS = %s", got)
 	}
 }
 

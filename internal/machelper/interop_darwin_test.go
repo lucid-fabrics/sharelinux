@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/hex"
 	"os"
 	"os/exec"
@@ -78,7 +79,13 @@ type peer struct {
 
 func startPeer(t *testing.T, paired ...[]byte) *peer {
 	t.Helper()
-	args := []string{}
+	return startPeerWith(t, nil, paired...)
+}
+
+// startPeerWith adds extra corepeer arguments (--key, --timestamps).
+func startPeerWith(t *testing.T, extra []string, paired ...[]byte) *peer {
+	t.Helper()
+	args := append([]string{}, extra...)
 	for _, k := range paired {
 		args = append(args, "--paired", hex.EncodeToString(k))
 	}
@@ -116,6 +123,12 @@ func startPeer(t *testing.T, paired ...[]byte) *peer {
 		t.Fatalf("peer key %q", line)
 	}
 	return p
+}
+
+// stop ends the peer process (a helper restart).
+func (p *peer) stop() {
+	_ = p.stdin.Close()
+	_ = p.cmd.Wait()
 }
 
 func (p *peer) readLine() string {
@@ -235,7 +248,7 @@ func TestInteropClampAndStrictDecode(t *testing.T) {
 	p := startPeer(t, static.Public)
 	s := p.connect(static)
 	event, _ := p.sendPacket(s, InputPacket{Type: PacketInput, DX: -32768, DY: 32767, SX: 9999, SY: -9999})
-	clamped := InputPacket{Type: PacketInput, DX: -32767, DY: 32767, SX: 2000, SY: -2000}
+	clamped := InputPacket{Type: PacketInput, DX: -32752, DY: 32752, SX: 2000, SY: -2000}
 	if !strings.HasSuffix(event, "input "+hex.EncodeToString(clamped.Encode())) {
 		t.Fatalf("clamp: %q", event)
 	}
@@ -299,7 +312,7 @@ func TestInteropUnpairedAndWrongKey(t *testing.T) {
 	p.command("!advance 1")
 	wrongMac := mustKey(t)
 	_, m1, _ = NewIKInitiation(paired, wrongMac.Public, time.Now())
-	if event, reply := p.send(m1); event != "dropped handshakeFailed" || reply != nil {
+	if event, reply := p.send(m1); event != "dropped badMac" || reply != nil {
 		t.Fatalf("wrong pinned key: %q %v", event, reply)
 	}
 }
@@ -363,46 +376,234 @@ func TestInteropSilenceAndBye(t *testing.T) {
 	}
 }
 
-func TestInteropPairingSAS(t *testing.T) {
-	static := mustKey(t)
-	p := startPeer(t) // nothing paired yet: XX works without any
-	ini, err := NewHandshake(HandshakeConfig{Pattern: PatternXX, Initiator: true, Static: static})
+// pairStep sends one pairing datagram and returns the event text and reply.
+func (p *peer) pairStep(dg []byte) (string, []byte) { return p.send(dg) }
+
+// pairUpTo drives a Go initiator against the Swift responder as far as the
+// reveal; the returned function sends the reveal (or any replacement).
+func pairUpTo(t *testing.T, p *peer, static noise.DHKey, name string) (*PairingInitiator, func(reveal []byte) string) {
+	t.Helper()
+	ini, err := NewPairingInitiator(static, name)
 	if err != nil {
 		t.Fatal(err)
 	}
-	m1, _ := ini.Write(nil)
-	if event, reply := p.send(m1); event != "pair-ok" || reply == nil {
+	m1, _ := ini.Start()
+	event, m2 := p.send(m1)
+	if event != "pair-ok" || m2 == nil {
 		t.Fatalf("m1: %q", event)
 	}
-	_, reply := p.send(m1) // restart: a second attempt replaces the first
-	if _, err := ini.Read(reply); err != nil {
+	out, err := ini.Receive(m2)
+	if err != nil || len(out) != 2 {
 		t.Fatalf("reading Swift message 2: %v", err)
 	}
-	m3, err := ini.Write([]byte("Linux box"))
-	if err != nil {
-		t.Fatal(err)
+	if event, reply := p.send(out[0]); event != "pair-ok" || reply != nil {
+		t.Fatalf("m3: %q", event)
 	}
-	event, reply := p.send(m3)
-	want := "pair-sas " + SAS(ini.Hash()) + " Linux_box " + hex.EncodeToString(static.Public)
-	if event != want || reply != nil {
+	event, rm := p.send(out[1])
+	if event != "pair-ok" || rm == nil {
+		t.Fatalf("commit: %q", event)
+	}
+	out, err = ini.Receive(rm)
+	if err != nil || len(out) != 1 {
+		t.Fatalf("reading Swift nonce: %v", err)
+	}
+	return ini, func(reveal []byte) string {
+		if reveal == nil {
+			reveal = out[0]
+		}
+		event, _ := p.send(reveal)
+		return event
+	}
+}
+
+func TestInteropPairingCodeNameAndKeysAgree(t *testing.T) {
+	static := mustKey(t)
+	p := startPeer(t)
+	p.command("!pair open")
+	ini, reveal := pairUpTo(t, p, static, "Linux box")
+	event := reveal(nil)
+	want := "pair-sas " + ini.Code() + " Linux_box " + hex.EncodeToString(static.Public)
+	if event != want {
 		t.Fatalf("pairing result\n got %q\nwant %q", event, want)
 	}
 	if !bytes.Equal(ini.PeerStatic(), p.pub) {
 		t.Fatal("Go did not learn the Mac's static key")
 	}
+	if got := p.command("!pair confirm"); got != "confirmed Linux_box "+hex.EncodeToString(static.Public) {
+		t.Fatalf("confirm: %q", got)
+	}
+	// One pairing per click: the window is shut now.
+	m1, _ := mustPairing(t, static, "x").Start()
+	if event, _ := p.send(m1); event != "pair-error closed" {
+		t.Fatalf("after confirm: %q", event)
+	}
 }
 
-func TestInteropPairingRejectsBadDeviceName(t *testing.T) {
+func TestInteropPairingNeedsTheLocalClick(t *testing.T) {
+	p := startPeer(t)
+	m1, _ := mustPairing(t, mustKey(t), "Linux box").Start()
+	if event, reply := p.send(m1); event != "pair-error closed" || reply != nil {
+		t.Fatalf("window never opened: %q", event)
+	}
+}
+
+func TestInteropRevealThatDoesNotMatchTheCommitIsRefused(t *testing.T) {
 	static := mustKey(t)
 	p := startPeer(t)
-	ini, _ := NewHandshake(HandshakeConfig{Pattern: PatternXX, Initiator: true, Static: static})
-	m1, _ := ini.Write(nil)
-	_, reply := p.send(m1)
-	if _, err := ini.Read(reply); err != nil {
+	p.command("!pair open")
+	ini, reveal := pairUpTo(t, p, static, "Linux box")
+	lie, err := ini.session.Seal(append([]byte{PairingTagReveal}, bytes.Repeat([]byte{9}, 32)...), time.Now())
+	if err != nil {
 		t.Fatal(err)
 	}
-	m3, _ := ini.Write([]byte("evil\nname"))
-	if event, _ := p.send(m3); !strings.HasPrefix(event, "pair-error") {
-		t.Fatalf("control characters in the name were accepted: %q", event)
+	if event := reveal(lie); event != "pair-error commitMismatch" {
+		t.Fatalf("lying reveal: %q", event)
 	}
+}
+
+func TestInteropPairingWindowClosesAfterThreeFailures(t *testing.T) {
+	p := startPeer(t)
+	p.command("!pair open")
+	for i := 0; i < 3; i++ {
+		static := mustKey(t)
+		ini, reveal := pairUpTo(t, p, static, "Linux box")
+		lie, _ := ini.session.Seal(append([]byte{PairingTagReveal}, bytes.Repeat([]byte{byte(i)}, 32)...), time.Now())
+		if event := reveal(lie); event != "pair-error commitMismatch" {
+			t.Fatalf("attempt %d: %q", i, event)
+		}
+	}
+	m1, _ := mustPairing(t, mustKey(t), "Linux box").Start()
+	if event, _ := p.send(m1); event != "pair-error closed" {
+		t.Fatalf("window should be shut after 3 failures: %q", event)
+	}
+}
+
+func TestInteropPairingRejectsInvisibleDeviceNames(t *testing.T) {
+	for _, name := range []string{"evil\nname", "zero\u200bwidth", "bidi\u202eflip", "fill\u3164er"} {
+		static := mustKey(t)
+		p := startPeer(t)
+		p.command("!pair open")
+		ini, _ := NewHandshake(HandshakeConfig{Pattern: PatternXX, Initiator: true, Static: static})
+		m1, _ := ini.Write(nil)
+		_, m2 := p.send(m1)
+		if _, err := ini.Read(m2); err != nil {
+			t.Fatal(err)
+		}
+		m3, _ := ini.Write([]byte(name)) // bypasses the Go-side check on purpose
+		if event, _ := p.send(m3); event != "pair-error badDeviceName" {
+			t.Fatalf("%q accepted: %q", name, event)
+		}
+	}
+}
+
+func TestInteropPrologueMismatchIsRefused(t *testing.T) {
+	static := mustKey(t)
+	p := startPeer(t, static.Public)
+	ini, _ := NewHandshake(HandshakeConfig{
+		Pattern: PatternIK, Initiator: true, Static: static, RemoteStatic: p.pub,
+		Prologue: []byte("OSS-mousehelper v1 session Noise_IK_25519_ChaChaPoly_SHA256 initiator=linux responder=mac"),
+	})
+	ts := TAI64N(time.Now())
+	m1, err := ini.Write(ts[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event, reply := p.send(m1); event != "dropped handshakeFailed" || reply != nil {
+		t.Fatalf("old-version prologue: %q", event)
+	}
+	p.command("!advance 1")
+	p.connect(static) // the standard prologue works
+}
+
+func TestInteropJunkWithoutMAC1NeverReachesTheHandshake(t *testing.T) {
+	static := mustKey(t)
+	p := startPeer(t, static.Public)
+	_, m1, _ := NewIKInitiation(static, p.pub, time.Now())
+	for i := 0; i < 50; i++ {
+		junk := bytes.Clone(m1)
+		junk[len(junk)-1-i%MAC1Size] ^= 0xff
+		if event, reply := p.send(junk); event != "dropped badMac" || reply != nil {
+			t.Fatalf("junk %d: %q", i, event)
+		}
+	}
+	if event, _ := p.send(m1); event != "answered" {
+		t.Fatalf("real initiation after junk: %q", event)
+	}
+}
+
+func TestInteropOneSourceCannotHammerHandshakes(t *testing.T) {
+	static := mustKey(t)
+	p := startPeer(t, static.Public)
+	var events []string
+	for i := 0; i < 4; i++ {
+		_, m1, _ := NewIKInitiation(static, p.pub, time.Now().Add(time.Duration(i)*time.Second))
+		event, _ := p.send(m1)
+		events = append(events, event)
+	}
+	if strings.Join(events, ",") != "answered,answered,dropped handshakeRateLimit,dropped handshakeRateLimit" {
+		t.Fatalf("per-source limit: %v", events)
+	}
+}
+
+func TestInteropMotionBudget(t *testing.T) {
+	static := mustKey(t)
+	p := startPeer(t, static.Public)
+	s := p.connect(static)
+	big := InputPacket{Type: PacketInput, DX: 32767, DY: 32767}
+	delivered, denied := 0, 0
+	for i := 0; i < 8; i++ {
+		event, _ := p.sendPacket(s, big)
+		switch {
+		case strings.Contains(event, "input "):
+			delivered++
+		case strings.HasSuffix(event, "denied 5"):
+			denied++
+		default:
+			t.Fatalf("packet %d: %q", i, event)
+		}
+	}
+	// 20 000 pt/s * 16 = 320 000 units; each packet costs 2 * 32752.
+	if want := MotionUnitsPerSecond / (2 * int(MaxMotion)); delivered != want || delivered+denied != 8 {
+		t.Fatalf("delivered %d denied %d, want %d delivered", delivered, denied, want)
+	}
+}
+
+func TestInteropStaleEnvironmentDeniesInput(t *testing.T) {
+	static := mustKey(t)
+	p := startPeer(t, static.Public)
+	s := p.connect(static)
+	p.sendPacket(s, InputPacket{Type: PacketKeepalive})
+	p.command("!stale on")
+	p.command("!advance 0.3")
+	event, reply := p.sendPacket(s, InputPacket{Type: PacketInput, DX: 1})
+	if event != "denied 2" {
+		t.Fatalf("stale snapshot: %q", event)
+	}
+	if st := p.status(s, reply); st.State != StateLocked {
+		t.Fatalf("status %v", st)
+	}
+}
+
+func TestInteropReplayedInitiationIsRefusedAfterARestart(t *testing.T) {
+	static := mustKey(t)
+	priv := make([]byte, 32)
+	_, _ = rand.Read(priv)
+	file := filepath.Join(t.TempDir(), "timestamps.json")
+	args := []string{"--key", hex.EncodeToString(priv), "--timestamps", file}
+
+	first := startPeerWith(t, args, static.Public)
+	_, m1, _ := NewIKInitiation(static, first.pub, time.Now())
+	if event, _ := first.send(m1); event != "answered" {
+		t.Fatalf("first run: %q", event)
+	}
+	first.stop()
+
+	second := startPeerWith(t, args, static.Public)
+	if !bytes.Equal(first.pub, second.pub) {
+		t.Fatal("restart changed the static key")
+	}
+	if event, reply := second.send(m1); event != "dropped staleTimestamp" || reply != nil {
+		t.Fatalf("captured initiation replayed after restart: %q", event)
+	}
+	second.connect2(t, static) // a new initiation is welcome
 }

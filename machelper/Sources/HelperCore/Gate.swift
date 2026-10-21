@@ -37,12 +37,19 @@ public struct GateInputs: Sendable {
     public var screenLocked: Bool?
     public var accessibilityGranted: Bool
     public var rateLimited: Bool
+    /// Monotonic seconds at which the environment fields above were sampled.
+    /// nil means unknown. The gate refuses a snapshot older than
+    /// `ChannelLimits.environmentMaxAge` or from the future, so a stalled
+    /// poller (or a cached value) cannot keep input flowing after the screen
+    /// locked or Screen Sharing ended.
+    public var snapshotAt: Double?
 
     public init(
         toggleOn: Bool, peerPaired: Bool, udpPeer: PeerAddress?,
         screenSharingPeers: Set<PeerAddress>, consoleUID: UInt32?, ownUID: UInt32,
-        screenLocked: Bool?, accessibilityGranted: Bool, rateLimited: Bool
+        screenLocked: Bool?, accessibilityGranted: Bool, rateLimited: Bool, snapshotAt: Double?
     ) {
+        self.snapshotAt = snapshotAt
         self.toggleOn = toggleOn; self.peerPaired = peerPaired; self.udpPeer = udpPeer
         self.screenSharingPeers = screenSharingPeers; self.consoleUID = consoleUID
         self.ownUID = ownUID; self.screenLocked = screenLocked
@@ -59,10 +66,16 @@ public enum GateDecision: Equatable, Sendable {
 }
 
 public enum Gate {
-    /// The six accept conditions of design 3.3. First failing condition wins, in
+    /// The accept conditions of design 3.3. First failing condition wins, in
     /// this order, so the reported reason is stable and the cheapest to fix first.
-    public static func evaluate(_ i: GateInputs) -> GateDecision {
+    /// `now` is monotonic seconds, the same clock as `GateInputs.snapshotAt`.
+    /// A missing, stale or future-dated snapshot is reported as `locked`, the
+    /// same answer as an unknown lock state: the environment is not known.
+    public static func evaluate(_ i: GateInputs, now: Double) -> GateDecision {
         guard i.peerPaired else { return .dropSilently }
+        guard let at = i.snapshotAt, now >= at, now - at <= ChannelLimits.environmentMaxAge else {
+            return .deny(.locked)
+        }
         guard i.toggleOn else { return .deny(.disabled) }
         guard let console = i.consoleUID, console == i.ownUID else { return .deny(.notConsole) }
         guard i.screenLocked == false else { return .deny(.locked) }

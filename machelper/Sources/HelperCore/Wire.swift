@@ -5,7 +5,9 @@ import Foundation
 ///
 /// UDP datagram:
 ///   handshake  kind(1) || noise message          kinds 0x01/0x02 (IK), 0x10/0x11/0x12 (XX)
+///   IK initiation additionally ends in mac1(16), see Mac1.swift
 ///   transport  0x03 || counter(8, LE) || AEAD(plaintext) || tag(16)
+///   pairing    0x13, same layout, under the XX transport keys
 /// The 64-bit counter is the Noise nonce and the replay-window sequence number.
 public enum DatagramKind: UInt8, Sendable {
     case ikInitiation = 0x01
@@ -14,15 +16,20 @@ public enum DatagramKind: UInt8, Sendable {
     case xxMessage1 = 0x10
     case xxMessage2 = 0x11
     case xxMessage3 = 0x12
+    /// Pairing messages after XX (commit, responder nonce, reveal), in the same
+    /// layout as `transport` but under the XX transport keys.
+    case pairingTransport = 0x13
 }
 
 public enum WireLimits {
     /// Largest datagram of any kind we are willing to look at.
     public static let maxDatagram = 512
     public static let transportOverhead = 1 + 8 + aeadTagLength
-    /// Per-packet clamps (design 3.4). dx/dy travel as i16 in points*16, so the
-    /// representable maximum (32767) is below the design's 4000*16 and wins.
-    public static let maxMotion: Int16 = 32767
+    /// Per-packet clamps (design 3.4). dx/dy travel as i16 in points*16: at most
+    /// 2047 pt per packet (32752), so the value is never -32768 and cannot
+    /// overflow when negated. The real limit is the per-second budget
+    /// (ChannelLimits.motionUnitsPerSecond).
+    public static let maxMotion: Int16 = 2047 * 16
     public static let maxScroll: Int16 = 2000
 }
 

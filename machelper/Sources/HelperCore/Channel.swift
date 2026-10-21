@@ -4,6 +4,7 @@ import Foundation
 public enum DropReason: Equatable, Sendable {
     case malformed
     case handshakeRateLimit
+    case badMac
     case handshakeFailed
     case unpaired
     case staleTimestamp
@@ -33,6 +34,38 @@ public struct ChannelResult: Equatable, Sendable {
     public var events: [ChannelEvent]
 }
 
+/// Per-source handshake limiter with bounded memory: at most
+/// `ChannelLimits.maxTrackedSources` buckets; once full, idle buckets are
+/// forgotten (a full bucket carries no information) and sources that still do
+/// not fit share one bucket, so a flood of spoofed addresses can neither grow
+/// the table nor starve the global budget.
+struct SourceRateLimiter {
+    private var table: [PeerAddress?: RateLimiter] = [:]
+    private var overflow = SourceRateLimiter.bucket()
+    private var lastPrune = -Double.infinity
+    var trackedCount: Int { table.count }
+
+    private static func bucket() -> RateLimiter {
+        RateLimiter(
+            perSecond: ChannelLimits.handshakesPerSourcePerSecond,
+            burst: ChannelLimits.handshakesPerSourceBurst)
+    }
+
+    mutating func allow(_ source: PeerAddress?, now: Double) -> Bool {
+        if table[source] == nil, table.count >= ChannelLimits.maxTrackedSources, now - lastPrune >= 1 || now < lastPrune {
+            lastPrune = now
+            table = table.filter { !$0.value.isFull(now: now) }
+        }
+        if table[source] == nil, table.count >= ChannelLimits.maxTrackedSources {
+            return overflow.allow(now: now)
+        }
+        var b = table[source] ?? SourceRateLimiter.bucket()
+        let ok = b.allow(now: now)
+        table[source] = b
+        return ok
+    }
+}
+
 public struct ChannelClock {
     /// Monotonic seconds (rate limits, timeouts).
     public var monotonic: () -> Double
@@ -56,6 +89,10 @@ public final class HelperChannel {
         let peerKey: Data
         var lastRx: Double
         var lastStatus: Double = -.infinity
+        /// Where the last authenticated packet of this session came from. nil
+        /// until the session authenticated a packet; never taken from an
+        /// initiation, which does not prove anything about later datagrams.
+        var source: PeerAddress?
     }
 
     private let staticKey: Curve25519.KeyAgreement.PrivateKey
@@ -63,11 +100,17 @@ public final class HelperChannel {
     private let environment: (PeerAddress?, Data) -> GateInputs
     private let clock: ChannelClock
     private var handshakeLimiter = RateLimiter(perSecond: ChannelLimits.handshakesPerSecond)
+    private var sourceLimiter = SourceRateLimiter()
     private var inputLimiter = RateLimiter(perSecond: ChannelLimits.inputPacketsPerSecond)
+    private var motionBudget = RateLimiter(perSecond: ChannelLimits.motionUnitsPerSecond)
     private var lastTimestamp: [Data: Data] = [:]
+    private let timestamps: TimestampStore
+    /// False when the timestamp store could not be read: handshakes are refused
+    /// rather than risk accepting a replay.
+    public private(set) var timestampsTrusted = true
+    private let mac1Key: SymmetricKey
     private var active: Live?
     private var pending: Live?
-    private var lastSource: PeerAddress?
     private let ephemeralSource: () -> Curve25519.KeyAgreement.PrivateKey
 
     /// - Parameters:
@@ -79,11 +122,15 @@ public final class HelperChannel {
         pairedKeys: @escaping () -> [Data],
         environment: @escaping (PeerAddress?, Data) -> GateInputs,
         clock: ChannelClock,
+        timestamps: TimestampStore = MemoryTimestampStore(),
         ephemeralSource: @escaping () -> Curve25519.KeyAgreement.PrivateKey = { .init() }
     ) {
         self.staticKey = staticKey; self.pairedKeys = pairedKeys
         self.environment = environment; self.clock = clock
         self.ephemeralSource = ephemeralSource
+        self.timestamps = timestamps
+        mac1Key = Mac1.key(macPublic: staticKey.publicKey.rawRepresentation)
+        if let loaded = try? timestamps.load() { lastTimestamp = loaded } else { timestampsTrusted = false }
     }
 
     public var activePeerKey: Data? { active?.peerKey }
@@ -96,10 +143,12 @@ public final class HelperChannel {
     }
 
     /// Ends the active session immediately (kill switch, key removed, toggle off).
+    /// A session that has answered a handshake but not yet authenticated a
+    /// packet is dropped too, whether or not another one is active.
     public func endSession(reason: EndReason = .bye) -> ChannelEvent? {
+        pending = nil
         guard active != nil else { return nil }
         active = nil
-        pending = nil
         return .ended(reason)
     }
 
@@ -123,31 +172,41 @@ public final class HelperChannel {
             return ChannelResult(reply: nil, events: [.dropped(.malformed)])
         }
         switch kind {
-        case .ikInitiation: return handleInitiation(body, from: source)
+        case .ikInitiation: return handleInitiation(datagram, body, from: source)
         case .transport: return handleTransport(datagram, from: source)
         default:  // responses and XX belong to other roles; never answered here
             return ChannelResult(reply: nil, events: [.dropped(.malformed)])
         }
     }
 
-    // IK message 1: e(32) + enc(s)(32+16) + enc(timestamp)(12+16) = 108 bytes.
-    static let initiationBodySize = 32 + 48 + TAI64N.size + aeadTagLength
+    // IK message 1: e(32) + enc(s)(32+16) + enc(timestamp)(12+16) = 108 bytes,
+    // followed by mac1(16).
+    static let noiseInitiationSize = 32 + 48 + TAI64N.size + aeadTagLength
+    static let initiationBodySize = noiseInitiationSize + Mac1.size
 
-    private func handleInitiation(_ body: Data, from source: PeerAddress?) -> ChannelResult {
+    private func handleInitiation(_ datagram: Data, _ body: Data, from source: PeerAddress?) -> ChannelResult {
         let now = clock.monotonic()
-        // Wrong-size datagrams are free to reject, so they must not eat the
-        // handshake budget that real handshakes need.
+        // Cheapest checks first, and none of them may spend the handshake
+        // budget: wrong size, then the keyed mac1 (one HMAC, constant time).
+        // Only a sender who knows the Mac's public key gets past it.
         guard body.count == HelperChannel.initiationBodySize else {
             return ChannelResult(reply: nil, events: [.dropped(.malformed)])
         }
-        guard handshakeLimiter.allow(now: now) else {
+        guard Mac1.verify(datagram, key: mac1Key) else {
+            return ChannelResult(reply: nil, events: [.dropped(.badMac)])
+        }
+        // Per source first, so one address cannot drain the global budget.
+        guard sourceLimiter.allow(source, now: now), handshakeLimiter.allow(now: now) else {
             return ChannelResult(reply: nil, events: [.dropped(.handshakeRateLimit)])
+        }
+        guard timestampsTrusted else {
+            return ChannelResult(reply: nil, events: [.dropped(.handshakeFailed)])
         }
         do {
             let hs = try HandshakeState(
                 pattern: .ik, initiator: false, staticKey: staticKey,
-                remoteStatic: nil, prologue: Data(), ephemeralSource: ephemeralSource)
-            let ts = try hs.readMessage(body)
+                remoteStatic: nil, prologue: nil, ephemeralSource: ephemeralSource)
+            let ts = try hs.readMessage(Data(body.prefix(HelperChannel.noiseInitiationSize)))
             guard let peerKey = hs.remoteStatic else { throw NoiseError.invalidState }
             guard isPaired(peerKey) else {
                 return ChannelResult(reply: nil, events: [.dropped(.unpaired)])
@@ -160,10 +219,12 @@ public final class HelperChannel {
             }
             let response = try hs.writeMessage(payload: Data())
             let keys = try hs.split()
+            // Durable before the answer leaves; if it cannot be stored the
+            // replay protection would be a lie, so the handshake is refused.
+            try timestamps.save(peer: peerKey, timestamp: ts)
             lastTimestamp[peerKey] = ts
             pending = Live(
                 session: TransportSession(keys: keys, now: now), peerKey: peerKey, lastRx: now)
-            lastSource = source
             return ChannelResult(
                 reply: Data([DatagramKind.ikResponse.rawValue]) + response,
                 events: [.handshakeAnswered])
@@ -208,6 +269,7 @@ public final class HelperChannel {
         if fromPending, let p = pending {
             if active != nil { events.append(.ended(.replaced)) }
             live = p
+            live.source = source
             pending = nil
             events.append(.sessionStarted(peerKey: p.peerKey))
         } else if let a = active {
@@ -216,7 +278,8 @@ public final class HelperChannel {
             return ChannelResult(reply: nil, events: [.dropped(.noSession)])
         }
         live.lastRx = now
-        lastSource = source ?? lastSource
+        // Only an authenticated packet may move the session's address.
+        if let source { live.source = source }
 
         guard let packet = try? InputPacket.decode(pt) else {
             active = live
@@ -228,10 +291,19 @@ public final class HelperChannel {
             return ChannelResult(reply: nil, events: events + [.ended(.bye)])
         }
 
-        var inputs = environment(lastSource, live.peerKey)
+        var inputs = environment(live.source, live.peerKey)
         inputs.peerPaired = isPaired(live.peerKey)
-        inputs.rateLimited = packet.type == .input && !inputLimiter.allow(now: now)
-        let decision = Gate.evaluate(inputs)
+        if packet.type == .input {
+            // Both buckets are charged; either one running dry limits the packet.
+            let motion = packet.clamped()
+            let cost = Double(abs(Int(motion.dx)) + abs(Int(motion.dy)))
+            let packetsOK = inputLimiter.allow(now: now)
+            let motionOK = motionBudget.allow(now: now, cost: cost)
+            inputs.rateLimited = !(packetsOK && motionOK)
+        } else {
+            inputs.rateLimited = false
+        }
+        let decision = Gate.evaluate(inputs, now: now)
         var reply: Data?
 
         func status(_ s: HelperState) {

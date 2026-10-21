@@ -6,7 +6,9 @@
 // UDP datagram:
 //
 //	handshake  kind(1) || noise message     kinds 0x01/0x02 (IK), 0x10/0x11/0x12 (XX)
+//	           the IK initiation ends in mac1(16), see mac1.go
 //	transport  0x03 || counter(8, LE) || AEAD(plaintext) || tag(16)
+//	pairing    0x13, same layout, under the XX transport keys
 //
 // The 64-bit counter is the Noise nonce and the replay-window sequence number.
 // All integers are little endian.
@@ -27,6 +29,9 @@ const (
 	KindXXMessage1   DatagramKind = 0x10
 	KindXXMessage2   DatagramKind = 0x11
 	KindXXMessage3   DatagramKind = 0x12
+	// KindPairingTransport carries the commit, responder nonce and reveal
+	// that follow the XX handshake, under the XX transport keys.
+	KindPairingTransport DatagramKind = 0x13
 )
 
 const (
@@ -35,10 +40,14 @@ const (
 	// TransportOverhead is kind + counter + AEAD tag.
 	TransportOverhead = 1 + 8 + 16
 
-	// MaxMotion is the clamp for dx/dy. They travel as int16 in points*16, so
-	// the representable maximum is below the 4000*16 of the design.
-	MaxMotion int16 = 32767
-	MaxScroll int16 = 2000
+	// MaxMotion is the clamp for dx/dy per packet: 2047 pt in points*16, so it
+	// is never -32768 and negating it cannot overflow. The real limit is the
+	// per-second budget below, enforced by the Mac.
+	MaxMotion int16 = 2047 * 16
+	// MotionUnitsPerSecond is the Mac's budget for |dx|+|dy| per second
+	// (20 000 pt/s). A client should pace itself below it.
+	MotionUnitsPerSecond       = 20_000 * 16
+	MaxScroll            int16 = 2000
 
 	InputPacketSize  = 20
 	StatusPacketSize = 2
@@ -189,7 +198,8 @@ func ParseDatagram(b []byte) (kind DatagramKind, body []byte, ok bool) {
 		return 0, nil, false
 	}
 	switch k := DatagramKind(b[0]); k {
-	case KindIKInitiation, KindIKResponse, KindTransport, KindXXMessage1, KindXXMessage2, KindXXMessage3:
+	case KindIKInitiation, KindIKResponse, KindTransport, KindXXMessage1, KindXXMessage2, KindXXMessage3,
+		KindPairingTransport:
 		return k, b[1:], true
 	}
 	return 0, nil, false

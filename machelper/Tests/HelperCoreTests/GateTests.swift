@@ -2,6 +2,8 @@ import XCTest
 @testable import HelperCore
 
 final class GateTests: XCTestCase {
+    static let now = 1000.0
+
     private func allOKInputs() -> GateInputs {
         let peer = PeerAddress(bytes: [192, 0, 2, 1])!
         return GateInputs(
@@ -13,12 +15,13 @@ final class GateTests: XCTestCase {
             ownUID: 501,
             screenLocked: false,
             accessibilityGranted: true,
-            rateLimited: false
+            rateLimited: false,
+            snapshotAt: Self.now
         )
     }
 
     func testAllOKAccepts() {
-        XCTAssertEqual(Gate.evaluate(allOKInputs()), .accept)
+        XCTAssertEqual(Gate.evaluate(allOKInputs(), now: Self.now), .accept)
     }
 
     func testUnpairedPeerIsDroppedSilentlyEvenWhenEverythingElseIsBad() {
@@ -32,56 +35,56 @@ final class GateTests: XCTestCase {
         inputs.accessibilityGranted = false
         inputs.rateLimited = true
 
-        XCTAssertEqual(Gate.evaluate(inputs), .dropSilently)
+        XCTAssertEqual(Gate.evaluate(inputs, now: Self.now), .dropSilently)
     }
 
     func testToggleOffIsDeniedAsDisabled() {
         var inputs = allOKInputs()
         inputs.toggleOn = false
 
-        XCTAssertEqual(Gate.evaluate(inputs), .deny(.disabled))
+        XCTAssertEqual(Gate.evaluate(inputs, now: Self.now), .deny(.disabled))
     }
 
     func testMissingConsoleUIDIsDeniedAsNotConsole() {
         var inputs = allOKInputs()
         inputs.consoleUID = nil
 
-        XCTAssertEqual(Gate.evaluate(inputs), .deny(.notConsole))
+        XCTAssertEqual(Gate.evaluate(inputs, now: Self.now), .deny(.notConsole))
     }
 
     func testDifferentConsoleUIDIsDeniedAsNotConsole() {
         var inputs = allOKInputs()
         inputs.consoleUID = 502
 
-        XCTAssertEqual(Gate.evaluate(inputs), .deny(.notConsole))
+        XCTAssertEqual(Gate.evaluate(inputs, now: Self.now), .deny(.notConsole))
     }
 
     func testLockedScreenIsDeniedAsLocked() {
         var inputs = allOKInputs()
         inputs.screenLocked = true
 
-        XCTAssertEqual(Gate.evaluate(inputs), .deny(.locked))
+        XCTAssertEqual(Gate.evaluate(inputs, now: Self.now), .deny(.locked))
     }
 
     func testUnknownScreenLockStateIsDeniedAsLocked() {
         var inputs = allOKInputs()
         inputs.screenLocked = nil
 
-        XCTAssertEqual(Gate.evaluate(inputs), .deny(.locked))
+        XCTAssertEqual(Gate.evaluate(inputs, now: Self.now), .deny(.locked))
     }
 
     func testMissingUDPPeerIsDeniedAsNoSession() {
         var inputs = allOKInputs()
         inputs.udpPeer = nil
 
-        XCTAssertEqual(Gate.evaluate(inputs), .deny(.noSession))
+        XCTAssertEqual(Gate.evaluate(inputs, now: Self.now), .deny(.noSession))
     }
 
     func testUDPPeerWithoutScreenSharingSessionIsDeniedAsNoSession() {
         var inputs = allOKInputs()
         inputs.udpPeer = PeerAddress(bytes: [198, 51, 100, 2])
 
-        XCTAssertEqual(Gate.evaluate(inputs), .deny(.noSession))
+        XCTAssertEqual(Gate.evaluate(inputs, now: Self.now), .deny(.noSession))
     }
 
     func testIPv4MappedIPv6AddressEqualsIPv4Address() {
@@ -101,14 +104,14 @@ final class GateTests: XCTestCase {
         var inputs = allOKInputs()
         inputs.accessibilityGranted = false
 
-        XCTAssertEqual(Gate.evaluate(inputs), .deny(.needsGrant))
+        XCTAssertEqual(Gate.evaluate(inputs, now: Self.now), .deny(.needsGrant))
     }
 
     func testRateLimitedIsDeniedAsRateLimited() {
         var inputs = allOKInputs()
         inputs.rateLimited = true
 
-        XCTAssertEqual(Gate.evaluate(inputs), .deny(.rateLimited))
+        XCTAssertEqual(Gate.evaluate(inputs, now: Self.now), .deny(.rateLimited))
     }
 
     func testDisabledTakesPrecedenceOverLocked() {
@@ -116,7 +119,7 @@ final class GateTests: XCTestCase {
         inputs.toggleOn = false
         inputs.screenLocked = true
 
-        XCTAssertEqual(Gate.evaluate(inputs), .deny(.disabled))
+        XCTAssertEqual(Gate.evaluate(inputs, now: Self.now), .deny(.disabled))
     }
 
     func testPeerAddressWithInvalidLengthIsNil() {

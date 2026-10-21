@@ -92,11 +92,11 @@ func runVector(t *testing.T, v vector, pattern Pattern) {
 	initStatic, respStatic := dhKey(t, v.InitStatic), dhKey(t, v.RespStatic)
 	cfgI := HandshakeConfig{
 		Pattern: pattern, Initiator: true, Static: initStatic,
-		Prologue: unhex(t, v.InitPrologue), random: bytes.NewReader(unhex(t, v.InitEphemeral)),
+		Prologue: unhex(t, v.InitPrologue), random: bytes.NewReader(unhex(t, v.InitEphemeral)), rawNoise: true,
 	}
 	cfgR := HandshakeConfig{
 		Pattern: pattern, Static: respStatic,
-		Prologue: unhex(t, v.RespPrologue), random: bytes.NewReader(unhex(t, v.RespEphemeral)),
+		Prologue: unhex(t, v.RespPrologue), random: bytes.NewReader(unhex(t, v.RespEphemeral)), rawNoise: true,
 	}
 	if pattern == PatternIK {
 		cfgI.RemoteStatic = respStatic.Public

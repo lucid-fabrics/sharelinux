@@ -2,8 +2,6 @@ package machelper
 
 import (
 	"crypto/cipher"
-	"crypto/hmac"
-	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -31,7 +29,12 @@ var (
 	ErrMalformed       = E.New("machelper: malformed datagram")
 	ErrUnexpectedKind  = E.New("machelper: unexpected datagram kind")
 	ErrBadRemoteStatic = E.New("machelper: remote static key must be 32 bytes")
+	ErrEmptyPrologue   = E.New("machelper: empty prologue")
+	ErrBadMAC          = E.New("machelper: bad mac1")
 )
+
+// ProtocolVersion is bound into every handshake through the Noise prologue.
+const ProtocolVersion = 2
 
 var suite = noise.NewCipherSuite(noise.DH25519, noise.CipherChaChaPoly, noise.HashSHA256)
 
@@ -51,6 +54,26 @@ func (p Pattern) noise() noise.HandshakePattern {
 	return noise.HandshakeIK
 }
 
+func (p Pattern) name() string {
+	if p == PatternXX {
+		return "Noise_XX_25519_ChaChaPoly_SHA256"
+	}
+	return "Noise_IK_25519_ChaChaPoly_SHA256"
+}
+
+// StandardPrologue binds the protocol name, version and roles (Linux
+// initiates, the Mac responds) into the handshake, so a peer speaking another
+// version, pattern or role fails at the first message. Byte compatible with
+// NoisePattern.standardPrologue in Swift.
+func (p Pattern) StandardPrologue() []byte {
+	purpose := "session"
+	if p == PatternXX {
+		purpose = "pairing"
+	}
+	return []byte(fmt.Sprintf("OSS-mousehelper v%d %s %s initiator=linux responder=mac",
+		ProtocolVersion, purpose, p.name()))
+}
+
 func (p Pattern) kinds() []DatagramKind {
 	if p == PatternXX {
 		return []DatagramKind{KindXXMessage1, KindXXMessage2, KindXXMessage3}
@@ -66,9 +89,14 @@ type HandshakeConfig struct {
 	Static    noise.DHKey
 	// RemoteStatic is required for the IK initiator and must be empty otherwise.
 	RemoteStatic []byte
-	Prologue     []byte
+	// Prologue defaults to the pattern's StandardPrologue. An explicitly empty
+	// (non-nil) prologue is refused; only the Noise test vectors override it.
+	Prologue []byte
 
 	random io.Reader // tests only: fixed ephemeral key bytes for vectors
+	// rawNoise (tests only) disables the mac1 framing so the Cacophony vectors
+	// compare pure Noise messages.
+	rawNoise bool
 }
 
 // Handshake wraps a flynn/noise state with datagram framing and in-order,
@@ -81,6 +109,9 @@ type Handshake struct {
 	failed    bool
 	send      *noise.CipherState
 	recv      *noise.CipherState
+	// macPublic is the Mac's static key: pinned (initiator) or our own (responder).
+	macPublic []byte
+	mac1      bool
 }
 
 func NewHandshake(config HandshakeConfig) (*Handshake, error) {
@@ -94,11 +125,17 @@ func NewHandshake(config HandshakeConfig) (*Handshake, error) {
 	if !needRemote && len(config.RemoteStatic) != 0 {
 		return nil, ErrHandshakeState
 	}
+	prologue := config.Prologue
+	if prologue == nil {
+		prologue = config.Pattern.StandardPrologue()
+	} else if len(prologue) == 0 {
+		return nil, ErrEmptyPrologue
+	}
 	state, err := noise.NewHandshakeState(noise.Config{
 		CipherSuite:   suite,
 		Pattern:       config.Pattern.noise(),
 		Initiator:     config.Initiator,
-		Prologue:      config.Prologue,
+		Prologue:      prologue,
 		StaticKeypair: config.Static,
 		Random:        config.random,
 		PeerStatic:    config.RemoteStatic,
@@ -106,7 +143,15 @@ func NewHandshake(config HandshakeConfig) (*Handshake, error) {
 	if err != nil {
 		return nil, E.Cause(err, "new handshake")
 	}
-	return &Handshake{state: state, pattern: config.Pattern, initiator: config.Initiator}, nil
+	h := &Handshake{state: state, pattern: config.Pattern, initiator: config.Initiator}
+	if config.Pattern == PatternIK && !config.rawNoise {
+		h.mac1 = true
+		h.macPublic = config.RemoteStatic
+		if !config.Initiator {
+			h.macPublic = config.Static.Public
+		}
+	}
+	return h, nil
 }
 
 func (h *Handshake) myTurn() bool { return (h.index%2 == 0) == h.initiator }
@@ -123,6 +168,9 @@ func (h *Handshake) Write(payload []byte) ([]byte, error) {
 		return nil, E.Cause(err, "write handshake")
 	}
 	h.advance(cs1, cs2)
+	if h.mac1 && h.initiator && h.index == 1 {
+		out = AppendMAC1(out, h.macPublic)
+	}
 	return out, nil
 }
 
@@ -141,7 +189,15 @@ func (h *Handshake) Read(datagram []byte) ([]byte, error) {
 		h.failed = true
 		return nil, ErrUnexpectedKind
 	}
-	payload, cs1, cs2, err := h.state.ReadMessage(nil, datagram[1:])
+	body := datagram[1:]
+	if h.mac1 && !h.initiator && h.index == 0 {
+		if !VerifyMAC1(datagram, h.macPublic) {
+			h.failed = true
+			return nil, ErrBadMAC
+		}
+		body = datagram[1 : len(datagram)-MAC1Size]
+	}
+	payload, cs1, cs2, err := h.state.ReadMessage(nil, body)
 	if err != nil {
 		h.failed = true
 		return nil, E.Cause(err, "read handshake")
@@ -186,7 +242,11 @@ func (h *Handshake) Session(now time.Time) (*Session, error) {
 	}
 	// The Noise states hold the keys no longer needed once the AEADs exist.
 	h.send, h.recv = nil, nil
-	return &Session{send: send, recv: recv, started: now}, nil
+	kind := KindTransport
+	if h.pattern == PatternXX {
+		kind = KindPairingTransport
+	}
+	return &Session{send: send, recv: recv, started: now, kind: kind}, nil
 }
 
 // NewIKInitiation starts a session handshake. The first message carries a
@@ -213,6 +273,7 @@ type Session struct {
 	counter uint64
 	window  ReplayWindow
 	started time.Time
+	kind    DatagramKind
 }
 
 func (s *Session) expired(now time.Time) bool {
@@ -239,7 +300,7 @@ func (s *Session) Seal(plaintext []byte, now time.Time) ([]byte, error) {
 	n := s.counter
 	s.counter++
 	out := make([]byte, 9, 9+len(plaintext)+16)
-	out[0] = byte(KindTransport)
+	out[0] = byte(s.kind)
 	binary.LittleEndian.PutUint64(out[1:], n)
 	return s.send.Seal(out, nonce(n), plaintext, nil), nil
 }
@@ -248,7 +309,7 @@ func (s *Session) Seal(plaintext []byte, now time.Time) ([]byte, error) {
 // only advances after the tag verified.
 func (s *Session) Open(datagram []byte, maxPlaintext int, now time.Time) ([]byte, error) {
 	if len(datagram) < TransportOverhead || len(datagram) > TransportOverhead+maxPlaintext ||
-		DatagramKind(datagram[0]) != KindTransport {
+		DatagramKind(datagram[0]) != s.kind {
 		return nil, ErrMalformed
 	}
 	s.mu.Lock()
@@ -283,13 +344,4 @@ func TAI64N(t time.Time) [12]byte {
 	binary.BigEndian.PutUint64(out[:8], uint64(1)<<62+uint64(secs))
 	binary.BigEndian.PutUint32(out[8:], uint32(t.Nanosecond()))
 	return out
-}
-
-// SAS derives the six-digit short authentication string from the XX handshake
-// hash. Both people compare it before pairing is accepted.
-func SAS(handshakeHash []byte) string {
-	mac := hmac.New(sha256.New, []byte("OSS-mousehelper-SAS-v1"))
-	mac.Write(handshakeHash)
-	sum := mac.Sum(nil)
-	return fmt.Sprintf("%06d", binary.BigEndian.Uint32(sum[:4])%1_000_000)
 }

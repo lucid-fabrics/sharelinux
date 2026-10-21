@@ -213,12 +213,12 @@ func TestInputPacketClamped(t *testing.T) {
 		{
 			name: "motion maximum",
 			in:   InputPacket{Type: PacketInput, DX: 32767, DY: 32767},
-			want: InputPacket{Type: PacketInput, DX: 32767, DY: 32767},
+			want: InputPacket{Type: PacketInput, DX: 32752, DY: 32752},
 		},
 		{
 			name: "motion minimum",
 			in:   InputPacket{Type: PacketInput, DX: -32768, DY: -32768},
-			want: InputPacket{Type: PacketInput, DX: -32767, DY: -32767},
+			want: InputPacket{Type: PacketInput, DX: -32752, DY: -32752},
 		},
 		{
 			name: "scroll above maximum",
@@ -249,6 +249,16 @@ func TestInputPacketClamped(t *testing.T) {
 				t.Fatalf("Clamped() = %+v, want %+v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestMotionClampIs2047Points(t *testing.T) {
+	if MaxMotion != 32752 || int(MaxMotion) != 2047*16 {
+		t.Fatalf("MaxMotion = %d", MaxMotion)
+	}
+	got := InputPacket{Type: PacketInput, DX: -32768, DY: 32767}.Clamped()
+	if got.DX != -32752 || got.DY != 32752 || -got.DX != 32752 {
+		t.Fatalf("Clamped() = %+v", got)
 	}
 }
 
@@ -311,7 +321,7 @@ func TestParseDatagramRejectsInvalidDatagrams(t *testing.T) {
 		t.Error("ParseDatagram() accepted an empty datagram")
 	}
 
-	for _, kind := range []byte{0, 4, 0x0f, 0x13, 0xff} {
+	for _, kind := range []byte{0, 4, 0x0f, 0x14, 0xff} {
 		if _, _, ok := ParseDatagram([]byte{kind, 0xaa}); ok {
 			t.Errorf("ParseDatagram() accepted unknown kind %d", kind)
 		}
@@ -332,6 +342,7 @@ func TestParseDatagramAcceptsKnownKinds(t *testing.T) {
 		KindXXMessage1,
 		KindXXMessage2,
 		KindXXMessage3,
+		KindPairingTransport,
 	}
 
 	for _, wantKind := range kinds {

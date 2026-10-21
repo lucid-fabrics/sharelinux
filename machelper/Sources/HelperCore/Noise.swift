@@ -38,6 +38,21 @@ public enum NoiseError: Error, Equatable {
     /// The DH result was all zeros (low-order public key).
     case lowOrderPoint
     case missingRemoteStatic
+    /// An explicitly empty prologue: the protocol name, version and roles must be bound.
+    case emptyPrologue
+}
+
+/// Protocol version bound into every handshake through the Noise prologue.
+public let helperProtocolVersion = 2
+
+extension NoisePattern {
+    /// Prologue both sides must use: protocol name, version and roles
+    /// (Linux initiates, the Mac responds) are authenticated by the handshake,
+    /// so a peer speaking another version or role fails at the first message.
+    public var standardPrologue: Data {
+        let purpose = self == .xx ? "pairing" : "session"
+        return Data("OSS-mousehelper v\(helperProtocolVersion) \(purpose) \(protocolName) initiator=linux responder=mac".utf8)
+    }
 }
 
 let noiseMaxMessage = 65535
@@ -74,13 +89,14 @@ enum NoiseAEAD {
     }
 }
 
-private func hmac(_ key: Data, _ data: Data) -> Data {
+func hmac(_ key: Data, _ data: Data) -> Data {
     Data(HMAC<SHA256>.authenticationCode(for: data, using: SymmetricKey(data: key)))
 }
 
 /// Noise HKDF returning two outputs.
 func noiseHKDF2(chainingKey: Data, input: Data) -> (Data, Data) {
-    let temp = hmac(chainingKey, input)
+    var temp = hmac(chainingKey, input)
+    defer { temp.wipe() }
     let o1 = hmac(temp, Data([1]))
     let o2 = hmac(temp, o1 + Data([2]))
     return (o1, o2)
@@ -130,9 +146,11 @@ private struct SymmetricState {
     mutating func mixHash(_ d: Data) { h = Data(SHA256.hash(data: h + d)) }
 
     mutating func mixKey(_ ikm: Data) {
-        let (c, k) = noiseHKDF2(chainingKey: ck, input: ikm)
+        var (c, k) = noiseHKDF2(chainingKey: ck, input: ikm)
+        ck.wipe()
         ck = c
         cs = CipherState(key: SymmetricKey(data: k), n: 0)
+        k.wipe()
     }
 
     mutating func encryptAndHash(_ pt: Data) throws -> Data {
@@ -165,7 +183,8 @@ public final class HandshakeState {
     private var rs: PublicKey?
     private var re: PublicKey?
     private var index = 0
-    private var failed = false
+    private var failed = false { didSet { if failed { wipeSecrets() } } }
+    private var splitDone = false
     private let makeEphemeral: () -> PrivateKey
 
     /// - Parameters:
@@ -173,9 +192,11 @@ public final class HandshakeState {
     ///   - ephemeralSource: tests only; production always uses a fresh random key.
     init(
         pattern: NoisePattern, initiator: Bool, staticKey: PrivateKey,
-        remoteStatic: Data? = nil, prologue: Data = Data(),
+        remoteStatic: Data? = nil, prologue: Data? = nil,
         ephemeralSource: @escaping () -> PrivateKey = { PrivateKey() }
     ) throws {
+        let prologue = prologue ?? pattern.standardPrologue
+        guard !prologue.isEmpty else { throw NoiseError.emptyPrologue }
         self.pattern = pattern
         self.initiator = initiator
         self.messages = pattern.messages
@@ -204,7 +225,7 @@ public final class HandshakeState {
 
     public convenience init(
         pattern: NoisePattern, initiator: Bool, staticKey: PrivateKey,
-        remoteStatic: Data? = nil, prologue: Data = Data()
+        remoteStatic: Data? = nil, prologue: Data? = nil
     ) throws {
         try self.init(
             pattern: pattern, initiator: initiator, staticKey: staticKey,
@@ -255,7 +276,9 @@ public final class HandshakeState {
                 case .s:
                     out += try ss.encryptAndHash(s.publicKey.rawRepresentation)
                 default:
-                    ss.mixKey(try dhToken(t))
+                    var secret = try dhToken(t)
+                    ss.mixKey(secret)
+                    secret.wipe()
                 }
             }
             out += try ss.encryptAndHash(payload)
@@ -295,7 +318,9 @@ public final class HandshakeState {
                     guard let k = try? PublicKey(rawRepresentation: raw) else { throw NoiseError.invalidKey }
                     rs = k
                 default:
-                    ss.mixKey(try dhToken(t))
+                    var secret = try dhToken(t)
+                    ss.mixKey(secret)
+                    secret.wipe()
                 }
             }
             let payload = try ss.decryptAndHash(rest)
@@ -307,11 +332,25 @@ public final class HandshakeState {
         }
     }
 
+    /// Zeroes the chaining key and drops the cipher key and ephemeral key. The
+    /// handshake hash stays (it is public: both sides and a MITM may know it).
+    /// Best effort: CryptoKit keys are opaque, so they are released, not zeroed.
+    private func wipeSecrets() {
+        ss.ck.wipe()
+        ss.cs = CipherState()
+        e = nil
+    }
+
+    var secretsWiped: Bool { isAllZero(ss.ck) && ss.cs.key == nil && e == nil }
+
     /// Final step once `isComplete`. Consumes nothing but derives the two transport keys.
     public func split() throws -> TransportKeys {
-        guard isComplete else { throw NoiseError.invalidState }
-        let (k1, k2) = ss.split()
+        guard isComplete, !splitDone else { throw NoiseError.invalidState }
+        splitDone = true
+        var (k1, k2) = ss.split()
         let a = SymmetricKey(data: k1), b = SymmetricKey(data: k2)
+        k1.wipe(); k2.wipe()
+        wipeSecrets()
         return initiator ? TransportKeys(send: a, receive: b) : TransportKeys(send: b, receive: a)
     }
 }

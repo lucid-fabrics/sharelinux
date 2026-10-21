@@ -96,44 +96,6 @@ final class HandshakeTests: XCTestCase {
         XCTAssertThrowsError(try r.readMessage(try i.writeMessage()))
     }
 
-    func runXX(initiatorKey: PrivKey, responderKey: PrivKey) throws -> (String, String, PairingResponder) {
-        let r = try PairingResponder(staticKey: responderKey)
-        let i = try HandshakeState(pattern: .xx, initiator: true, staticKey: initiatorKey)
-        let m1 = Data([DatagramKind.xxMessage1.rawValue]) + (try i.writeMessage())
-        let m2 = try XCTUnwrap(try r.receive(m1))
-        XCTAssertEqual(m2[0], DatagramKind.xxMessage2.rawValue)
-        _ = try i.readMessage(m2.dropFirst())
-        let m3 = Data([DatagramKind.xxMessage3.rawValue]) + (try i.writeMessage(payload: Data("Linux box".utf8)))
-        XCTAssertNil(try r.receive(m3))
-        return (SAS.derive(handshakeHash: i.handshakeHash), r.sas!, r)
-    }
-
-    func testXXPairingGivesMatchingSASAndKeys() throws {
-        let a = PrivKey(), b = PrivKey()
-        let (s1, s2, r) = try runXX(initiatorKey: a, responderKey: b)
-        XCTAssertEqual(s1, s2)
-        XCTAssertEqual(s1.count, 6)
-        XCTAssertTrue(s1.allSatisfy(\.isNumber))
-        XCTAssertEqual(r.remoteStatic, a.publicKey.rawRepresentation)
-        XCTAssertEqual(r.deviceName, "Linux box")
-        XCTAssertTrue(r.isComplete)
-        XCTAssertThrowsError(try r.receive(Data([DatagramKind.xxMessage1.rawValue]) + Data(count: 32)))
-    }
-
-    func testSASDiffersUnderMITM() throws {
-        // Mallory runs XX with each side separately, so the two hashes differ.
-        let alice = PrivKey(), bob = PrivKey(), mallory = PrivKey()
-        let (aliceSide, _, _) = try runXX(initiatorKey: alice, responderKey: mallory)
-        let (_, bobSide, _) = try runXX(initiatorKey: mallory, responderKey: bob)
-        XCTAssertNotEqual(aliceSide, bobSide)
-    }
-
-    func testSASKnownAnswer() {
-        // Independent computation: HMAC-SHA256(key "OSS-mousehelper-SAS-v1", 32 zero bytes),
-        // first 4 bytes big endian mod 10^6 (checked with python hmac).
-        XCTAssertEqual(SAS.derive(handshakeHash: Data(count: 32)), "487222")
-    }
-
     func testPairingRejectsBadNamesAndShapes() throws {
         XCTAssertNil(PairingResponder.validateDeviceName(Data()))
         XCTAssertNil(PairingResponder.validateDeviceName(Data(count: 65)))

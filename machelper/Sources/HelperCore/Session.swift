@@ -13,12 +13,14 @@ public enum SessionError: Error, Equatable {
 /// can be lost or reordered. One instance per handshake.
 public final class TransportSession {
     private let keys: TransportKeys
+    private let kind: DatagramKind
     private let startedAt: Double
     private var sendCounter: UInt64 = 0
     private var window = ReplayWindow()
 
-    public init(keys: TransportKeys, now: Double) {
+    public init(keys: TransportKeys, now: Double, kind: DatagramKind = .transport) {
         self.keys = keys
+        self.kind = kind
         self.startedAt = now
     }
 
@@ -33,7 +35,7 @@ public final class TransportSession {
         }
         let n = sendCounter
         sendCounter += 1
-        var out = Data([DatagramKind.transport.rawValue])
+        var out = Data([kind.rawValue])
         out.appendLE64(n)
         out += try NoiseAEAD.seal(key: keys.send, counter: n, ad: Data(), plaintext: plaintext)
         return out
@@ -45,7 +47,7 @@ public final class TransportSession {
         let d = Data(datagram)
         guard d.count >= WireLimits.transportOverhead,
             d.count <= WireLimits.transportOverhead + maxPlaintext,
-            d[0] == DatagramKind.transport.rawValue
+            d[0] == kind.rawValue
         else { throw SessionError.malformed }
         guard !expired(now: now) else { throw SessionError.expired }
         let counter = d.le64(at: 1)
@@ -99,14 +101,41 @@ public enum TAI64N {
     }
 }
 
-/// Short authentication string for pairing: six decimal digits derived from the
-/// XX handshake hash (identical on both sides, differs under a MITM).
-public enum SAS {
-    public static func derive(handshakeHash: Data) -> String {
-        let mac = HMAC<SHA256>.authenticationCode(
-            for: handshakeHash, using: SymmetricKey(data: Data("OSS-mousehelper-SAS-v1".utf8)))
-        let b = Array(mac.prefix(4))
-        let v = b.reduce(UInt32(0)) { $0 << 8 | UInt32($1) }
-        return String(format: "%06d", v % 1_000_000)
+/// Pairing code (the "SAS"): six decimal digits both people compare.
+///
+/// Commit-before-reveal, all inside the XX transport: Linux commits to a random
+/// r_L, the Mac answers with its own random r_M, Linux reveals r_L, the Mac
+/// checks the commitment. code = HMAC(handshake hash, label || r_L || r_M), cut
+/// to six digits by rejection sampling. A man in the middle fixes both
+/// handshakes, his commitment and his r_M before r_L is known to him, so the
+/// code Linux shows is a function of a value he cannot see: he cannot grind
+/// his last message (key, device name) to make the two codes agree.
+public enum PairingCode {
+    public static let nonceSize = 32
+    public static let commitmentSize = 32
+    private static let commitLabel = Data("OSS-mousehelper v2 pairing commit".utf8)
+    private static let codeLabel = Data("OSS-mousehelper v2 pairing code".utf8)
+
+    public static func commitment(of initiatorNonce: Data) -> Data {
+        Data(SHA256.hash(data: commitLabel + initiatorNonce))
+    }
+
+    public static func code(handshakeHash: Data, initiatorNonce: Data, responderNonce: Data) -> String {
+        let key = SymmetricKey(data: handshakeHash)
+        let limit = (UInt64.max / 1_000_000) * 1_000_000  // values below this are uniform mod 10^6
+        var last: UInt64 = 0
+        for counter in 0..<UInt8.max {
+            let block = Data(
+                HMAC<SHA256>.authenticationCode(
+                    for: codeLabel + initiatorNonce + responderNonce + Data([counter]), using: key))
+            for w in 0..<4 {
+                let v = block[(w * 8)..<(w * 8 + 8)].reduce(UInt64(0)) { $0 << 8 | UInt64($1) }
+                last = v
+                if v < limit { return String(format: "%06d", v % 1_000_000) }
+            }
+        }
+        // Unreachable in practice (each word is rejected with probability 5e-14,
+        // 1020 times in a row); fall back instead of looping or trapping.
+        return String(format: "%06d", last % 1_000_000)
     }
 }

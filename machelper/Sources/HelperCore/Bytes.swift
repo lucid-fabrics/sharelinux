@@ -9,6 +9,17 @@ public func constantTimeEqual(_ a: Data, _ b: Data) -> Bool {
     return diff == 0
 }
 
+extension Data {
+    /// Overwrites the bytes in place (the buffer is made unique first, so a
+    /// shared copy elsewhere is left alone). Best effort: the optimiser cannot
+    /// remove `memset_s`, but Swift may have made other copies we cannot reach.
+    mutating func wipe() {
+        withUnsafeMutableBytes { raw in
+            if let base = raw.baseAddress, raw.count > 0 { _ = memset_s(base, raw.count, 0, raw.count) }
+        }
+    }
+}
+
 func isAllZero(_ a: Data) -> Bool {
     var acc: UInt8 = 0
     for x in a { acc |= x }
