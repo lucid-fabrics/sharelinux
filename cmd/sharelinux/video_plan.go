@@ -31,19 +31,23 @@ type videoMode string
 const (
 	// videoAuto uses the video stream when the Mac has it and this machine can decode it.
 	videoAuto videoMode = "auto"
+	// videoAlways uses the video stream even where the picture tiles would cost less.
+	videoAlways videoMode = "always"
 	// videoSoftware never uses the GPU decoder.
 	videoSoftware videoMode = "software"
 	// videoOff keeps to the framebuffer tiles.
 	videoOff videoMode = "off"
 )
 
-var videoModes = []videoMode{videoAuto, videoSoftware, videoOff}
+var videoModes = []videoMode{videoAuto, videoAlways, videoSoftware, videoOff}
 
 // parseVideoMode reads a setting or environment value; anything unknown is auto.
 func parseVideoMode(value string) videoMode {
 	switch videoMode(strings.ToLower(strings.TrimSpace(value))) {
 	case videoSoftware:
 		return videoSoftware
+	case videoAlways:
+		return videoAlways
 	case videoOff, "tiles", "0", "false", "no":
 		return videoOff
 	}
@@ -53,6 +57,8 @@ func parseVideoMode(value string) videoMode {
 // videoModeLabel is the word in the preferences.
 func videoModeLabel(mode videoMode) string {
 	switch mode {
+	case videoAlways:
+		return "Always (even when the tiles are cheaper)"
 	case videoSoftware:
 		return "Software decoding only"
 	case videoOff:
@@ -134,6 +140,22 @@ func videoHint(caps videoCaps) string {
 		return "Decodes on the CPU, there is no VA-API decoder here (" + caps.Error + ")"
 	}
 	return "Decodes on the CPU"
+}
+
+// softwareRenderLimit is the picture size, in pixels, up to which a window drawn by the CPU still
+// shows video at 60 Hz without choking: on llvmpipe a 1920x1080 picture takes about 1.4 cores,
+// 2560x1600 takes all four and drops half the pictures.
+const softwareRenderLimit = 2_200_000
+
+// videoPaysOff says whether the video stream beats the picture tiles. Video repaints the whole
+// picture every frame, which a GPU does for free and a CPU renderer does not: a big picture on
+// llvmpipe or Cairo costs several cores for 15 frames a second, where tiles repaint only what
+// changed. Only the automatic mode decides this; the others do what they say.
+func videoPaysOff(mode videoMode, accelerated bool, pixels int) (bool, string) {
+	if mode == videoAuto && !accelerated && pixels > softwareRenderLimit {
+		return false, "the window is drawn by the CPU and the picture is big; the tiles are cheaper (-video always forces the video)"
+	}
+	return true, ""
 }
 
 // videoPlan is what to ask the Mac for and how to decode what comes back.

@@ -146,6 +146,12 @@ func (v *sessionView) startVideo() {
 		}
 	}
 	renderer := v.screen.chooseDMABuf()
+	width, height := v.client.FramebufferSize()
+	if pays, reason := videoPaysOff(app.videoMode(), renderer.Accelerated, width*height); !pays {
+		app.logger.Info("video", "plan", "tiles", "reason", reason, "renderer", renderer.Name, "gl", renderer.GL)
+		vid.gaveUp = true
+		return
+	}
 	app.logger.Info("video", "renderer", renderer.Name, "gl", renderer.GL, "accelerated", renderer.Accelerated, "dmabuf", v.screen.dmabuf)
 	stream := newVideoStream(app.logger, plan, caps.Device, videoThreads(), v.screen, keyframe)
 	vid.stream = stream
@@ -225,15 +231,18 @@ func (v *sessionView) handleVideoEvent(stream *videoStream, event videoEvent) {
 		v.giveUpVideo("Video is not available here: " + event.Text)
 	case videoStopped:
 		kind := classifyStop(event.Err)
+		if kind == stopRequested {
+			// Our own stops never get here (their stream is gone); the Mac ended it cleanly. Treat it like a
+			// hiccup, with a pause, so a Mac that keeps ending it cannot make a tight loop.
+			kind = stopNetwork
+		}
 		logger.Info("video", "state", "stopped", "kind", int(kind), "error", event.Err)
 		v.leaveVideo()
 		delay, restart := vid.policy.next(kind)
 		if !restart {
 			v.closeVideo()
-			if kind != stopRequested {
-				vid.gaveUp = true
-				v.notify("The video stream stopped, using the picture path")
-			}
+			vid.gaveUp = true
+			v.notify("The video stream stopped, using the picture path")
 			return
 		}
 		v.closeVideo()

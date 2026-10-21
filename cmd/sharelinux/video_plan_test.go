@@ -227,3 +227,29 @@ func TestVideoHint(t *testing.T) {
 		}
 	}
 }
+
+func TestVideoPaysOff(t *testing.T) {
+	big, small := 5120*1440, 1920*1080
+	cases := []struct {
+		name        string
+		mode        videoMode
+		accelerated bool
+		pixels      int
+		want        bool
+	}{
+		{"GPU, big", videoAuto, true, big, true},
+		{"CPU renderer, small", videoAuto, false, small, true},
+		{"CPU renderer, big", videoAuto, false, big, false},
+		{"CPU renderer, big, always", videoAlways, false, big, true},
+		{"CPU renderer, big, software decoding asked for", videoSoftware, false, big, true},
+	}
+	for _, c := range cases {
+		got, reason := videoPaysOff(c.mode, c.accelerated, c.pixels)
+		if got != c.want || (!got && reason == "") {
+			t.Errorf("%s: %v %q", c.name, got, reason)
+		}
+	}
+	if parseVideoMode("ALWAYS") != videoAlways || planVideo(videoAlways, videoCaps{HEVCSoftware: true}, true).Kinds[0] != decoderSoftware {
+		t.Fatal("always plans like auto")
+	}
+}
