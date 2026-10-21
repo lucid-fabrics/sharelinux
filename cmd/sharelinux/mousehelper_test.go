@@ -1,0 +1,298 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/hex"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/flynn/noise"
+	"github.com/nekohasekai/open-screen-sharing/internal/machelper"
+)
+
+// fakeRun is a pairing attempt with no network.
+type fakeRun struct {
+	code     chan string
+	done     chan struct{}
+	err      error
+	macKey   []byte
+	mu       sync.Mutex
+	rejected bool
+	canceled bool
+	confirms int
+}
+
+func newFakeRun(macKey []byte) *fakeRun {
+	return &fakeRun{code: make(chan string, 1), done: make(chan struct{}), macKey: macKey}
+}
+func (f *fakeRun) Code() <-chan string   { return f.code }
+func (f *fakeRun) Done() <-chan struct{} { return f.done }
+func (f *fakeRun) Err() error            { return f.err }
+func (f *fakeRun) Confirm() ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.confirms++
+	return f.macKey, nil
+}
+func (f *fakeRun) Reject() { f.mu.Lock(); f.rejected = true; f.mu.Unlock() }
+func (f *fakeRun) Cancel() { f.mu.Lock(); f.canceled = true; f.mu.Unlock() }
+
+func testKeys() *helperKeys { return &helperKeys{secrets: memorySecrets{}} }
+
+func macKeyHex(b byte) string { return hex.EncodeToString(bytes.Repeat([]byte{b}, 32)) }
+
+func TestClientKeyIsCreatedOnceInTheKeyringAndNeverInAFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "data"))
+	secrets := memorySecrets{}
+	keys := &helperKeys{secrets: secrets}
+	first, err := keys.ClientKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := (&helperKeys{secrets: secrets}).ClientKey()
+	if err != nil || !bytes.Equal(first.Private, second.Private) || !bytes.Equal(first.Public, second.Public) {
+		t.Fatalf("the key changed between calls: %v", err)
+	}
+	if len(first.Public) != 32 || bytes.Equal(first.Public, first.Private) {
+		t.Fatal("bad key pair")
+	}
+	if secrets[helperClientKeyID] != hex.EncodeToString(first.Private) {
+		t.Fatal("the key is not in the keyring")
+	}
+	if err := keys.AddMac(pairedMac{Name: "Studio", Address: "10.0.0.2:5961", Key: macKeyHex(1)}); err != nil {
+		t.Fatal(err)
+	}
+	var files []string
+	filepath.Walk(home, func(path string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if len(files) != 0 {
+		t.Fatalf("keys left files behind: %v", files)
+	}
+}
+
+func TestNoKeyringMeansNoKeyAndNothingSent(t *testing.T) {
+	keys := &helperKeys{secrets: failingSecrets{memorySecrets{}}}
+	if _, err := keys.ClientKey(); !errors.Is(err, errKeyringUnavailable) {
+		t.Fatalf("ClientKey: %v", err)
+	}
+	pairing := newHelperPairing(keys)
+	started := 0
+	pairing.start = func(context.Context, string, noise.DHKey, string) (pairingRunner, error) {
+		started++
+		return newFakeRun(nil), nil
+	}
+	_, err := pairing.Begin(context.Background(), "mac.local", "Desk PC")
+	if !errors.Is(err, errKeyringUnavailable) || started != 0 {
+		t.Fatalf("Begin = %v, started %d", err, started)
+	}
+	if got := pairingProblem(err); !strings.Contains(got, "keyring") {
+		t.Fatalf("the words: %q", got)
+	}
+}
+
+func TestPairedMacsAreAddedReplacedRemovedAndTamperingIsIgnored(t *testing.T) {
+	secrets := memorySecrets{}
+	keys := &helperKeys{secrets: secrets}
+	a := pairedMac{Name: "Studio", Address: "10.0.0.2:5961", Key: macKeyHex(1)}
+	b := pairedMac{Name: "Laptop", Address: "10.0.0.3:5961", Key: macKeyHex(2)}
+	for _, m := range []pairedMac{a, b} {
+		if err := keys.AddMac(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	macs, _ := keys.Macs()
+	if len(macs) != 2 || macs[0].Name != "Laptop" {
+		t.Fatalf("%v", macs)
+	}
+	a2 := a
+	a2.Name = "Studio Mac"
+	if err := keys.AddMac(a2); err != nil {
+		t.Fatal(err)
+	}
+	if macs, _ = keys.Macs(); len(macs) != 2 {
+		t.Fatalf("re-pairing duplicated the Mac: %v", macs)
+	}
+	if err := keys.RemoveMac(a.Key); err != nil {
+		t.Fatal(err)
+	}
+	if macs, _ = keys.Macs(); len(macs) != 1 || macs[0].Name != "Laptop" {
+		t.Fatalf("%v", macs)
+	}
+	if err := keys.RemoveMac(b.Key); err != nil {
+		t.Fatal(err)
+	}
+	if _, found := secrets[helperMacsID]; found {
+		t.Fatal("the empty list was kept")
+	}
+	// A planted entry with a short key or no name is not trusted.
+	secrets[helperMacsID] = `[{"name":"Evil","address":"x:1","key":"abcd"},{"name":"","address":"x:1","key":"` + macKeyHex(3) + `"},{"name":"Fine","address":"x:1","key":"` + macKeyHex(4) + `"}]`
+	if macs, _ = keys.Macs(); len(macs) != 1 || macs[0].Name != "Fine" {
+		t.Fatalf("%v", macs)
+	}
+	if err := keys.AddMac(pairedMac{Name: "x", Address: "y", Key: "00"}); err == nil {
+		t.Fatal("a short key was accepted")
+	}
+	secrets[helperMacsID] = "not json"
+	if _, err := keys.Macs(); err == nil {
+		t.Fatal("a damaged list was read")
+	}
+}
+
+func fakePairing(keys *helperKeys, run *fakeRun, calls *[]string) *helperPairing {
+	pairing := newHelperPairing(keys)
+	pairing.start = func(_ context.Context, address string, _ noise.DHKey, name string) (pairingRunner, error) {
+		*calls = append(*calls, address+"|"+name)
+		return run, nil
+	}
+	return pairing
+}
+
+func TestConfirmPinsTheMacKeyAndRejectPinsNothing(t *testing.T) {
+	keys := testKeys()
+	macKey := bytes.Repeat([]byte{9}, 32)
+	var calls []string
+	run := newFakeRun(macKey)
+	pairing := fakePairing(keys, run, &calls)
+	attempt, err := pairing.Begin(context.Background(), " studio.local ", "Desk PC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 || calls[0] != "studio.local:5961|Desk PC" {
+		t.Fatalf("%v", calls)
+	}
+	mac, err := attempt.Confirm("Studio")
+	if err != nil || mac.Key != hex.EncodeToString(macKey) || mac.Address != "studio.local:5961" {
+		t.Fatalf("%v %v", mac, err)
+	}
+	if macs, _ := keys.Macs(); len(macs) != 1 || macs[0].Name != "Studio" {
+		t.Fatalf("%v", macs)
+	}
+
+	keys2 := testKeys()
+	run2 := newFakeRun(macKey)
+	attempt2, err := fakePairing(keys2, run2, &calls).Begin(context.Background(), "studio.local", "Desk PC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt2.Reject()
+	if !run2.rejected || run2.confirms != 0 {
+		t.Fatal("reject did not reach the run")
+	}
+	if macs, _ := keys2.Macs(); len(macs) != 0 {
+		t.Fatalf("a rejected Mac was pinned: %v", macs)
+	}
+}
+
+// A keyring that refuses at the last moment must not leave a half-paired state
+// that looks paired.
+func TestIfTheKeyringRefusesAtConfirmNothingIsPinned(t *testing.T) {
+	secrets := &flakySecrets{memorySecrets: memorySecrets{}}
+	keys := &helperKeys{secrets: secrets}
+	var calls []string
+	pairing := fakePairing(keys, newFakeRun(bytes.Repeat([]byte{9}, 32)), &calls)
+	attempt, err := pairing.Begin(context.Background(), "studio.local", "Desk PC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secrets.failSets = true
+	if _, err := attempt.Confirm("Studio"); !errors.Is(err, errKeyringUnavailable) {
+		t.Fatalf("%v", err)
+	}
+	secrets.failSets = false
+	if macs, _ := keys.Macs(); len(macs) != 0 {
+		t.Fatalf("%v", macs)
+	}
+}
+
+type flakySecrets struct {
+	memorySecrets
+	failSets bool
+}
+
+func (f *flakySecrets) Set(id, v string) error {
+	if f.failSets {
+		return errors.New("locked")
+	}
+	return f.memorySecrets.Set(id, v)
+}
+
+// One explicit attempt per click: nothing starts a second one, not a failure,
+// not time passing, and a second click while one runs is refused.
+func TestAnAttemptIsNeverRepeatedByItself(t *testing.T) {
+	keys := testKeys()
+	var calls []string
+	run := newFakeRun(nil)
+	pairing := fakePairing(keys, run, &calls)
+	if _, err := pairing.Begin(context.Background(), "studio.local", "Desk PC"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pairing.Begin(context.Background(), "studio.local", "Desk PC"); !errors.Is(err, errPairingBusy) {
+		t.Fatalf("a second click while one runs: %v", err)
+	}
+	run.err = machelper.ErrNoAnswer
+	close(run.done) // the attempt failed
+	time.Sleep(300 * time.Millisecond)
+	if len(calls) != 1 || pairing.begun != 1 {
+		t.Fatalf("something started another attempt: %v", calls)
+	}
+	// Only the next click does.
+	next := newFakeRun(nil)
+	pairing.start = func(context.Context, string, noise.DHKey, string) (pairingRunner, error) {
+		calls = append(calls, "again")
+		return next, nil
+	}
+	if _, err := pairing.Begin(context.Background(), "studio.local", "Desk PC"); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("%v", calls)
+	}
+}
+
+func TestProblemWordsAreHumanAndHaveNoEmDashes(t *testing.T) {
+	errs := []error{
+		machelper.ErrNoAnswer, machelper.ErrRefused, machelper.ErrBadAddress, machelper.ErrBadDeviceName,
+		errKeyringUnavailable, errPairingBusy, machelper.ErrPairingMessage, errors.New("boom"),
+	}
+	for _, err := range errs {
+		words := pairingProblem(err)
+		if words == "" || strings.ContainsRune(words, 0x2014) || strings.Contains(strings.ToLower(words), "noise") {
+			t.Errorf("%v: %q", err, words)
+		}
+	}
+	if pairingProblem(machelper.ErrCancelled) != "" || pairingProblem(nil) != "" {
+		t.Error("a cancel is not a problem")
+	}
+	if helperStatus(nil, nil) != "Not paired with any Mac" ||
+		helperStatus([]pairedMac{{Name: "Studio"}}, nil) != "Paired with Studio" ||
+		helperStatus(make([]pairedMac, 3), nil) != "Paired with 3 Macs" {
+		t.Error("status words")
+	}
+}
+
+func TestDefaultsForTheDialog(t *testing.T) {
+	now := time.Now()
+	list := []savedConnection{{Host: "old.local", LastUsed: now.Add(-time.Hour)}, {Host: "new.local", LastUsed: now}}
+	if got := defaultHelperAddress(list); got != "new.local" {
+		t.Fatal(got)
+	}
+	if defaultHelperAddress(nil) != "" {
+		t.Fatal("no Macs, no default")
+	}
+	if _, err := machelper.NormalizeDeviceName(defaultDeviceName()); err != nil {
+		t.Fatalf("the default name is not allowed on the Mac: %v", err)
+	}
+}
