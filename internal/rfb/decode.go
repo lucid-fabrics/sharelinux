@@ -1,6 +1,7 @@
 package rfb
 
 import (
+	"bytes"
 	"encoding/binary"
 	"image"
 
@@ -9,11 +10,17 @@ import (
 	E "github.com/sagernet/sing/common/exceptions"
 )
 
-// errOutsideFramebuffer marks an MVS rectangle that does not fit the
-// framebuffer the client holds yet. The server draws it for a new geometry
-// that the client has not been told about, so the rectangle is dropped and the
-// resize that follows asks for the whole picture again.
-var errOutsideFramebuffer = E.New("rfb: rectangle outside the framebuffer")
+// errMVSDeferred marks an MVS rectangle that was read but not decoded yet.
+// The server can draw for a new geometry before it announces the resize in the
+// same update, so the rectangle waits until the resize makes it fit. Decoding
+// it later, in order, keeps the cache write index and the quantisation tables
+// the same as the server's.
+var errMVSDeferred = E.New("rfb: mvs rectangle waits for a resize")
+
+type deferredMVS struct {
+	x, y, width, height int
+	payload             []byte
+}
 
 const (
 	maximumCompressedRectangle = 128 << 20
@@ -29,6 +36,7 @@ type decoders struct {
 	mvs       *mvs.Decoder
 	payload   []byte
 	tile      []byte
+	deferred  []deferredMVS
 }
 
 func (d *decoders) resetMVS(width, height int) {
@@ -36,6 +44,50 @@ func (d *decoders) resetMVS(width, height int) {
 		d.mvs = mvs.NewDecoder()
 	}
 	d.mvs.Reset(width, height)
+}
+
+// mvsFits reports whether the payload can be decoded into the framebuffer now.
+// Quantisation updates and malformed payloads (which fail in the decoder) do
+// not depend on the rectangle.
+func mvsFits(payload []byte, x, y, width, height int, framebuffer *bgra.Image) bool {
+	if len(payload) == 0 || payload[0] > 1 {
+		return true
+	}
+	return x >= 0 && y >= 0 && x+width <= framebuffer.Width && y+height <= framebuffer.Height
+}
+
+// decodeMVS decodes in arrival order. Once a rectangle waits for a resize,
+// every later MVS rectangle waits behind it.
+func (d *decoders) decodeMVS(payload []byte, x, y, width, height int, framebuffer *bgra.Image) error {
+	if d.mvs == nil {
+		d.resetMVS(framebuffer.Width, framebuffer.Height)
+	}
+	if len(d.deferred) == 0 && mvsFits(payload, x, y, width, height, framebuffer) {
+		return d.mvs.Decode(payload, x, y, width, height, framebuffer)
+	}
+	d.deferred = append(d.deferred, deferredMVS{x, y, width, height, bytes.Clone(payload)})
+	return errMVSDeferred
+}
+
+// flushMVS decodes the waiting rectangles that fit the framebuffer now, in
+// order, and calls done for each pixel rectangle it decoded.
+func (d *decoders) flushMVS(framebuffer *bgra.Image, done func(Rectangle)) error {
+	for len(d.deferred) > 0 {
+		next := d.deferred[0]
+		if !mvsFits(next.payload, next.x, next.y, next.width, next.height, framebuffer) {
+			return nil
+		}
+		d.deferred = d.deferred[1:]
+		err := d.mvs.Decode(next.payload, next.x, next.y, next.width, next.height, framebuffer)
+		if err != nil {
+			return err
+		}
+		if len(next.payload) > 0 && next.payload[0] <= 1 {
+			done(Rectangle{X: next.x, Y: next.y, Width: next.width, Height: next.height, Encoding: EncodingMVS})
+		}
+	}
+	d.deferred = nil
+	return nil
 }
 
 func (d *decoders) readPayload(input *stream) ([]byte, error) {
@@ -117,10 +169,7 @@ func (d *decoders) decode(input *stream, framebuffer *bgra.Image, rectangle Rect
 		if err != nil {
 			return err
 		}
-		if x < 0 || y < 0 || x+width > framebuffer.Width || y+height > framebuffer.Height {
-			return errOutsideFramebuffer
-		}
-		return d.mvs.Decode(payload, x, y, width, height, framebuffer)
+		return d.decodeMVS(payload, x, y, width, height, framebuffer)
 	default:
 		return E.New("rfb: not a pixel encoding")
 	}

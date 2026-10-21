@@ -707,21 +707,33 @@ func (c *Client) receiveRectangles(count int) (Update, error) {
 			payload := c.stream.stopCapture()
 			c.options.RectangleObserver(RawRectangle{Sequence: sequence, Rectangle: rectangle, Payload: payload})
 		}
-		if errors.Is(err, errOutsideFramebuffer) {
-			c.logger.Warn("rectangle dropped, it is outside the framebuffer", "rectangle", rectangle, "width", c.width, "height", c.height)
-			continue
-		}
-		if err != nil {
+		deferred := errors.Is(err, errMVSDeferred)
+		if deferred {
+			c.logger.Debug("mvs rectangle waits for a resize", "rectangle", rectangle, "width", c.width, "height", c.height)
+		} else if err != nil {
 			return update, E.Cause(err, "read ", rectangle.Encoding, " rectangle ", rectangle)
 		}
-		if rectangle.Encoding.carriesPixels() && !rectangle.Empty() {
-			bounds := image.Rect(rectangle.X, rectangle.Y, rectangle.X+rectangle.Width, rectangle.Y+rectangle.Height).Intersect(c.framebuffer.Bounds())
-			clipped := Rectangle{X: bounds.Min.X, Y: bounds.Min.Y, Width: bounds.Dx(), Height: bounds.Dy(), Encoding: rectangle.Encoding}
-			update.Dirty = update.Dirty.Union(clipped)
-			update.Rectangles = append(update.Rectangles, clipped)
+		if !deferred && rectangle.Encoding.carriesPixels() && !rectangle.Empty() {
+			update.add(rectangle, c.framebuffer)
+		}
+		err = c.decoders.flushMVS(c.framebuffer, func(done Rectangle) { update.add(done, c.framebuffer) })
+		if err != nil {
+			return update, E.Cause(err, "read ", EncodingMVS, " rectangle after resize")
 		}
 	}
+	if len(c.decoders.deferred) > 0 {
+		next := c.decoders.deferred[0]
+		c.decoders.deferred = nil
+		return update, E.New("read ", EncodingMVS, " rectangle ", next.width, "x", next.height, " at ", next.x, ",", next.y, " outside the ", c.width, "x", c.height, " framebuffer")
+	}
 	return update, nil
+}
+
+func (u *Update) add(rectangle Rectangle, framebuffer *bgra.Image) {
+	bounds := image.Rect(rectangle.X, rectangle.Y, rectangle.X+rectangle.Width, rectangle.Y+rectangle.Height).Intersect(framebuffer.Bounds())
+	clipped := Rectangle{X: bounds.Min.X, Y: bounds.Min.Y, Width: bounds.Dx(), Height: bounds.Dy(), Encoding: rectangle.Encoding}
+	u.Dirty = u.Dirty.Union(clipped)
+	u.Rectangles = append(u.Rectangles, clipped)
 }
 
 func (c *Client) receiveRectangle(rectangle Rectangle) error {
