@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- Per-user LaunchAgent for OSS Mouse Helper. Not installed by anything in this
-     repository. __APP_EXECUTABLE__ is replaced by scripts/bundle.sh with the
-     absolute path of the executable inside the .app (launchd needs an absolute
-     path). To install by hand, copy it to ~/Library/LaunchAgents/ and run
+     repository. The placeholder in ProgramArguments below is replaced by
+     scripts/bundle.sh (through scripts/fill-launchagent.sh) with the absolute
+     path of the executable inside the .app (launchd needs an absolute path). To install by hand, copy it to ~/Library/LaunchAgents/ and run
          launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.github.sharelinux.mousehelper.plist
      Uninstall: launchctl bootout gui/$(id -u)/io.github.sharelinux.mousehelper -->
 <plist version="1.0">

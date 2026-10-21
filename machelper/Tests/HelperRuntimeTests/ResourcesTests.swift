@@ -51,4 +51,46 @@ final class ResourcesTests: XCTestCase {
             XCTAssertFalse(code.contains { $0.contains(forbidden) }, forbidden)
         }
     }
+
+    // MARK: LaunchAgent filling
+
+    func fill(_ exe: String) throws -> (status: Int32, out: Data, err: String) {
+        let p = Process()
+        p.executableURL = root.appendingPathComponent("scripts/fill-launchagent.sh")
+        p.arguments = [root.appendingPathComponent("Resources/io.github.sharelinux.mousehelper.plist").path, exe]
+        let out = Pipe(), err = Pipe()
+        p.standardOutput = out; p.standardError = err
+        try p.run()
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        let e = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        p.waitUntilExit()
+        return (p.terminationStatus, data, e)
+    }
+
+    /// The old sed substitution treated "&" and "|" in the path as syntax and
+    /// also rewrote the placeholder mentioned in the plist's comment.
+    func testTheExecutablePathIsFilledInVerbatimWhateverItContains() throws {
+        let template = try String(contentsOf: root.appendingPathComponent("Resources/io.github.sharelinux.mousehelper.plist"), encoding: .utf8)
+        XCTAssertEqual(template.components(separatedBy: "__APP_EXECUTABLE__").count - 1, 1, "the placeholder appears once, not in the comment")
+        for exe in [
+            "/Users/Plain Name/Applications/OSS Mouse Helper.app/Contents/MacOS/MouseHelper",
+            "/Users/a&b|c/App/MouseHelper", "/Users/back\\slash\\1/x", "/Users/<angle>/x", "/Users/$HOME`id`/x", "/Users/it's \"q\"/x",
+            "/Users/dash--dash/x", "/Users/a&amp;b/x",
+        ] {
+            let r = try fill(exe)
+            XCTAssertEqual(r.status, 0, "\(exe): \(r.err)")
+            let obj = try PropertyListSerialization.propertyList(from: r.out, format: nil) as? [String: Any]
+            XCTAssertEqual((obj?["ProgramArguments"] as? [String]) ?? [], [exe], exe)
+            // Everything else is untouched, comment included.
+            let text = String(data: r.out, encoding: .utf8) ?? ""
+            let header = template.components(separatedBy: "<plist")[0]
+            XCTAssertTrue(text.hasPrefix(header), "the comment is unchanged")
+            XCTAssertEqual(text.split(separator: "\n").count, template.split(separator: "\n").count)
+        }
+    }
+
+    func testARelativeOrMultilinePathIsRefused() throws {
+        XCTAssertNotEqual(try fill("relative/path").status, 0)
+        XCTAssertNotEqual(try fill("/Users/a\nb/x").status, 0)
+    }
 }

@@ -41,8 +41,8 @@ if echo "$info" | grep -qE '8G389M2DZR|KRPUAN3FFA|Developer ID'; then
 fi
 
 # The LaunchAgent plist, filled in for this build, NOT installed.
-sed "s|__APP_EXECUTABLE__|$HOME/Applications/OSS Mouse Helper.app/Contents/MacOS/MouseHelper|" \
-	"$here/Resources/io.github.sharelinux.mousehelper.plist" >"$out/io.github.sharelinux.mousehelper.plist"
+"$here/scripts/fill-launchagent.sh" "$here/Resources/io.github.sharelinux.mousehelper.plist" \
+	"$HOME/Applications/OSS Mouse Helper.app/Contents/MacOS/MouseHelper" >"$out/io.github.sharelinux.mousehelper.plist"
 plutil -lint "$out/io.github.sharelinux.mousehelper.plist" >/dev/null
 
 echo "built: $app"
