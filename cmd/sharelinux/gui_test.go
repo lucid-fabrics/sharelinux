@@ -116,3 +116,41 @@ func TestToastShowsExternalTextAsWritten(t *testing.T) {
 		}
 	}
 }
+
+// The HDR switch of the preferences is off and dimmed, with the reason under it, where the desktop cannot
+// show HDR; where it can, it works and says what it does.
+func TestHDRSwitchLooksLikeTheDesktop(t *testing.T) {
+	requireDisplay(t)
+	adw.Init()
+	cases := []struct {
+		name      string
+		env       hdrEnv
+		wanted    bool
+		active    bool
+		sensitive bool
+		subtitle  string
+	}{
+		{"X11", hdrEnv{}, true, false, false, "Needs a Wayland session, X11 shows standard range only"},
+		{"no color manager", hdrEnv{Wayland: true}, true, false, false, "This desktop has no color management, so it cannot show HDR"},
+		{"color managed, off", hdrDisplay, false, false, true, hdrSubtitle},
+		{"color managed, on", hdrDisplay, true, true, true, hdrSubtitle},
+		{"turned on in this run", hdrEnv{Wayland: true, ColorManager: true}, true, true, true, hdrRestart},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			g := &gui{app: hdrApp(hdrDecoders, c.env)}
+			prefs := defaultSettings()
+			prefs.HDR = c.wanted
+			row := g.hdrRow(prefs, func(func(*settings)) {})
+			if row.Active() != c.active || row.Sensitive() != c.sensitive || row.Subtitle() != c.subtitle {
+				t.Fatalf("active %v sensitive %v subtitle %q, want %v %v %q", row.Active(), row.Sensitive(), row.Subtitle(), c.active, c.sensitive, c.subtitle)
+			}
+		})
+	}
+	// No decoder of the profile: dimmed whatever the desktop is.
+	g := &gui{app: hdrApp(videoCaps{HEVCSoftware: true}, hdrDisplay)}
+	row := g.hdrRow(defaultSettings(), func(func(*settings)) {})
+	if row.Sensitive() || row.Subtitle() != "No decoder here handles HEVC 4:4:4 10-bit" {
+		t.Fatalf("sensitive %v subtitle %q", row.Sensitive(), row.Subtitle())
+	}
+}
