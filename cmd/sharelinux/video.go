@@ -264,6 +264,8 @@ type videoStream struct {
 
 	changes atomic.Uint64
 	tracker changeTracker
+	// lastUnit is when the core last delivered an access unit, in Unix nanoseconds.
+	lastUnit atomic.Int64
 
 	access  sync.Mutex
 	gate    keyframeGate
@@ -327,6 +329,7 @@ func (s *videoStream) VideoAccessUnit(unit media.VideoAccessUnit) {
 	if unit.Bands != 1 || len(unit.Data) == 0 {
 		return
 	}
+	s.lastUnit.Store(time.Now().UnixNano())
 	// The core builds each unit's data afresh and does not touch it again, so it is queued as it is.
 	if s.queue.push(videoItem{Unit: &unit, Queued: time.Now()}) {
 		s.askKeyframe()
@@ -487,6 +490,16 @@ func (s *videoStream) stats() videoStats {
 	s.access.Unlock()
 	snap.Dropped = s.queue.droppedCount()
 	return snap
+}
+
+// quietFor reports how long the core has delivered no access unit since the stream started
+// (or since the last one).
+func (s *videoStream) quietFor(now time.Time) time.Duration {
+	last := s.lastUnit.Load()
+	if last == 0 {
+		return 0
+	}
+	return now.Sub(time.Unix(0, last))
 }
 
 // idle reports how long no picture has been presented.

@@ -684,3 +684,22 @@ func TestVideoCapabilitiesNeedNoLogger(t *testing.T) {
 		t.Fatalf("plan %v for capabilities %+v", plan.enabled(), first)
 	}
 }
+
+// A stream that goes quiet is noticed by the time since its last unit.
+func TestStreamKnowsHowLongItHasBeenQuiet(t *testing.T) {
+	clip := builtinClip(t)
+	plan := planVideo(videoSoftware, videoCaps{HEVCSoftware: true}, true)
+	stream := newVideoStream(quiet, plan, "", 1, &countingPresenter{}, nil)
+	defer stream.close()
+	if stream.quietFor(time.Now()) != 0 {
+		t.Fatal("a stream that has not begun is not quiet")
+	}
+	stream.VideoAccessUnit(clipUnit(clip, 0))
+	if q := stream.quietFor(time.Now().Add(7 * time.Second)); q < 6*time.Second || q > 8*time.Second {
+		t.Fatalf("quiet for %v", q)
+	}
+	stream.VideoAccessUnit(clipUnit(clip, 1))
+	if stream.quietFor(time.Now()) > time.Second {
+		t.Fatal("a unit ends the quiet")
+	}
+}

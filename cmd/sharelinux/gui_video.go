@@ -8,6 +8,7 @@ import (
 	"time"
 
 	coreglib "github.com/diamondburned/gotk4/pkg/core/glib"
+	E "github.com/sagernet/sing/common/exceptions"
 )
 
 const (
@@ -18,6 +19,9 @@ const (
 	videoSettleVirtual = 1500 * time.Millisecond
 	// videoHealthy is how long pictures must flow before earlier trouble is forgotten.
 	videoHealthy = 5 * time.Second
+	// videoStall is how long a running stream may deliver nothing before it is started over. The Mac
+	// sends 60 units a second even for a still screen.
+	videoStall = 6 * time.Second
 	// videoLogInterval is how often a running stream logs its counters.
 	videoLogInterval = 5 * time.Second
 )
@@ -200,6 +204,13 @@ func (v *sessionView) pollVideo() {
 		vid.changes = changes
 		v.live.echo.Updated(now)
 	}
+	// A Mac that stops sending without closing the stream (a network that dropped the UDP for a
+	// while, ports the Mac closed) leaves the last picture on screen for good: start over.
+	if vid.on && stream.quietFor(now) >= videoStall {
+		v.g.app.logger.Warn("video", "state", "stalled", "quiet", stream.quietFor(now).String())
+		v.restartStalledVideo(errVideoStalled)
+		return
+	}
 	if vid.on && !vid.onSince.IsZero() && now.Sub(vid.onSince) >= videoHealthy {
 		vid.policy.healthy()
 	}
@@ -255,6 +266,32 @@ func (v *sessionView) handleVideoEvent(stream *videoStream, event videoEvent) {
 			return false
 		})
 	}
+}
+
+var errVideoStalled = E.New("the Mac stopped sending video")
+
+// restartStalledVideo ends a stream that went quiet and, as for any stop that is not the Mac's
+// word, starts it again after a pause, or gives up for the session after a few.
+func (v *sessionView) restartStalledVideo(cause error) {
+	vid := &v.vid
+	v.leaveVideo()
+	v.closeVideo()
+	client := v.client
+	vid.do(func() { _ = client.StopMediaStream() })
+	delay, restart := vid.policy.next(classifyStop(cause))
+	if !restart {
+		vid.gaveUp = true
+		v.notify("The video stream stopped, using the picture path")
+		return
+	}
+	vid.retry = coreglib.TimeoutAdd(uint(delay.Milliseconds()), func() bool {
+		vid.retry = 0
+		if v.ended || vid.gaveUp {
+			return false
+		}
+		v.startVideo()
+		return false
+	})
 }
 
 // leaveVideo takes the video off the screen and lets the tiles resume where the
