@@ -119,6 +119,16 @@ func forceSwscaleForTest(forced bool) {
 	C.oss_video_test_force_swscale(boolToC(forced))
 }
 
+// claimVideoProcessorForTest makes the decoder own the GPU video processor slot under a made-up display,
+// and videoProcessorOwnerForTest returns that display, 0 when the slot is free.
+func claimVideoProcessorForTest(d *decoder, display uintptr) {
+	C.oss_video_test_vpp_claim(d.c, C.gsize(display))
+}
+
+func videoProcessorOwnerForTest() uintptr {
+	return uintptr(C.oss_video_test_vpp_owner())
+}
+
 // textureForTest makes the picture's texture as the screen does, cropped cropLeft and cropTop more
 // at the left and top, and returns its pixel (b, g, r, a) at x, y and whether its color state is the
 // one for RGB made from expect.

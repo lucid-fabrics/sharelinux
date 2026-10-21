@@ -159,6 +159,12 @@ void oss_video_test_eagain(int sends);
 // oss_video_test_force_swscale makes software pictures go through swscale even where GTK takes planar YUV.
 void oss_video_test_force_swscale(gboolean forced);
 
+// oss_video_test_vpp_claim makes the decoder own the GPU video processor slot of the process (display is
+// any number, no GPU is needed), and oss_video_test_vpp_owner returns the display that owns it, NULL
+// when nobody does.
+void oss_video_test_vpp_claim(OssVideoDecoder *decoder, gsize display);
+gsize oss_video_test_vpp_owner(void);
+
 // oss_video_test_hdr_gpu chooses whether HDR pictures go through the GPU's video processor to P010
 // DMA-BUFs: -1 by picture size, 0 never, 1 always.
 void oss_video_test_hdr_gpu(int mode);

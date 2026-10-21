@@ -162,6 +162,9 @@ struct OssVideoDecoder {
 	OssDecoderKind kind;
 	AVCodecContext *context;
 	AVBufferRef *device;
+	// display is the VADisplay of device, NULL for a decoder with no GPU device. The video processor
+	// of a display belongs to the decoder that opened it (see vpp_release_display).
+	void *display;
 	AVPacket *packet;
 	AVFrame *scratch;
 	guint8 *sets; // the parameter sets with start codes
@@ -244,6 +247,7 @@ OssVideoDecoder *oss_video_open(OssVideoCodec codec, OssDecoderKind kind, const 
 			oss_video_close(decoder);
 			return NULL;
 		}
+		decoder->display = ((AVVAAPIDeviceContext *)((AVHWDeviceContext *)decoder->device->data)->hwctx)->display;
 		decoder->context->hw_device_ctx = av_buffer_ref(decoder->device);
 		decoder->context->get_format = hardware_format;
 		// Surfaces GTK still holds are not given back to the decoder, so the pool needs room.
@@ -289,16 +293,16 @@ void oss_frame_free(OssFrame *frame) {
 	}
 }
 
-static void vpp_release(void);
+static void vpp_release_display(void *display);
 
 void oss_video_close(OssVideoDecoder *decoder) {
 	if (decoder == NULL) {
 		return;
 	}
-	if (g_atomic_int_get(&live_decoders) == 1) {
-		// The video processor belongs to the display this decoder opened: let it go while it exists.
-		vpp_release();
-	}
+	// The video processor of a display lives and dies with the decoder that opened the display, in
+	// whatever order the decoders close, and it goes before the display does (the device is freed
+	// below).
+	vpp_release_display(decoder->display);
 	OssFrame *frame;
 	while ((frame = g_queue_pop_head(&decoder->frames)) != NULL) {
 		frame_free_internal(frame);
@@ -729,6 +733,36 @@ static void vpp_destroy_locked(void) {
 	memset(&vpp, 0, sizeof vpp);
 }
 
+// vpp_release_display lets the video processor go when it belongs to this display. It does nothing
+// for a decoder without a GPU device (display NULL) or for one whose display never made the
+// processor, so closing those cannot take the processor from a decoder that still uses it.
+static void vpp_release_display(void *display) {
+	if (display == NULL) {
+		return;
+	}
+	g_mutex_lock(&vpp_lock);
+	if (vpp.display == display) {
+		vpp_destroy_locked();
+	}
+	g_mutex_unlock(&vpp_lock);
+}
+
+// oss_video_test_vpp_claim makes the decoder own the video processor slot without a GPU: the display
+// is any pointer. oss_video_test_vpp_owner says who owns it.
+void oss_video_test_vpp_claim(OssVideoDecoder *decoder, gsize display) {
+	g_mutex_lock(&vpp_lock);
+	decoder->display = (void *)display;
+	vpp.display = (void *)display;
+	g_mutex_unlock(&vpp_lock);
+}
+
+gsize oss_video_test_vpp_owner(void) {
+	g_mutex_lock(&vpp_lock);
+	gsize display = (gsize)vpp.display;
+	g_mutex_unlock(&vpp_lock);
+	return display;
+}
+
 // vpp_prepare_locked makes the video processing context for surfaces of this size on this display.
 static gboolean vpp_prepare_locked(VADisplay display, int width, int height) {
 	if (vpp.ready && vpp.display == display && vpp.width == width && vpp.height == height) {
@@ -747,12 +781,6 @@ static gboolean vpp_prepare_locked(VADisplay display, int width, int height) {
 	vpp.height = height;
 	vpp.ready = TRUE;
 	return TRUE;
-}
-
-static void vpp_release(void) {
-	g_mutex_lock(&vpp_lock);
-	vpp_destroy_locked();
-	g_mutex_unlock(&vpp_lock);
 }
 
 static gboolean hdr_gpu_wanted(int width, int height) {
