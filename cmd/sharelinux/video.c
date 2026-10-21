@@ -566,7 +566,12 @@ GdkColorState *oss_yuv_color_state(OssColor color) {
 	if (primaries == 0 || primaries == 2 || transfer == 0 || transfer == 2) {
 		return NULL;
 	}
-	if (matrix == 0 || matrix == 2) {
+	// Matrix 0 is the identity: the three planes are G, B and R, not luma and chroma, so there is no
+	// YUV state for them. Only 2 means "unspecified".
+	if (matrix == 0) {
+		return NULL;
+	}
+	if (matrix == 2) {
 		matrix = primaries == 9 ? 9 : 1;
 	}
 	guint key = ((guint)primaries & 0xff) | (((guint)transfer & 0xff) << 8) | (((guint)matrix & 0xff) << 16) | (color.full_range ? 1u << 24 : 0) |
@@ -588,7 +593,8 @@ GdkColorState *oss_yuv_color_state(OssColor color) {
 
 GdkColorState *oss_color_state(OssColor color) {
 	int primaries = color.primaries, transfer = color.transfer, matrix = color.matrix;
-	// 0 and 2 are "unspecified", and matrix 0 is RGB, which cannot describe a YUV picture.
+	// 0 and 2 are "unspecified" for the primaries and the transfer. Matrix 0 is the identity (RGB), which
+	// 4:2:0 video cannot have, so a stream that says it anyway is shown as BT.709 like an unspecified one.
 	if (primaries == 0 || primaries == 2) {
 		primaries = 1;
 	}
@@ -1075,7 +1081,7 @@ static gboolean convert_rgb(const AVFrame *picture, int width, int height, OssCo
 		av_frame_free(&cropped);
 		return FALSE;
 	}
-	int space = color.matrix == 9 || color.matrix == 10 || (deep && color.primaries == 9 && (color.matrix == 0 || color.matrix == 2))
+	int space = color.matrix == 9 || color.matrix == 10 || (deep && color.primaries == 9 && color.matrix == 2)
 	                ? SWS_CS_BT2020
 	                : (color.matrix == 6 || color.matrix == 5 ? SWS_CS_SMPTE170M : SWS_CS_ITU709);
 	sws_setColorspaceDetails(sws, sws_getCoefficients(space), color.full_range ? 1 : 0, sws_getCoefficients(SWS_CS_DEFAULT), 1, 0, 1 << 16,

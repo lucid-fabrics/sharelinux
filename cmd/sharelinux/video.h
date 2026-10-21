@@ -175,7 +175,8 @@ GdkColorState *oss_rgb_color_state(OssColor color);
 
 // oss_yuv_color_state is the state of the YUV planes of a 4:4:4 10-bit stream, taken as they are,
 // or NULL when GTK has no state for the stream's primaries, transfer, matrix and range. An
-// unspecified matrix of BT.2020 primaries is BT.2020 non-constant luminance.
+// unspecified matrix (2) of BT.2020 primaries is BT.2020 non-constant luminance. Matrix 0 is the
+// identity, planes of G, B and R, so it has no YUV state and gives NULL.
 GdkColorState *oss_yuv_color_state(OssColor color);
 
 // oss_color_state builds the GdkColorState for a stream. Values GTK cannot use
