@@ -211,7 +211,6 @@ func (p *pairDialog) build() {
 
 	// 3. compare the code
 	p.code = wrapLabel("", "numeric")
-	p.code.SetSelectable(true)
 	p.codeNote = wrapLabel("", "dim-label")
 	confirm := pillButton("Confirm", true)
 	confirm.ConnectClicked(p.confirm)
