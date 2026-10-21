@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -75,5 +77,41 @@ func TestHandlerTransferState(t *testing.T) {
 	}
 	if _, changed = h.takeTransfer(); changed {
 		t.Fatal("and only once")
+	}
+}
+
+func TestCancelDuringPreparingEndsTheWait(t *testing.T) {
+	batch := transfers{handler: newHandler(nil, nil), context: context.Background()}
+	batch.beginBatch()
+	result := make(chan error, 1)
+	go func() {
+		_, err := batch.waitDestination(7)
+		result <- err
+	}()
+	time.Sleep(120 * time.Millisecond)
+	batch.cancelCopy()
+	select {
+	case err := <-result:
+		if !errors.Is(err, errCopyCancelled) {
+			t.Fatalf("error %v, want the copy cancelled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancel during Preparing still waits for the drop timeout")
+	}
+}
+
+func TestAbortDropCancelsTheDragAndDismissesTheCard(t *testing.T) {
+	batch := transfers{handler: newHandler(nil, nil), context: context.Background()}
+	batch.announceDrop([]string{"/a/name.txt"})
+	cancelled := 0
+	batch.abortDrop(errCopyCancelled, func() error { cancelled++; return nil })
+	if cancelled != 1 {
+		t.Fatalf("the drag was cancelled %d times, want once", cancelled)
+	}
+	if state, _ := batch.handler.takeTransfer(); state.Active {
+		t.Fatalf("the card is still up: %+v", state)
+	}
+	if toasts := batch.handler.takeToasts(); len(toasts) != 1 || toasts[0] != "Copy cancelled" {
+		t.Fatalf("toasts %v", toasts)
 	}
 }

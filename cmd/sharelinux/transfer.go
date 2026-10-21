@@ -287,8 +287,7 @@ func (t *transfers) drop(paths []string, x, y int) {
 		t.gesture.End()
 		destination, err := t.waitDestination(id)
 		if err != nil {
-			_ = t.client.CancelDrag(id)
-			t.failDrop(err.Error())
+			t.abortDrop(err, func() error { return t.client.CancelDrag(id) })
 			return
 		}
 		for _, path := range paths {
@@ -302,6 +301,20 @@ func (t *transfers) drop(paths []string, x, y int) {
 	}()
 }
 
+// abortDrop ends a drop that has no destination: the drag on the Mac is
+// cancelled so it does not hang there, and the card goes away. A cancel by the
+// person is said plainly, anything else is reported as the failure it is.
+func (t *transfers) abortDrop(err error, cancelDrag func() error) {
+	_ = cancelDrag()
+	if errors.Is(err, errCopyCancelled) {
+		t.finishCopies("", err)
+		return
+	}
+	t.failDrop(err.Error())
+}
+
+// waitDestination waits for the Mac to say where the dropped files landed. It
+// stops at once when the person cancels the card.
 func (t *transfers) waitDestination(id uint32) (string, error) {
 	deadline := time.NewTimer(dropTimeout)
 	defer deadline.Stop()
@@ -310,6 +323,9 @@ func (t *transfers) waitDestination(id uint32) (string, error) {
 	for {
 		select {
 		case <-tick.C:
+			if t.wasCancelled() {
+				return "", errCopyCancelled
+			}
 			path, found := t.handler.takeDestination(id)
 			if found {
 				return path, nil
