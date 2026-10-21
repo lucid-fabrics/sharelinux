@@ -322,6 +322,46 @@ func (t *transfers) waitDestination(id uint32) (string, error) {
 	}
 }
 
+// fetchWait is how long a request for the Mac's drag waits for the answer. The
+// Mac says nothing when it is not dragging, so silence is the answer.
+const fetchWait = 4 * time.Second
+
+// dragVerdict is what the viewer does with the Mac's drag state after a request.
+type dragVerdict int
+
+const (
+	// dragWaiting means nothing to do yet: no request, or no answer yet.
+	dragWaiting dragVerdict = iota
+	// dragFetch means the answer to the request arrived: copy its files.
+	dragFetch
+	// dragNothing means the Mac did not answer in time: it is not dragging.
+	dragNothing
+)
+
+// dragAsk remembers one request for the Mac's drag, so that only its answer
+// starts a copy. A drag the Mac announces on its own, or one that arrives after
+// the wait, must not start a download nobody asked for.
+type dragAsk struct {
+	until time.Time
+}
+
+func (a *dragAsk) ask(now time.Time) { a.until = now.Add(fetchWait) }
+
+func (a *dragAsk) settle(now time.Time, drag *rfb.RemoteDrag, changed bool) dragVerdict {
+	if a.until.IsZero() {
+		return dragWaiting
+	}
+	if now.After(a.until) {
+		a.until = time.Time{}
+		return dragNothing
+	}
+	if changed && drag != nil && len(drag.Items) > 0 {
+		a.until = time.Time{}
+		return dragFetch
+	}
+	return dragWaiting
+}
+
 // fetch downloads the files of the Mac's own drag into the downloads folder.
 func (t *transfers) fetch(drag *rfb.RemoteDrag) {
 	t.beginBatch()

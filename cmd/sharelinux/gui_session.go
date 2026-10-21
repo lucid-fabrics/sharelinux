@@ -88,7 +88,7 @@ type sessionView struct {
 	pointerX, pointerY int
 	pointerInside      bool
 	pointerHeld        bool
-	fetching           bool
+	drag               dragAsk
 
 	transfer  *transfers
 	clip      *clipboardBridge
@@ -536,9 +536,12 @@ func (v *sessionView) poll() {
 	for _, message := range v.h.takeToasts() {
 		v.notify(message)
 	}
-	if drag, changed := v.h.takeDrag(); changed && v.fetching && drag != nil {
-		v.fetching = false
+	drag, changed := v.h.takeDrag()
+	switch v.drag.settle(time.Now(), drag, changed) {
+	case dragFetch:
 		v.transfer.fetch(drag)
+	case dragNothing:
+		v.notify("The Mac is not dragging any files")
 	}
 	if state, changed := v.h.takeTransfer(); changed {
 		v.showTransfer(state)
@@ -1187,7 +1190,7 @@ func (v *sessionView) runCommand(command command) {
 	case commandTypeClipboard:
 		v.typeClipboard()
 	case commandFetchDrag:
-		v.fetching = true
+		v.drag.ask(time.Now())
 		v.report("Asking the Mac for the files it is dragging", v.client.RequestDrag())
 	case commandScreenshot:
 		path, err := v.saveScreenshot()
