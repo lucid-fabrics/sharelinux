@@ -261,6 +261,22 @@ final class SourcesTests: XCTestCase {
         XCTAssertFalse(ScreenSharingServer.isRunning(pid: 1, requirement: "this is not a requirement"))
     }
 
+    /// The per-user agent may own the established socket: it is on the allowlist,
+    /// and the real Apple binaries satisfy the requirement while another
+    /// Apple-signed binary or our own unsigned one does not.
+    func testTheAppleScreenSharingBinariesSatisfyTheRequirement() throws {
+        let base = "/System/Library/CoreServices/RemoteManagement/"
+        let agent = base + "ScreensharingAgent.bundle"
+        let daemon = base + "screensharingd.bundle"
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: agent), "no Screen Sharing on this macOS")
+        XCTAssertTrue(ScreenSharingServer.requirement.contains("com.apple.screensharing.agent"))
+        XCTAssertTrue(ScreenSharingServer.matches(path: agent), "the per-user agent is allowed")
+        XCTAssertTrue(ScreenSharingServer.matches(path: daemon))
+        XCTAssertFalse(ScreenSharingServer.matches(path: "/usr/bin/true"), "Apple-signed but not Screen Sharing")
+        XCTAssertFalse(ScreenSharingServer.matches(path: CommandLine.arguments[0]), "unsigned or ad-hoc code")
+        XCTAssertFalse(ScreenSharingServer.matches(path: "/nonexistent"))
+    }
+
     /// A program of ours listening on a port and connecting to itself is the
     /// stand-in for an attacker's listener on 5900.
     func testALiveLoopbackListenerOfAnotherProgramIsNotScreenSharing() throws {

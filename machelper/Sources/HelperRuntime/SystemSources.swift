@@ -53,12 +53,34 @@ public final class SystemSessionSource: SessionStateSource {
 
 /// Whether a process is Apple's Screen Sharing server: an Apple-signed binary
 /// whose identifier is one of the Screen Sharing / Remote Management servers.
+///
+/// `com.apple.screensharing.agent` (the per-user ScreensharingAgent) is on the
+/// list on purpose: launchd hands the accepted connection to
+/// `com.apple.screensharing.daemon`, but the per-user agent serves the session
+/// in the logged-in user's context and may own the established socket on
+/// recent macOS. Both are Apple-anchored identifiers, so the check is no
+/// weaker: only Apple-signed code (SIP protected) can carry them. Which of the
+/// three really owns the socket on the owner's macOS is a W5 drill item; the
+/// paired key stays the real lock either way.
 /// The kernel's code-signing check by pid needs no privilege, also for root
 /// processes. A pid that no longer exists, an unsigned binary or an Apple
 /// binary with another identifier all answer false.
 public enum ScreenSharingServer {
     public static let requirement =
-        "anchor apple and (identifier \"com.apple.screensharing.daemon\" or identifier \"com.apple.RemoteDesktopAgent\" or identifier \"com.apple.AppleVNCServer\")"
+        "anchor apple and (identifier \"com.apple.screensharing.daemon\" or identifier \"com.apple.screensharing.agent\" or identifier \"com.apple.RemoteDesktopAgent\" or identifier \"com.apple.AppleVNCServer\")"
+
+    /// Whether the code at `path` satisfies the requirement (static check, no
+    /// process needed). Used to prove the allowlist against the real binaries.
+    static func matches(path: String, requirement: String = ScreenSharingServer.requirement) -> Bool {
+        var code: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &code) == errSecSuccess, let code
+        else { return false }
+        var req: SecRequirement?
+        guard SecRequirementCreateWithString(requirement as CFString, [], &req) == errSecSuccess, let req else {
+            return false
+        }
+        return SecStaticCodeCheckValidity(code, [], req) == errSecSuccess
+    }
 
     public static func isRunning(pid: Int32, requirement: String = ScreenSharingServer.requirement) -> Bool {
         guard pid > 0 else { return false }
