@@ -263,10 +263,12 @@ func TestPlanWithHDR(t *testing.T) {
 		wantHDR   bool
 		wantKinds []decoderKind
 	}{
-		{"both decoders", videoAuto, both, true, []decoderKind{decoderVAAPI, decoderSoftware}},
-		{"software mode never asks the GPU", videoSoftware, both, true, []decoderKind{decoderSoftware}},
+		// Only the GPU decodes HDR: the CPU's pixel rate is measured for 4:2:0 8-bit.
+		{"both decoders, the GPU alone takes HDR", videoAuto, both, true, []decoderKind{decoderVAAPI}},
+		{"software mode never asks the GPU, so there is no HDR", videoSoftware, both, false, nil},
 		{"only the GPU takes 4:4:4", videoAuto, videoCaps{HEVCVAAPI: true, HEVCSoftware: true, HEVC444x10VAAPI: true}, true, []decoderKind{decoderVAAPI}},
-		{"only software takes 4:4:4", videoAuto, videoCaps{HEVCVAAPI: true, HEVCSoftware: true, HEVC444x10Software: true}, true, []decoderKind{decoderSoftware}},
+		{"only software takes 4:4:4: no HDR offered", videoAuto, videoCaps{HEVCVAAPI: true, HEVCSoftware: true, HEVC444x10Software: true}, false, nil},
+		{"no GPU at all, software takes 4:4:4: no HDR offered", videoAuto, videoCaps{HEVCSoftware: true, HEVC444x10Software: true}, false, nil},
 		{"no 4:4:4 decoder keeps the plan standard range", videoAuto, videoCaps{HEVCVAAPI: true, HEVCSoftware: true}, false, nil},
 		{"GPU-only 4:4:4 in software mode has nothing", videoSoftware, videoCaps{HEVCSoftware: true, HEVC444x10VAAPI: true}, false, nil},
 	}
@@ -290,6 +292,20 @@ func TestPlanWithHDR(t *testing.T) {
 	}
 }
 
+// The pixel rate the Mac is told is the GPU's whenever the session has HDR, and a machine whose
+// only HDR-capable decoder is software never gets the offer, so it is never told a CPU rate for it.
+func TestHDRPlanRateIsTheGPUs(t *testing.T) {
+	caps := videoCaps{HEVCVAAPI: true, HEVCSoftware: true, HEVC444x10VAAPI: true, HEVC444x10Software: true}
+	plan := planVideo(videoAuto, caps, true).withHDR(videoAuto, caps)
+	if got := plan.decoderPixelRate(4); got != rateVAAPI {
+		t.Fatalf("rate %d, want the GPU's %d", got, rateVAAPI)
+	}
+	soft := videoCaps{HEVCSoftware: true, HEVC444x10Software: true}
+	if plan := planVideo(videoAuto, soft, true).withHDR(videoAuto, soft); plan.HDR {
+		t.Fatal("software decoding alone is offered HDR")
+	}
+}
+
 func TestPlanWithHDRNeedsHEVC(t *testing.T) {
 	caps := videoCaps{H264Software: true, HEVC444x10Software: true}
 	plan := planVideo(videoAuto, caps, true).withHDR(videoAuto, caps)
@@ -303,23 +319,23 @@ func TestPlanWithHDRNeedsHEVC(t *testing.T) {
 }
 
 func TestPlanKindsFor(t *testing.T) {
-	caps := videoCaps{HEVCVAAPI: true, HEVCSoftware: true, HEVC444x10Software: true}
+	caps := videoCaps{HEVCVAAPI: true, HEVCSoftware: true, HEVC444x10VAAPI: true}
 	plan := planVideo(videoAuto, caps, true).withHDR(videoAuto, caps)
 	sdr := media.Color{BitDepth: 8, ChromaFormat: 1}
 	hdr := media.Color{BitDepth: 10, ChromaFormat: 3, Transfer: media.TransferPQ}
 	if got := plan.kindsFor(sdr); !slices.Equal(got, []decoderKind{decoderVAAPI, decoderSoftware}) {
 		t.Fatalf("SDR video: %v", got)
 	}
-	if got := plan.kindsFor(hdr); !slices.Equal(got, []decoderKind{decoderSoftware}) {
-		t.Fatalf("HDR video skips the decoder that cannot take 4:4:4: %v", got)
+	if got := plan.kindsFor(hdr); !slices.Equal(got, []decoderKind{decoderVAAPI}) {
+		t.Fatalf("HDR video goes to the GPU alone: %v", got)
 	}
 	// A decoder that failed is gone for both kinds of stream.
-	failed := plan.withoutKind(decoderSoftware)
+	failed := plan.withoutKind(decoderVAAPI)
 	if got := failed.kindsFor(hdr); len(got) != 0 {
 		t.Fatalf("no decoder left for HDR: %v", got)
 	}
-	if got := failed.kindsFor(sdr); !slices.Equal(got, []decoderKind{decoderVAAPI}) {
-		t.Fatalf("SDR video keeps the GPU: %v", got)
+	if got := failed.kindsFor(sdr); !slices.Equal(got, []decoderKind{decoderSoftware}) {
+		t.Fatalf("SDR video keeps the CPU: %v", got)
 	}
 }
 

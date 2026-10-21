@@ -44,15 +44,24 @@ func tail(output []byte, n int) []byte {
 }
 
 func hdrFormat(clip *mockmedia.Clip, transfer int) media.VideoFormat {
+	return hdrFormatOf(clip, hdrColor(transfer))
+}
+
+func hdrFormatOf(clip *mockmedia.Clip, color media.Color) media.VideoFormat {
 	format := clipFormat(clip)
-	format.Color = hdrColor(transfer)
+	format.Color = color
 	return format
 }
 
 // decodeHDR decodes n pictures of an HDR clip.
 func decodeHDR(t *testing.T, kind decoderKind, clip *mockmedia.Clip, transfer, n int) []*videoFrame {
 	t.Helper()
-	d, err := openDecoder(decoderOptions{Codec: media.CodecHEVC, Kind: kind, Threads: 1}, hdrFormat(clip, transfer))
+	return decodeHDRColor(t, kind, clip, hdrColor(transfer), n)
+}
+
+func decodeHDRColor(t *testing.T, kind decoderKind, clip *mockmedia.Clip, color media.Color, n int) []*videoFrame {
+	t.Helper()
+	d, err := openDecoder(decoderOptions{Codec: media.CodecHEVC, Kind: kind, Threads: 1}, hdrFormatOf(clip, color))
 	if err != nil {
 		t.Skipf("no %v decoder for HEVC 4:4:4 10-bit: %v", kind, err)
 	}
@@ -71,6 +80,16 @@ func decodeHDR(t *testing.T, kind decoderKind, clip *mockmedia.Clip, transfer, n
 	return frames
 }
 
+// softwareHDRPlan is a plan that decodes HDR on the CPU. A real session never has one (withHDR leaves
+// the CPU out), but the stream path is tried on it where there is no GPU decoder.
+func softwareHDRPlan() videoPlan {
+	plan := planVideo(videoAuto, videoCaps{HEVCSoftware: true}, true)
+	plan.HDR = true
+	plan.HDRKinds = []decoderKind{decoderSoftware}
+	plan.Offer.PixelFormats |= media.PixelFormat444TenBitFullRange
+	return plan
+}
+
 func TestProbeFindsHDRDecoders(t *testing.T) {
 	caps := probeVideo("")
 	if !caps.HEVCSoftware {
@@ -79,8 +98,8 @@ func TestProbeFindsHDRDecoders(t *testing.T) {
 	if !caps.HEVC444x10Software {
 		t.Fatal("libavcodec decodes HEVC 4:4:4 10-bit in software but the probe says it does not")
 	}
-	if !caps.hdrDecoder() {
-		t.Fatal("a software decoder is a decoder for HDR")
+	if caps.hdrDecoder() != caps.HEVC444x10VAAPI {
+		t.Fatal("only the GPU decoder is a decoder for HDR")
 	}
 	t.Logf("HEVC 4:4:4 10-bit: VA-API %v, software %v (driver %q)", caps.HEVC444x10VAAPI, caps.HEVC444x10Software, caps.Driver)
 }
@@ -208,11 +227,7 @@ func TestMockHDRStreamEndToEnd(t *testing.T) {
 			clip := hdrClip(t, c.transfer)
 			client, mac, closeAll := openMockMac(t, clip)
 			defer closeAll()
-			caps := videoCaps{HEVCSoftware: true, HEVC444x10Software: true}
-			plan := planVideo(videoAuto, caps, true).withHDR(videoAuto, caps)
-			if !plan.HDR {
-				t.Fatal("the plan has no HDR")
-			}
+			plan := softwareHDRPlan()
 			var log bytes.Buffer
 			logger := slog.New(slog.NewTextHandler(&log, nil))
 			presenter := &countingPresenter{}
@@ -360,4 +375,40 @@ func TestVAAPIHDRThroughTheVideoProcessor(t *testing.T) {
 	}, 5*time.Second) {
 		t.Fatalf("left behind: %+v, before %+v", videoLive(), before)
 	}
+}
+
+// HDR switched on in the preferences must not change how GTK starts where HDR cannot be shown: a standard
+// range session would run on the GL renderer for nothing, and the variables would reach whatever the app
+// starts. Where the machine does have an HDR screen the variables are added, and taken out once GTK has them.
+func TestPrepareHDRLeavesTheEnvironmentWhereHDRCannotBeShown(t *testing.T) {
+	if !waylandSession(os.Getenv) {
+		t.Setenv("GDK_BACKEND", "wayland")
+	}
+	t.Setenv("GDK_DEBUG", "")
+	t.Setenv("GSK_RENDERER", "")
+	os.Unsetenv("GDK_DEBUG")
+	os.Unsetenv("GSK_RENDERER")
+	caps := probeVideo("")
+	a := hdrApp(caps, hdrEnv{})
+	a.settings.HDR = true
+	screens, colorManager := probeScreens()
+	shows := hdrStartup(true, caps, videoAuto, true, colorManager, screens)
+	prepareHDR(a)
+	defer releaseGTKEnv(a)
+	_, debug := os.LookupEnv("GDK_DEBUG")
+	_, renderer := os.LookupEnv("GSK_RENDERER")
+	if shows {
+		if !debug || !renderer {
+			t.Fatal("an HDR screen was found but GTK was not set up for it")
+		}
+		releaseGTKEnv(a)
+		if _, found := os.LookupEnv("GSK_RENDERER"); found {
+			t.Fatal("GSK_RENDERER stayed after GTK read it")
+		}
+		return
+	}
+	if debug || renderer || a.gtkEnv != nil {
+		t.Fatalf("GTK was set up for HDR on a machine that cannot show it: GDK_DEBUG %v GSK_RENDERER %v", debug, renderer)
+	}
+	t.Logf("no HDR screen here (color manager %v, screens %+v), the environment is as it was", colorManager, screens)
 }

@@ -175,7 +175,7 @@ func (v *sessionView) startVideo() {
 func (v *sessionView) toggleHDR() {
 	app := v.g.app
 	if !v.hdr && !app.hdrEffective(true) {
-		v.notify("HDR is not available here: " + app.hdrOffReason())
+		v.notify(hdrRefusal(app.hdrWanted(), app.hdrState()))
 		return
 	}
 	v.hdr = !v.hdr

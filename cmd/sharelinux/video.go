@@ -8,6 +8,7 @@ package main
 #include "video.h"
 #include "screen.h"
 #include "wayland.h"
+#include "hdroutput.h"
 */
 import "C"
 
@@ -35,6 +36,7 @@ var hdrProbeStream []byte
 func init() {
 	videoProbe = probeVideo
 	hdrEnvironment = probeHDREnvironment
+	hdrOutputProbe = probeWindowOutput
 }
 
 // probeVideo asks what decoders this machine has.
@@ -693,18 +695,61 @@ func probeHDREnvironment() hdrEnv {
 	}
 }
 
-// prepareHDR turns GTK's color management on before GTK starts when HDR is wanted on a Wayland
-// desktop: GTK reads GDK_DEBUG once, and without the flag it tells the compositor nothing about
-// the colors of its surfaces.
+func outputColorFrom(raw C.OssOutputColor) outputColor {
+	return outputColor{
+		Known:        raw.known != 0,
+		Transfer:     uint32(raw.transfer),
+		MaxLum:       uint32(raw.max_lum),
+		ReferenceLum: uint32(raw.reference_lum),
+		TargetMaxLum: uint32(raw.target_max_lum),
+	}
+}
+
+// probeWindowOutput asks the compositor what the screen the window is on shows. It is called on
+// the GTK thread; a screen it cannot describe is unknown, which counts as standard range.
+func probeWindowOutput() outputColor {
+	var raw C.OssOutputColor
+	if C.oss_wl_window_output(&raw) == 0 {
+		return outputColor{}
+	}
+	return outputColorFrom(raw)
+}
+
+// probeScreens describes every screen on a connection of its own, before GTK starts. ok is false
+// when there is no Wayland display or the compositor has no color manager.
+func probeScreens() (screens []outputColor, ok bool) {
+	var raw [16]C.OssOutputColor
+	count := int(C.oss_wl_probe_outputs(&raw[0], C.int(len(raw))))
+	if count < 0 {
+		return nil, false
+	}
+	for index := range count {
+		screens = append(screens, outputColorFrom(raw[index]))
+	}
+	return screens, true
+}
+
+// prepareHDR turns GTK's color management and the GL renderer on before GTK starts, but only when
+// HDR can really be shown: GTK reads GDK_DEBUG once, and without the flag it tells the compositor
+// nothing about the colors of its surfaces. The variables go back to what they were once GTK has
+// read them (see releaseGTKEnv).
 func prepareHDR(a *app) {
 	if !a.hdrWanted() || !waylandSession(os.Getenv) {
 		return
 	}
-	value := gdkDebugWithColorManagement(os.Getenv("GDK_DEBUG"), int(C.gtk_get_major_version()), int(C.gtk_get_minor_version()))
-	if value != os.Getenv("GDK_DEBUG") {
-		_ = os.Setenv("GDK_DEBUG", value)
+	screens, colorManager := probeScreens()
+	if !hdrStartup(true, a.videoCapabilities(), a.videoMode(), true, colorManager, screens) {
+		if a.logger != nil {
+			a.logger.Info("hdr", "state", "gtk left as it is", "color-manager", colorManager, "screens", len(screens))
+		}
+		return
 	}
-	if renderer := os.Getenv("GSK_RENDERER"); renderer == "" {
-		_ = os.Setenv("GSK_RENDERER", rendererForHDR(renderer, int(C.gtk_get_major_version()), int(C.gtk_get_minor_version())))
-	}
+	a.gtkEnv = hdrEnvChanges(os.LookupEnv, int(C.gtk_get_major_version()), int(C.gtk_get_minor_version()))
+	applyEnv(a.gtkEnv, os.Setenv)
+}
+
+// releaseGTKEnv takes out of the environment what prepareHDR put there for GTK.
+func releaseGTKEnv(a *app) {
+	restoreEnv(a.gtkEnv, os.LookupEnv, os.Setenv, os.Unsetenv)
+	a.gtkEnv = nil
 }

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/nekohasekai/open-screen-sharing/internal/rfb/media"
@@ -23,9 +25,10 @@ func TestHDRDecoder(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "software decoder",
+			// The CPU is not enough for the stream, see withHDR.
+			name: "software decoder alone",
 			caps: videoCaps{HEVC444x10Software: true},
-			want: true,
+			want: false,
 		},
 		{
 			name: "both decoders",
@@ -47,59 +50,228 @@ func TestHDRDecoder(t *testing.T) {
 }
 
 func TestHDRAvailable(t *testing.T) {
+	shown := hdrEnv{Wayland: true, ColorManager: true, OutputKnown: true, OutputHDR: true}
 	tests := []struct {
 		name string
 		caps videoCaps
+		mode videoMode
 		env  hdrEnv
 		want hdrState
 	}{
 		{
 			name: "no 4:4:4 decoder",
 			caps: videoCaps{},
-			env: hdrEnv{
-				Wayland:         true,
-				ColorManager:    true,
-				ColorManagement: true,
-			},
+			env:  shown,
 			want: hdrState{Reason: "No decoder here handles HEVC 4:4:4 10-bit"},
+		},
+		{
+			// Software decoding takes the stream but not at a rate that keeps a big picture smooth.
+			name: "software decoder alone",
+			caps: videoCaps{HEVC444x10Software: true},
+			env:  shown,
+			want: hdrState{Reason: "HDR needs a GPU decoder, the CPU alone is too slow for it"},
+		},
+		{
+			name: "software decoding chosen",
+			caps: videoCaps{HEVC444x10VAAPI: true},
+			mode: videoSoftware,
+			env:  shown,
+			want: hdrState{Reason: "HDR needs the GPU decoder, and Video is set to software decoding"},
 		},
 		{
 			name: "X11",
 			caps: videoCaps{HEVC444x10VAAPI: true},
-			env: hdrEnv{
-				Wayland:      false,
-				ColorManager: true,
-			},
+			env:  hdrEnv{ColorManager: true},
 			want: hdrState{Reason: "Needs a Wayland session, X11 shows standard range only"},
 		},
 		{
 			name: "no color manager",
-			caps: videoCaps{HEVC444x10Software: true},
-			env: hdrEnv{
-				Wayland:      true,
-				ColorManager: false,
-			},
+			caps: videoCaps{HEVC444x10VAAPI: true},
+			env:  hdrEnv{Wayland: true},
 			want: hdrState{Reason: "This desktop has no color management, so it cannot show HDR"},
+		},
+		{
+			// GNOME and KDE offer the color manager on standard range screens too.
+			name: "color manager on a standard range screen",
+			caps: videoCaps{HEVC444x10VAAPI: true},
+			env:  hdrEnv{Wayland: true, ColorManager: true, ColorManagement: true, OutputKnown: true},
+			want: hdrState{Reason: "This screen is not showing HDR. Turn HDR on for it in the display settings of the desktop"},
+		},
+		{
+			name: "screen the desktop would not describe",
+			caps: videoCaps{HEVC444x10VAAPI: true},
+			env:  hdrEnv{Wayland: true, ColorManager: true, ColorManagement: true},
+			want: hdrState{Reason: "The desktop would not say whether this screen shows HDR, so it stays standard range"},
 		},
 		{
 			name: "available",
 			caps: videoCaps{HEVC444x10VAAPI: true},
-			env: hdrEnv{
-				Wayland:         true,
-				ColorManager:    true,
-				ColorManagement: false,
-			},
+			env:  shown,
 			want: hdrState{Available: true},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := hdrAvailable(tt.caps, tt.env)
+			mode := tt.mode
+			if mode == "" {
+				mode = videoAuto
+			}
+			got := hdrAvailable(tt.caps, mode, tt.env)
 			if got != tt.want {
 				t.Fatalf("hdrAvailable() = %#v, want %#v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestOutputColorIsHDR(t *testing.T) {
+	tests := []struct {
+		name  string
+		color outputColor
+		want  bool
+	}{
+		{"PQ", outputColor{Known: true, Transfer: wpTransferPQ}, true},
+		{"HLG", outputColor{Known: true, Transfer: wpTransferHLG}, true},
+		{"sRGB at its reference", outputColor{Known: true, Transfer: 9, MaxLum: 80, ReferenceLum: 80}, false},
+		{"gamma 2.2 on a bright standard range screen", outputColor{Known: true, Transfer: 2, MaxLum: 300, ReferenceLum: 203}, false},
+		{"peak far above the reference", outputColor{Known: true, Transfer: 2, MaxLum: 1000, ReferenceLum: 203}, true},
+		{"target peak far above the reference", outputColor{Known: true, Transfer: 2, MaxLum: 80, ReferenceLum: 80, TargetMaxLum: 600}, true},
+		{"peak above an unnamed reference", outputColor{Known: true, MaxLum: 1000}, true},
+		{"no luminance at all", outputColor{Known: true}, false},
+		{"not described in full", outputColor{Transfer: wpTransferPQ, MaxLum: 1000}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.color.hdr(); got != tt.want {
+				t.Fatalf("hdr() = %v for %+v, want %v", got, tt.color, tt.want)
+			}
+		})
+	}
+}
+
+func TestHDRStartupNeedsARealHDRScreen(t *testing.T) {
+	gpu := videoCaps{HEVC444x10VAAPI: true}
+	hdrScreen := outputColor{Known: true, Transfer: wpTransferPQ}
+	sdrScreen := outputColor{Known: true, Transfer: 9, MaxLum: 80, ReferenceLum: 80}
+	tests := []struct {
+		name        string
+		wanted      bool
+		caps        videoCaps
+		wayland, cm bool
+		screens     []outputColor
+		want        bool
+	}{
+		{"everything there", true, gpu, true, true, []outputColor{hdrScreen}, true},
+		{"one of two screens shows HDR", true, gpu, true, true, []outputColor{sdrScreen, hdrScreen}, true},
+		{"not wanted", false, gpu, true, true, []outputColor{hdrScreen}, false},
+		{"standard range screens only", true, gpu, true, true, []outputColor{sdrScreen}, false},
+		{"screens the desktop would not describe", true, gpu, true, true, []outputColor{{}}, false},
+		{"no screens", true, gpu, true, true, nil, false},
+		{"decoder probe found no 4:4:4 decoder", true, videoCaps{HEVCSoftware: true}, true, true, []outputColor{hdrScreen}, false},
+		{"software decoder alone", true, videoCaps{HEVC444x10Software: true}, true, true, []outputColor{hdrScreen}, false},
+		{"no color manager", true, gpu, true, false, []outputColor{hdrScreen}, false},
+		{"X11", true, gpu, false, true, []outputColor{hdrScreen}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hdrStartup(tt.wanted, tt.caps, videoAuto, tt.wayland, tt.cm, tt.screens); got != tt.want {
+				t.Fatalf("hdrStartup() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHDREnvChangesKeepWhatThePersonSet(t *testing.T) {
+	lookup := func(env map[string]string) func(string) (string, bool) {
+		return func(name string) (string, bool) { value, ok := env[name]; return value, ok }
+	}
+	t.Run("nothing set", func(t *testing.T) {
+		changes := hdrEnvChanges(lookup(nil), 4, 22)
+		want := []envChange{
+			{Name: "GDK_DEBUG", Value: "color-mgmt"},
+			{Name: "GSK_RENDERER", Value: "gl"},
+		}
+		if !slices.Equal(changes, want) {
+			t.Fatalf("%+v, want %+v", changes, want)
+		}
+	})
+	t.Run("their flags and renderer stay", func(t *testing.T) {
+		changes := hdrEnvChanges(lookup(map[string]string{"GDK_DEBUG": "portals", "GSK_RENDERER": "vulkan"}), 4, 22)
+		want := []envChange{{Name: "GDK_DEBUG", Value: "portals,color-mgmt", Before: "portals", Had: true}}
+		if !slices.Equal(changes, want) {
+			t.Fatalf("%+v, want %+v", changes, want)
+		}
+	})
+	t.Run("already color managed", func(t *testing.T) {
+		changes := hdrEnvChanges(lookup(map[string]string{"GDK_DEBUG": "color-mgmt", "GSK_RENDERER": "gl"}), 4, 22)
+		if len(changes) != 0 {
+			t.Fatalf("%+v", changes)
+		}
+	})
+}
+
+// What was added for GTK is taken out again, so that nothing the app starts inherits it; what the
+// person had set comes back as it was, and a variable changed meanwhile is left alone.
+func TestRestoreEnvStripsWhatWasAdded(t *testing.T) {
+	env := map[string]string{"GDK_DEBUG": "portals", "KEEP": "1"}
+	lookup := func(name string) (string, bool) { value, ok := env[name]; return value, ok }
+	set := func(name, value string) error { env[name] = value; return nil }
+	unset := func(name string) error { delete(env, name); return nil }
+	changes := hdrEnvChanges(lookup, 4, 22)
+	applyEnv(changes, set)
+	if env["GDK_DEBUG"] != "portals,color-mgmt" || env["GSK_RENDERER"] != "gl" {
+		t.Fatalf("not applied: %v", env)
+	}
+	restoreEnv(changes, lookup, set, unset)
+	if env["GDK_DEBUG"] != "portals" || env["KEEP"] != "1" {
+		t.Fatalf("the person's value is not back: %v", env)
+	}
+	if _, found := env["GSK_RENDERER"]; found {
+		t.Fatalf("GSK_RENDERER leaked: %v", env)
+	}
+
+	applyEnv(changes, set)
+	env["GSK_RENDERER"] = "vulkan"
+	restoreEnv(changes, lookup, set, unset)
+	if env["GSK_RENDERER"] != "vulkan" {
+		t.Fatalf("a value changed meanwhile was overwritten: %v", env)
+	}
+}
+
+func TestHDRMoveNotice(t *testing.T) {
+	tests := []struct {
+		name                       string
+		sessionHDR, wanted, screen bool
+		want                       string
+	}{
+		{"HDR session stays on an HDR screen", true, true, true, ""},
+		{"HDR session moves to a standard range screen", true, true, false, "This screen is not showing HDR, so the desktop shows the HDR picture in standard range"},
+		{"standard session moves to an HDR screen and HDR is wanted", false, true, true, "This screen shows HDR. Reconnect to get HDR video, it cannot start in the middle of a session"},
+		{"HDR is not wanted", false, false, true, ""},
+		{"standard session on a standard screen", false, true, false, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hdrMoveNotice(tt.sessionHDR, tt.wanted, tt.screen); got != tt.want {
+				t.Fatalf("%q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHDRRefusalWording(t *testing.T) {
+	unavailable := hdrState{Reason: "X"}
+	if got := hdrRefusal(true, unavailable); got != "HDR is not available here: X" {
+		t.Fatal(got)
+	}
+	// The desktop can show HDR but GTK started without color management: it is not "not available",
+	// and "turned on" is only true when the preference is on.
+	for _, prefOn := range []bool{true, false} {
+		got := hdrRefusal(prefOn, hdrState{Available: true})
+		if strings.Contains(got, "not available") || prefOn && got != hdrNeedsRestart || !prefOn && strings.Contains(got, "Turned on") {
+			t.Fatalf("pref %v: %q", prefOn, got)
+		}
 	}
 }
 

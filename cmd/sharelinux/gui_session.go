@@ -116,6 +116,8 @@ type sessionView struct {
 
 	// vid is the session's use of the Mac's video stream.
 	vid videoSession
+	// hdrNotice is what was last said about the screen the window is on, so it is said once.
+	hdrNotice string
 
 	layoutSeen   bool
 	lastWidth    int
@@ -768,6 +770,17 @@ func (v *sessionView) showTransfer(state transferState) {
 	}
 }
 
+// screenChanged runs when the window comes to a screen. HDR is decided when a session connects, so a
+// screen of the other kind is only told to the person, with the reconnect it needs.
+func (v *sessionView) screenChanged() {
+	app := v.g.app
+	notice := hdrMoveNotice(v.hdr, app.hdrWanted(), app.refreshHDROutput())
+	if notice != "" && notice != v.hdrNotice {
+		v.notify(notice)
+	}
+	v.hdrNotice = notice
+}
+
 func (v *sessionView) notify(message string) {
 	v.g.toast(message)
 }
@@ -1053,6 +1066,10 @@ func (v *sessionView) installInput() {
 		}
 	})
 	v.outliving.add(v.g.window, active)
+	if native := v.g.window.Surface(); native != nil {
+		surface := gdk.BaseSurface(native)
+		v.outliving.add(surface, surface.ConnectEnterMonitor(func(*gdk.Monitor) { v.screenChanged() }))
+	}
 
 	drop := gtk.NewDropTarget(gdk.GTypeFileList, gdk.ActionCopy)
 	drop.ConnectEnter(func(x, y float64) gdk.DragAction { return v.dropHover(x, y) })

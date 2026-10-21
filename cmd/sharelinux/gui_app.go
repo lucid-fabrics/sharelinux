@@ -111,6 +111,8 @@ func (g *gui) activate() {
 		g.shutdown()
 		return false
 	})
+	// GTK has read GDK_DEBUG and GSK_RENDERER once the window is mapped: nothing it starts needs them.
+	g.window.ConnectMap(func() { releaseGTKEnv(g.app) })
 	g.window.Present()
 	g.list.start()
 

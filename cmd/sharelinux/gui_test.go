@@ -134,7 +134,8 @@ func TestHDRSwitchLooksLikeTheDesktop(t *testing.T) {
 		{"no color manager", hdrEnv{Wayland: true}, true, false, false, "This desktop has no color management, so it cannot show HDR"},
 		{"color managed, off", hdrDisplay, false, false, true, hdrSubtitle},
 		{"color managed, on", hdrDisplay, true, true, true, hdrSubtitle},
-		{"turned on in this run", hdrEnv{Wayland: true, ColorManager: true}, true, true, true, hdrRestart},
+		{"turned on in this run", hdrEnv{Wayland: true, ColorManager: true, OutputKnown: true, OutputHDR: true}, true, true, true, hdrRestart},
+		{"standard range screen", hdrEnv{Wayland: true, ColorManager: true, ColorManagement: true, OutputKnown: true}, true, false, false, "This screen is not showing HDR. Turn HDR on for it in the display settings of the desktop"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

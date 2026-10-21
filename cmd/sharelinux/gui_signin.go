@@ -318,6 +318,8 @@ func (s *signInDialog) connect() {
 	req.opts.VNC = s.vnc
 	s.req = &req
 	s.setDialing(true)
+	// The screen can have changed since the window opened: HDR is decided from it now.
+	s.g.app.refreshHDROutput()
 	dial := s.g.app.beginDial(&req)
 	s.dial = dial
 	go dial.run(dialEvents{

@@ -228,25 +228,21 @@ func planVideo(mode videoMode, caps videoCaps, serverHasVideo bool) videoPlan {
 }
 
 // withHDR adds HDR to a plan: the offer names 4:4:4 10-bit full range, which makes the Mac
-// offer HDR mode 3, and the decoders that took the probe stream of that profile are the ones
-// that may decode it. A plan whose codec is not HEVC, or whose machine has no such decoder,
-// stays as it is.
+// offer HDR mode 3, and only the GPU decoder, when it took the probe stream of that profile, may
+// decode it. Software decoding is left out on purpose. The decoder pixel rate the Mac gets is
+// measured for 4:2:0 8-bit, and 4:4:4 10-bit is twice the samples at more bits each; a rate that
+// held the picture smooth would be so low that a virtual display drops to a few frames a second,
+// and a rate that was not lowered would let the Mac send what the CPU cannot decode. A plan whose
+// codec is not HEVC, or whose machine has no such GPU decoder, stays as it is.
 func (p videoPlan) withHDR(mode videoMode, caps videoCaps) videoPlan {
 	if !p.enabled() || p.Codec != media.CodecHEVC {
 		return p
 	}
-	var kinds []decoderKind
-	if caps.HEVC444x10VAAPI && mode != videoSoftware && slices.Contains(p.Kinds, decoderVAAPI) {
-		kinds = append(kinds, decoderVAAPI)
-	}
-	if caps.HEVC444x10Software && slices.Contains(p.Kinds, decoderSoftware) {
-		kinds = append(kinds, decoderSoftware)
-	}
-	if len(kinds) == 0 {
+	if !caps.hdrDecoder() || mode == videoSoftware || !slices.Contains(p.Kinds, decoderVAAPI) {
 		return p
 	}
 	p.HDR = true
-	p.HDRKinds = kinds
+	p.HDRKinds = []decoderKind{decoderVAAPI}
 	p.Offer.PixelFormats |= media.PixelFormat444TenBitFullRange
 	return p
 }
@@ -305,7 +301,12 @@ func (p videoPlan) decoderPixelRate(threads int) int64 {
 	if !p.enabled() {
 		return 0
 	}
-	if p.Kinds[0] == decoderVAAPI {
+	first := p.Kinds[0]
+	if p.HDR && len(p.HDRKinds) > 0 {
+		// HDR video is decoded by the HDR decoders alone, whatever else the plan holds.
+		first = p.HDRKinds[0]
+	}
+	if first == decoderVAAPI {
 		return rateVAAPI
 	}
 	return rateSoftwareThread * int64(max(1, min(threads, softwareThreads)))

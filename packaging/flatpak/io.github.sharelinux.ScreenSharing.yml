@@ -25,8 +25,8 @@ finish-args:
   # /usr/lib/x86_64-linux-gnu/dri/intel-vaapi-driver, found by libva on its own). Both are
   # extension points of org.gnome.Platform, so nothing is declared here; flatpak installs them with
   # the app (the Intel one only on a machine with an Intel GPU). HDR video is HEVC 4:4:4 10-bit: the
-  # same two extensions decode it (software in libavcodec, VA-API for the Main444_10 profile on Gen12
-  # and newer). Without codecs-extra the viewer
+  # same two extensions decode it on the GPU (VA-API for the Main444_10 profile on Gen12 and newer;
+  # software decoding is too slow for it, so HDR is offered with VA-API only). Without codecs-extra the viewer
   # starts and draws picture tiles. The GPU's own Mesa (Vulkan, VA-API for AMD) comes from
   # org.freedesktop.Platform.GL.default.
   - --device=dri

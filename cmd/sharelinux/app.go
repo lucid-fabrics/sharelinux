@@ -84,8 +84,11 @@ type app struct {
 	videoOnce sync.Once
 	caps      videoCaps
 
-	hdrOnce sync.Once
-	hdrEnv  hdrEnv
+	hdrOnce   sync.Once
+	hdrAccess sync.Mutex
+	hdrEnv    hdrEnv
+	// gtkEnv is what prepareHDR added to the environment for GTK; it is taken out again once GTK has read it.
+	gtkEnv []envChange
 }
 
 // videoMode is the video mode for new connections: the environment wins over the preferences.
@@ -116,25 +119,55 @@ func (a *app) videoCapabilities() videoCaps {
 	return a.caps
 }
 
-// displayHDR asks the display server once what it offers for HDR. The first call has to come
-// from the GTK thread after the display is open.
+// displayHDR asks the display server once what it offers for HDR, and hands out the last
+// description of the screen the window is on. The first call has to come from the GTK thread
+// after the display is open.
 func (a *app) displayHDR() hdrEnv {
 	a.hdrOnce.Do(func() {
 		if hdrEnvironment == nil {
 			return
 		}
-		a.hdrEnv = hdrEnvironment()
+		env := hdrEnvironment()
+		a.hdrAccess.Lock()
+		a.hdrEnv = env
+		a.hdrAccess.Unlock()
 		if a.logger != nil {
-			a.logger.Info("hdr display", "wayland", a.hdrEnv.Wayland, "color-manager", a.hdrEnv.ColorManager,
-				"gtk-color-management", a.hdrEnv.ColorManagement)
+			a.logger.Info("hdr display", "wayland", env.Wayland, "color-manager", env.ColorManager,
+				"gtk-color-management", env.ColorManagement)
 		}
+		a.refreshHDROutput()
 	})
+	a.hdrAccess.Lock()
+	defer a.hdrAccess.Unlock()
 	return a.hdrEnv
+}
+
+// refreshHDROutput asks the compositor again what the screen the window is on shows, and says
+// whether it is HDR now. The screen can change under a running app (the window moves, the person
+// turns HDR on in the desktop's settings), so this is called when a session is about to start
+// and when the window moves. It has to run on the GTK thread. Where nothing can be asked the
+// description is left as it was.
+func (a *app) refreshHDROutput() bool {
+	if hdrOutputProbe == nil {
+		a.hdrAccess.Lock()
+		defer a.hdrAccess.Unlock()
+		return a.hdrEnv.OutputHDR
+	}
+	color := hdrOutputProbe()
+	a.hdrAccess.Lock()
+	defer a.hdrAccess.Unlock()
+	was := a.hdrEnv.OutputHDR
+	a.hdrEnv = a.hdrEnv.withOutput(color)
+	if a.logger != nil && (was != a.hdrEnv.OutputHDR || !color.Known) {
+		a.logger.Info("hdr screen", "known", color.Known, "hdr", a.hdrEnv.OutputHDR, "transfer", color.Transfer,
+			"max-nits", color.MaxLum, "target-max-nits", color.TargetMaxLum, "reference-nits", color.ReferenceLum)
+	}
+	return a.hdrEnv.OutputHDR
 }
 
 // hdrState says whether this machine can show HDR video.
 func (a *app) hdrState() hdrState {
-	return hdrAvailable(a.videoCapabilities(), a.displayHDR())
+	return hdrAvailable(a.videoCapabilities(), a.videoMode(), a.displayHDR())
 }
 
 // hdrWanted is the person's wish for HDR: the flag or the preference.
@@ -148,7 +181,7 @@ func (a *app) hdrOffReason() string {
 	if !state.Available {
 		return state.Reason
 	}
-	return hdrRestart
+	return hdrNeedsRestart
 }
 
 // hdrEffective says whether a session asks the Mac for HDR video.

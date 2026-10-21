@@ -31,6 +31,17 @@ type dialResult struct {
 	err    error
 }
 
+// decoderPixelRate is what the decoder of a session can keep up with. It decides the frame rate
+// the Mac picks for a virtual display, and the one it offers the stream. A session with HDR is
+// decoded by the GPU alone, so it gets the GPU's rate and never the CPU's.
+func (a *app) decoderPixelRate(hdr bool) int64 {
+	plan := planVideo(a.videoMode(), a.videoCapabilities(), true)
+	if hdr {
+		plan = plan.withHDR(a.videoMode(), a.videoCapabilities())
+	}
+	return plan.decoderPixelRate(videoThreads())
+}
+
 func (a *app) rfbOptions(req *request, h *handler) rfb.Options {
 	options := rfb.Options{
 		Address:              req.target.Address(),
@@ -47,11 +58,11 @@ func (a *app) rfbOptions(req *request, h *handler) rfb.Options {
 		SecurityTypes:        securityTypes(req),
 		// What the decoder can keep up with decides the frame rate the Mac picks for a
 		// virtual display, and the one it offers the stream.
-		DecoderMaxPixelRate: planVideo(a.videoMode(), a.videoCapabilities(), true).decoderPixelRate(videoThreads()),
 	}
 	// HDR means real HDR video: where this machine cannot show it, the virtual display stays
 	// standard range too, so the Mac never sends a stream that would be shown wrong.
 	hdr := a.hdrEffective(req.opts.HDR)
+	options.DecoderMaxPixelRate = a.decoderPixelRate(hdr)
 	if req.opts.HDR && !hdr {
 		a.logger.Info("hdr", "state", "off", "reason", a.hdrOffReason())
 	}
