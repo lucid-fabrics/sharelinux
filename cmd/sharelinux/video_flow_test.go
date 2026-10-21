@@ -347,3 +347,32 @@ func TestRestartPolicyHealthyResetsAttempts(t *testing.T) {
 		t.Fatalf("next() after healthy() = (%v, %v), want (%v, true)", delay, restart, time.Second)
 	}
 }
+
+// On a still screen the Mac sends a steady stream of tiny units; only a much bigger one is a change.
+func TestChangeTracker(t *testing.T) {
+	var c changeTracker
+	if c.changed(120) {
+		t.Fatal("the first unit sets the usual size")
+	}
+	for range 40 {
+		if c.changed(110) {
+			t.Fatal("a still screen is no change")
+		}
+	}
+	if c.changed(1400) {
+		t.Fatal("under the floor is never a change, however much bigger than usual")
+	}
+	if !c.changed(9000) {
+		t.Fatal("a unit far bigger than usual is a change")
+	}
+	// A busy screen has a bigger usual size, and its normal frames are not changes.
+	for range 80 {
+		c.changed(20000)
+	}
+	if c.changed(24000) {
+		t.Fatal("on a busy screen 24 KB is usual")
+	}
+	if !c.changed(120000) {
+		t.Fatal("six times the usual is a change")
+	}
+}

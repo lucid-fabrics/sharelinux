@@ -30,55 +30,102 @@ type videoSession struct {
 	on bool
 	// gaveUp is set when the video is not used for the rest of the session.
 	gaveUp bool
-	// started is set once a stream was asked for, so the first start happens once.
-	started bool
-	policy  restartPolicy
-	retry   coreglib.SourceHandle
+	policy restartPolicy
+	retry  coreglib.SourceHandle
 	// hold is set after the stream ended: the widget keeps its last picture and the
 	// tiles wait for the Mac's next update.
 	hold        bool
 	resumeAfter uint64
-	presented   uint64
+	changes     uint64
 	onSince     time.Time
 	startedAt   time.Time
 	askedAt     time.Time
 	loggedAt    time.Time
-	lastCounter screenVideo
+	waitLogged  bool
+	// work runs the calls that start and stop the stream in order, off the main loop.
+	work   chan func()
+	closed bool
 }
 
-// maybeStartVideo asks for the video stream when it is time: the picture has
-// been up for a moment and a virtual display, if one is coming, has been asked for.
-func (v *sessionView) maybeStartVideo() {
-	vid := &v.vid
-	if vid.started || vid.gaveUp || v.ended {
+// do queues a call on the stream's worker, which runs them one after the other.
+func (vid *videoSession) do(call func()) {
+	if vid.closed {
 		return
 	}
+	if vid.work == nil {
+		vid.work = make(chan func(), 16)
+		go func() {
+			for call := range vid.work {
+				call()
+			}
+		}()
+	}
+	select {
+	case vid.work <- call:
+	default:
+		go call()
+	}
+}
+
+// settled says whether it is time to ask for the stream: the picture has been up for a
+// moment, and a virtual display, if one is coming, has been asked for and had time to appear.
+func (v *sessionView) videoSettled() bool {
+	vid := &v.vid
 	now := time.Now()
 	if vid.startedAt.IsZero() {
 		vid.startedAt = now
 	}
-	wait := videoSettle
 	if v.g.app.preferences().virtualFollowsWindow(&v.live.req.opts) {
 		if !v.virtualAsked {
-			return
+			return false
 		}
 		if vid.askedAt.IsZero() {
 			vid.askedAt = now
 		}
 		if now.Sub(vid.askedAt) < videoSettleVirtual {
-			return
+			return false
 		}
 	}
-	if now.Sub(vid.startedAt) < wait {
+	return now.Sub(vid.startedAt) >= videoSettle
+}
+
+// maybeStartVideo asks for the video stream when it is time and the picture is one display.
+func (v *sessionView) maybeStartVideo() {
+	vid := &v.vid
+	if vid.stream != nil || vid.gaveUp || vid.retry != 0 || v.ended {
 		return
 	}
+	if !videoDisplayReady(v.h.displayLayout()) {
+		if v.h.displayLayout() != nil && !vid.waitLogged {
+			vid.waitLogged = true
+			v.g.app.logger.Info("video", "plan", "tiles", "reason", "several displays are shown together; choose one for the video stream")
+		}
+		return
+	}
+	if !v.videoSettled() {
+		return
+	}
+	vid.waitLogged = false
 	v.startVideo()
+}
+
+// followVideoDisplay stops the stream when the person goes back to all displays: the
+// tiles carry the whole desktop. Choosing one display again starts it again.
+func (v *sessionView) followVideoDisplay() {
+	vid := &v.vid
+	if vid.stream == nil || videoDisplayReady(v.h.displayLayout()) {
+		return
+	}
+	v.g.app.logger.Info("video", "state", "paused", "reason", "all displays are shown together")
+	v.leaveVideo()
+	v.closeVideo()
+	client := v.client
+	vid.do(func() { _ = client.StopMediaStream() })
 }
 
 // startVideo plans the stream and asks the Mac for it.
 func (v *sessionView) startVideo() {
 	vid := &v.vid
-	vid.started = true
 	app := v.g.app
 	if vid.policy.Limit == 0 {
 		vid.policy = restartPolicy{Limit: 4, Base: time.Second}
@@ -102,15 +149,14 @@ func (v *sessionView) startVideo() {
 	app.logger.Info("video", "renderer", renderer.Name, "gl", renderer.GL, "accelerated", renderer.Accelerated, "dmabuf", v.screen.dmabuf)
 	stream := newVideoStream(app.logger, plan, caps.Device, videoThreads(), v.screen, keyframe)
 	vid.stream = stream
-	vid.presented = 0
-	vid.lastCounter = v.screen.videoCounters()
+	vid.changes = 0
 	app.logger.Info("video", "plan", "stream", "codec", codecName(plan.Codec), "decoders", decoderNames(plan.Kinds), "device", caps.Device, "driver", caps.Driver)
-	go func() {
+	vid.do(func() {
 		err := client.StartMediaStream(plan.Offer, stream)
 		if err != nil {
 			stream.event(videoEvent{Kind: videoFailed, Text: err.Error()})
 		}
-	}()
+	})
 }
 
 func decoderNames(kinds []decoderKind) string {
@@ -123,6 +169,7 @@ func decoderNames(kinds []decoderKind) string {
 
 // pollVideo handles what the stream reported and keeps the counters moving. It runs on the main loop.
 func (v *sessionView) pollVideo() {
+	v.followVideoDisplay()
 	v.maybeStartVideo()
 	vid := &v.vid
 	stream := vid.stream
@@ -142,9 +189,9 @@ func (v *sessionView) pollVideo() {
 		break
 	}
 	now := time.Now()
-	counters := v.screen.videoCounters()
-	if counters.Presented != vid.presented {
-		vid.presented = counters.Presented
+	// The latency row is the time from an input to the next picture that changed.
+	if changes := stream.changes.Load(); changes != vid.changes {
+		vid.changes = changes
 		v.live.echo.Updated(now)
 	}
 	if vid.on && !vid.onSince.IsZero() && now.Sub(vid.onSince) >= videoHealthy {
@@ -233,12 +280,12 @@ func (v *sessionView) giveUpVideo(message string) {
 		coreglib.SourceRemove(vid.retry)
 		vid.retry = 0
 	}
-	wasOn := vid.on
+	wasOn, hadStream := vid.on, vid.stream != nil
 	v.leaveVideo()
 	v.closeVideo()
 	client := v.client
-	go func() { _ = client.StopMediaStream() }()
-	if message != "" && (wasOn || vid.started) {
+	vid.do(func() { _ = client.StopMediaStream() })
+	if message != "" && (wasOn || hadStream) {
 		v.notify(message + ", using the picture path")
 	}
 }
@@ -253,6 +300,10 @@ func (v *sessionView) stopVideo() {
 	}
 	v.closeVideo()
 	vid.on = false
+	vid.closed = true
+	if vid.work != nil {
+		close(vid.work)
+	}
 }
 
 // videoActive says the widget is showing the Mac's video.

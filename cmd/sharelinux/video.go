@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -166,6 +167,7 @@ func (d *decoder) next() *videoFrame {
 	frame.TexWidth, frame.TexHeight = int(info.tex_width), int(info.tex_height)
 	frame.Hardware = info.hardware != 0
 	frame.DecodeTime = time.Duration(info.decode_us) * time.Microsecond
+	frame.UnitBytes = int(info.unit_bytes)
 	frame.info = info
 	return frame
 }
@@ -198,6 +200,8 @@ type videoFrame struct {
 	TexHeight     int
 	Hardware      bool
 	DecodeTime    time.Duration
+	// UnitBytes is the size of the access unit the picture was decoded from.
+	UnitBytes int
 }
 
 // lumaMean is the average brightness of a software picture, -1 for a GPU one.
@@ -250,6 +254,9 @@ type videoStream struct {
 	keyframe func()
 	events   chan videoEvent
 	done     chan struct{}
+
+	changes atomic.Uint64
+	tracker changeTracker
 
 	access  sync.Mutex
 	gate    keyframeGate
@@ -434,6 +441,9 @@ func (s *videoStream) decodeUnit(item videoItem) {
 }
 
 func (s *videoStream) show(frame *videoFrame) {
+	if s.tracker.changed(frame.UnitBytes) {
+		s.changes.Add(1)
+	}
 	output := s.out.present(frame)
 	s.access.Lock()
 	first := !s.started && output != outputNone

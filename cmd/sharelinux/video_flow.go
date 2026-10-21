@@ -140,6 +140,32 @@ func (q *unitQueue) droppedCount() uint64 {
 	return q.dropped
 }
 
+// changeTracker tells which pictures show a real change. A still screen keeps coming as a
+// steady stream of tiny units, so the arrival of a picture says nothing about the input that
+// was sent; a unit far bigger than the usual one does.
+type changeTracker struct {
+	average float64
+}
+
+const (
+	// changeFloor is the size below which a unit is never a change, in bytes.
+	changeFloor = 1500
+	// changeFactor is how many times the usual size a unit must be.
+	changeFactor = 4
+)
+
+// changed reports whether a unit of this size is a change, and learns from it.
+func (c *changeTracker) changed(bytes int) bool {
+	size := float64(bytes)
+	changed := c.average > 0 && size > max(changeFloor, c.average*changeFactor)
+	if c.average == 0 {
+		c.average = size
+	} else {
+		c.average += (size - c.average) / 16
+	}
+	return changed
+}
+
 // keyframeGate spaces out requests for a keyframe: the Mac answers each one
 // with a big frame, and asking again before it arrives only makes more.
 type keyframeGate struct {

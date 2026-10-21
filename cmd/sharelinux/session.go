@@ -84,6 +84,18 @@ func displayLabel(layout *rfb.DisplayLayout) string {
 	return "All displays"
 }
 
+// videoDisplayReady says whether the Mac's picture is one display, which is all its video
+// stream can carry: with several displays shown together (the framebuffer is all of them)
+// the video would show one and leave the rest frozen, so the tiles stay in charge. A Mac
+// with a single display, or one display chosen, can use the video. Before the Mac has
+// sent its layout nothing is known and the answer is no.
+func videoDisplayReady(layout *rfb.DisplayLayout) bool {
+	if layout == nil {
+		return false
+	}
+	return currentDisplay(layout) != 0 || len(layout.Displays) <= 1
+}
+
 // mainDisplay returns the id of the Mac's main display.
 func mainDisplay(layout *rfb.DisplayLayout) (uint32, bool) {
 	if layout == nil {

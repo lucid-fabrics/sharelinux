@@ -114,6 +114,7 @@ struct OssVideoDecoder {
 	gboolean want_sync;
 	gint64 submitted_us;
 	gint64 received_us;
+	gsize unit_bytes;
 	OssVideoStats stats;
 };
 
@@ -285,6 +286,7 @@ static int queue_frame(OssVideoDecoder *decoder) {
 		info->tex_height = frame->av->height;
 	}
 	info->received_us = decoder->received_us;
+	info->unit_bytes = decoder->unit_bytes;
 	info->decoded_us = g_get_monotonic_time();
 	info->decode_us = (int)(info->decoded_us - decoder->submitted_us);
 	info->color = decoder->color;
@@ -355,6 +357,7 @@ int oss_video_decode(OssVideoDecoder *decoder, const guint8 *data, gsize length,
 	}
 	decoder->submitted_us = g_get_monotonic_time();
 	decoder->received_us = decoder->submitted_us - MAX(age_us, 0);
+	decoder->unit_bytes = length;
 	int result = avcodec_send_packet(decoder->context, decoder->packet);
 	av_packet_unref(decoder->packet);
 	if (result == AVERROR(EAGAIN)) {

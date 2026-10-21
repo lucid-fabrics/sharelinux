@@ -87,6 +87,7 @@ typedef struct {
 	gint64 received_us;    // g_get_monotonic_time when the unit's first packet arrived
 	gint64 decoded_us;     // when the frame was ready
 	int decode_us;         // from the unit going in to the frame being ready
+	gsize unit_bytes;      // size of the access unit it came from
 	OssColor color;
 } OssFrameInfo;
 

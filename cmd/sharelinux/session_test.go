@@ -116,3 +116,23 @@ func TestCodecLabelNames(t *testing.T) {
 		t.Fatal("codec")
 	}
 }
+
+func TestVideoDisplayReady(t *testing.T) {
+	two := []rfb.Display{{ID: 1, Flags: rfb.DisplayFlagMain}, {ID: 2}}
+	cases := []struct {
+		name   string
+		layout *rfb.DisplayLayout
+		want   bool
+	}{
+		{"no layout yet", nil, false},
+		{"several displays together", &rfb.DisplayLayout{Current: rfb.AllDisplays, Displays: two}, false},
+		{"one display of several", &rfb.DisplayLayout{Current: 2, Displays: two}, true},
+		{"a Mac with one display, all selected", &rfb.DisplayLayout{Current: rfb.AllDisplays, Displays: two[:1]}, true},
+		{"a layout without displays", &rfb.DisplayLayout{Current: rfb.AllDisplays}, true},
+	}
+	for _, c := range cases {
+		if got := videoDisplayReady(c.layout); got != c.want {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
+	}
+}
