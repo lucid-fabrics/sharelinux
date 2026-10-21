@@ -71,3 +71,30 @@ func TestReadPassword(t *testing.T) {
 		t.Fatal("missing file must fail")
 	}
 }
+
+func TestVideoFlag(t *testing.T) {
+	opts, err := parseArgs([]string{"-video", "software", "mock@host"}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.Video != "software" || !opts.Explicit["video"] {
+		t.Fatalf("%+v", opts)
+	}
+	a := &app{opts: opts, prefs: nil, settings: defaultSettings()}
+	if a.videoMode() != videoSoftware {
+		t.Fatal("the flag sets the mode")
+	}
+	t.Setenv("SHARELINUX_VIDEO", "off")
+	if a.videoMode() != videoOff {
+		t.Fatal("the environment wins over the flag")
+	}
+	t.Setenv("SHARELINUX_VIDEO", "")
+	plain, err := parseArgs([]string{"mock@host"}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := &app{opts: plain, settings: settings{Video: "off"}}
+	if b.videoMode() != videoOff {
+		t.Fatal("without a flag the preference decides")
+	}
+}

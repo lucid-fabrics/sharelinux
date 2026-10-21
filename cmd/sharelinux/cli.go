@@ -30,19 +30,21 @@ flags:
 
 // options is everything the command line can set.
 type options struct {
-	Target          string
-	PasswordFile    string
-	VNC             bool
-	Mode            rfb.Mode
-	Quality         rfb.Quality
-	Keyboard        string
-	Display         uint32
-	Virtual         *virtualDisplay
-	HDR             bool
-	NoClipboard     bool
-	NoGrab          bool
-	Fullscreen      bool
-	HUD             bool
+	Target       string
+	PasswordFile string
+	VNC          bool
+	Mode         rfb.Mode
+	Quality      rfb.Quality
+	Keyboard     string
+	Display      uint32
+	Virtual      *virtualDisplay
+	HDR          bool
+	NoClipboard  bool
+	NoGrab       bool
+	Fullscreen   bool
+	HUD          bool
+	// Video is the video mode given on the command line, empty when it was not.
+	Video           string
 	Save            bool
 	List            bool
 	Forget          string
@@ -131,6 +133,7 @@ func parseArgs(args []string, output io.Writer) (*options, error) {
 	set.BoolVar(&opts.NoGrab, "no-grab", false, "do not grab the keyboard in control mode")
 	set.BoolVar(&opts.Fullscreen, "fullscreen", false, "start fullscreen")
 	set.BoolVar(&opts.HUD, "hud", false, "start with the stats overlay on")
+	set.StringVar(&opts.Video, "video", "", "the Mac's video stream: auto, software or off (picture tiles); SHARELINUX_VIDEO does the same")
 	set.BoolVar(&opts.Save, "save", false, "remember this connection (password in the keyring) after it connects")
 	set.BoolVar(&opts.List, "list", false, "list saved connections and exit")
 	set.StringVar(&opts.Forget, "forget", "", "delete the saved connection with this name or address, and its password")

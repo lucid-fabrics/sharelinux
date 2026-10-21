@@ -90,6 +90,9 @@ func (a *app) videoMode() videoMode {
 	if value := os.Getenv("SHARELINUX_VIDEO"); value != "" {
 		return parseVideoMode(value)
 	}
+	if a.opts != nil && a.opts.Video != "" {
+		return parseVideoMode(a.opts.Video)
+	}
 	return parseVideoMode(a.preferences().Video)
 }
 
