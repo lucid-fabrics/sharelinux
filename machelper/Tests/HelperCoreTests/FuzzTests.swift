@@ -84,4 +84,53 @@ final class FuzzTests: XCTestCase {
             XCTAssertThrowsError(try s.open(d, maxPlaintext: 20, now: 1))
         }
     }
+
+    /// Random and bit-flipped pairing messages at every stage of the Mac side
+    /// never produce a code, a name or a key, and never crash.
+    func testPairingMessagesNeverYieldACodeFromForeignBytes() throws {
+        var rng = SplitMix(seed: 9)
+        let macKey = PrivKey()
+        for round in 0..<150 {
+            for stage in 0..<4 {
+                let r = try PairingResponder(staticKey: macKey, clock: { 0 })
+                let l = try LinuxPairer(key: PrivKey())
+                let m1 = try l.message1()
+                var valid = m1
+                if stage >= 1 {
+                    let m2 = try XCTUnwrap(try r.receive(m1))
+                    let (m3, commit) = try l.afterMessage2(m2)
+                    valid = m3
+                    if stage >= 2 {
+                        _ = try r.receive(m3)
+                        valid = commit
+                        if stage >= 3 {
+                            let rm = try XCTUnwrap(try r.receive(commit))
+                            valid = try l.afterResponderNonce(rm)
+                        }
+                    }
+                }
+                var foreign = round % 2 == 0 ? randomData(&rng, max: 200) : valid
+                if round % 2 == 1, !foreign.isEmpty {
+                    foreign[Int(rng.next() % UInt64(foreign.count))] ^= UInt8(1 + rng.next() % 255)
+                }
+                if foreign == valid { continue }
+                _ = try? r.receive(foreign)
+                XCTAssertNil(r.sas, "stage \(stage) round \(round)")
+                XCTAssertNil(r.remoteStatic)
+                XCTAssertNil(r.deviceName)
+            }
+        }
+    }
+
+    func testPairingWindowDropsRandomDatagramsWithoutOpeningAnything() {
+        var rng = SplitMix(seed: 10)
+        let window = PairingWindow(staticKey: PrivKey(), clock: { 0 })
+        for i in 0..<20_000 {
+            var d = randomData(&rng, max: 300)
+            if !d.isEmpty, i % 2 == 0 { d[0] = [0x10, 0x11, 0x12, 0x13][Int(rng.next() % 4)] }
+            _ = try? window.receive(d)
+            XCTAssertNil(window.pending)
+        }
+        XCTAssertNil(window.confirm())
+    }
 }
