@@ -209,6 +209,15 @@ final class SourcesTests: XCTestCase {
         XCTAssertEqual(TCPTable.selfCheck(layout: state), .untrusted)
     }
 
+    /// The source accepts a socket on its effective pid too, so the self-check
+    /// has to prove that slot: pointing it at the uid slot (a number that is
+    /// neither this pid nor 0) must be refused.
+    func testTheSelfCheckDeniesAWrongEffectivePidOffset() {
+        var epid = TCPLayout.sdk
+        epid.ePid = epid.lastPid - 4  // the uid slot
+        XCTAssertEqual(TCPTable.selfCheck(layout: epid), .untrusted)
+    }
+
     // MARK: who owns the socket on the Screen Sharing port
 
     func conn(_ last: UInt8, pid: Int32, epid: Int32 = 0) -> TCPConnection {

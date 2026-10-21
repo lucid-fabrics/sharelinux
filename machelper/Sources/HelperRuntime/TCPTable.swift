@@ -233,8 +233,11 @@ public enum TCPTable {
         guard let found = parseConnections(raw, localPort: port, layout: layout) else { return false }
         let me = getpid()
         guard found.count == 1, let c = found.first else { return false }
+        // The effective pid is checked too, because SystemScreenSharingSource
+        // accepts a socket on either pid: a socket nobody delegated works for
+        // its own process (or the table says 0), so a mis-read slot shows up here.
         return c.peer.bytes == expected && c.remotePort == clientPort && c.localPort == port
-            && c.pid == me
+            && c.pid == me && (c.effectivePid == me || c.effectivePid == 0)
     }
 
     /// The kernel embeds the interface scope in bytes 2-3 of link-local
