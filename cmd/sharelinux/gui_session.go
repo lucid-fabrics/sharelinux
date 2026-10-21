@@ -85,17 +85,19 @@ type sessionView struct {
 	clicks    clickFilter
 	focused   bool
 
-	// lockBackend is how Exclusive mode holds the pointer here. lockOn is set from
-	// the request until the release; locked once the pointer really is held, and
-	// only then does its relative motion drive the Mac's pointer.
+	// lockBackend is how Exclusive mode holds the pointer here. lock follows the
+	// request from start to release: the pointer's relative motion drives the
+	// Mac's pointer only once lock.held says it really is held.
 	lockBackend lockBackend
-	lockOn      bool
-	locked      bool
+	lock        pointerLock
 	rel         relativePointer
 	// sent is set once a pointer position went to the Mac; sentReports is how many
 	// cursor reports the Mac had made by then.
 	sent        bool
 	sentReports uint64
+
+	// overScreen is set while the pointer is over the picture's widget.
+	overScreen bool
 
 	pointerX, pointerY int
 	pointerInside      bool
@@ -536,11 +538,15 @@ func (v *sessionView) poll() {
 			v.applyGrabs()
 		}
 	}
+	if v.lock.on && v.lockBackend == lockWayland {
+		// The picture can move without changing size; the lock follows it.
+		v.screen.refreshLock(v.lockBackend)
+	}
 	if cursor, changed := v.h.takeCursor(); changed {
 		v.screen.setCursor(cursor)
 		v.updateSystemCursor()
 	}
-	if x, y, moved := v.h.takeCursorMove(); moved && v.locked {
+	if x, y, moved := v.h.takeCursorMove(); moved && v.lock.held {
 		warped := v.rel.resync(x, y, time.Now())
 		v.g.app.logger.Debug("mac cursor", "x", x, "y", y, "warped", warped)
 		if warped {
@@ -826,6 +832,9 @@ func (v *sessionView) applyMode(mode rfb.Mode, announce bool) {
 func (v *sessionView) applyGrabs() {
 	grab := v.focused && v.controlling() && !v.g.app.opts.NoGrab
 	v.screen.inhibitShortcuts(grab)
+	if v.mode != rfb.ModeExclusiveControl {
+		v.lock.leaveExclusive()
+	}
 	exclusive := v.focused && v.mode == rfb.ModeExclusiveControl && !v.g.app.opts.NoGrab
 	v.setPointerLock(exclusive)
 }
@@ -833,14 +842,14 @@ func (v *sessionView) applyGrabs() {
 // setPointerLock holds the pointer in the window (on) or lets it go. Every way
 // out of Exclusive mode, focus loss, unmap and the end of the session come here.
 func (v *sessionView) setPointerLock(on bool) {
-	if on == v.lockOn {
+	if on == v.lock.on {
 		if on {
 			v.screen.refreshLock(v.lockBackend)
 		}
 		return
 	}
 	if !on {
-		v.lockOn, v.locked = false, false
+		v.lock.release()
 		lockSink.motion, lockSink.state = nil, nil
 		hint, x, y := v.unlockHint()
 		v.g.app.logger.Debug("pointer lock released", "backend", int(v.lockBackend), "hint", hint, "x", x, "y", y, "mac_x", v.pointerX, "mac_y", v.pointerY)
@@ -862,14 +871,38 @@ func (v *sessionView) setPointerLock(on bool) {
 		lockSink.motion = v.onLockedMotion
 		lockSink.state = v.onLockState
 	}
+	if v.lockBackend == lockWayland && !v.overScreen {
+		v.lock.wait()
+		v.g.app.logger.Debug("pointer lock waits for the pointer to reach the picture")
+		return
+	}
 	held, requested := v.screen.lockPointer(v.lockBackend)
 	if !requested && !held {
 		lockSink.motion, lockSink.state = nil, nil
+		if v.lock.failedOnce() {
+			v.notify(lockFailedAnnouncement)
+		}
 		return
 	}
-	v.lockOn = true
-	v.locked = held
+	v.lock.request(held)
 	v.g.app.logger.Debug("pointer lock requested", "backend", int(v.lockBackend), "held", held)
+}
+
+// requestIfIdle asks for the lock when it is wanted and no request stands: the
+// compositor ended the last one while the window kept the focus, or Exclusive
+// began with the pointer outside the picture (on the header's toggle). The lock
+// is oneshot, so nothing else would bring it back; the pointer moving over the
+// picture is the cue that the user is back at work, and the compositor then
+// begins the lock at once.
+func (v *sessionView) requestIfIdle() {
+	if !v.lock.wantsRequest() {
+		return
+	}
+	held, requested := v.screen.lockPointer(v.lockBackend)
+	v.g.app.logger.Debug("pointer lock requested from idle", "backend", int(v.lockBackend), "requested", requested)
+	if held || requested {
+		v.lock.request(held)
+	}
 }
 
 // unlockHint is where the pointer reappears when the lock ends: over the Mac's
@@ -886,23 +919,25 @@ func (v *sessionView) unlockHint() (bool, float64, float64) {
 
 // onLockState is the compositor's answer to the lock request.
 func (v *sessionView) onLockState(locked bool) {
-	if !v.lockOn || locked == v.locked {
-		return
-	}
-	v.g.app.logger.Debug("pointer lock", "locked", locked)
-	v.locked = locked
-	if locked {
+	notice := v.lock.state(locked)
+	v.g.app.logger.Debug("pointer lock", "locked", locked, "notice", int(notice))
+	switch notice {
+	case lockNoticeLocked:
+		// The compositor may begin the lock well after the request (the pointer
+		// has to be over the picture first), and until then the pointer's own
+		// positions went to the Mac: the running total continues from there.
+		v.rel.set(v.pointerX, v.pointerY)
 		v.notify("Pointer locked, Ctrl+Alt+Esc releases it")
-		return
+	case lockNoticeEnded:
+		v.notify("Pointer released by the system")
 	}
-	v.notify("Pointer released by the system")
 }
 
 // onLockedMotion adds a motion of the locked pointer to the Mac's pointer. The
 // deltas arrive in window units and are scaled to the Mac's screen, with no edge
 // of the window to stop them; the total stays on the Mac's screen.
 func (v *sessionView) onLockedMotion(dx, dy float64) {
-	if !v.locked || !v.controlling() {
+	if !v.lock.held || !v.controlling() || !finiteMotion(dx, dy) {
 		return
 	}
 	width, height := v.client.FramebufferSize()
@@ -953,6 +988,7 @@ func (v *sessionView) installInput() {
 	motion.ConnectMotion(v.onMotion)
 	motion.ConnectEnter(v.onMotion)
 	motion.ConnectLeave(func() {
+		v.overScreen = false
 		v.pointerInside = false
 		v.updateSystemCursor()
 	})
@@ -1115,13 +1151,15 @@ func (v *sessionView) sendPointer(x, y int) {
 }
 
 func (v *sessionView) onMotion(x, y float64) {
+	v.overScreen = true
 	if !v.controlling() {
 		return
 	}
-	if v.locked && v.lockBackend.relative() {
+	if v.lock.held && v.lockBackend.relative() {
 		// The locked pointer moves by deltas; its own position means nothing.
 		return
 	}
+	v.requestIfIdle()
 	fx, fy, inside := v.toFramebuffer(x, y)
 	v.pointerInside = inside
 	v.updateSystemCursor()
@@ -1157,10 +1195,11 @@ func (v *sessionView) onButton(gesture *gtk.GestureSingle, x, y float64, down bo
 	}
 	if down {
 		v.screen.GrabFocus()
+		v.requestIfIdle()
 		fx, fy, inside := v.toFramebuffer(x, y)
 		if v.mode == rfb.ModeExclusiveControl {
 			fx, fy, inside = v.pointerX, v.pointerY, true
-			if px, py, ok := v.toFramebuffer(x, y); ok && !v.locked {
+			if px, py, ok := v.toFramebuffer(x, y); ok && !v.lock.held {
 				fx, fy = px, py
 			}
 		}

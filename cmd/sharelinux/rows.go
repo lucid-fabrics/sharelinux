@@ -109,3 +109,7 @@ func exclusiveAnnouncement(backend lockBackend) string {
 	}
 	return "Mode: exclusive (keyboard only, the pointer can leave the window)"
 }
+
+// lockFailedAnnouncement is the toast shown when the pointer could not be held
+// although the display server should allow it.
+const lockFailedAnnouncement = "Exclusive: the pointer could not be held, so only the keyboard is captured"

@@ -84,7 +84,7 @@ func (p *relativePointer) set(x, y int) {
 
 // move applies a motion in window pixels and keeps the pointer on the screen.
 func (p *relativePointer) move(dx, dy float32, v viewport, frameWidth, frameHeight int) (int, int) {
-	if v.empty() || frameWidth <= 0 || frameHeight <= 0 {
+	if v.empty() || frameWidth <= 0 || frameHeight <= 0 || !finiteMotion(float64(dx), float64(dy)) {
 		return int(p.X), int(p.Y)
 	}
 	p.X = clampFloat(p.X+float64(dx)*float64(frameWidth)/float64(v.W), 0, float64(frameWidth-1))

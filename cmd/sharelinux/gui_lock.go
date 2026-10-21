@@ -51,11 +51,15 @@ func (s *screenView) lockPointer(backend lockBackend) (held bool, requested bool
 		requested = C.oss_wl_lock(s.c) != 0
 		return false, requested
 	case lockX11:
-		if C.oss_x11_lock(s.c) != 0 {
-			return true, true
+		var major, minor C.int
+		status := lockStatus(C.oss_x11_lock(s.c, &major, &minor))
+		if status == lockStatusOK && !xinputUsable(int(major), int(minor)) {
+			// Raw motion would stop while a button is held: not good enough.
+			C.oss_x11_unlock(s.c, 0, 0, 0)
+			status = lockStatusNoXInput
 		}
 		// No raw motion: the barriers still keep the pointer inside.
-		return false, C.oss_x11_confine(s.c, 1) != 0
+		return x11LockResult(status, func() bool { return C.oss_x11_confine(s.c, 1) != 0 })
 	case lockConfine:
 		return false, C.oss_x11_confine(s.c, 1) != 0
 	}
@@ -64,8 +68,11 @@ func (s *screenView) lockPointer(backend lockBackend) (held bool, requested bool
 
 // refreshLock fits the X11 barriers to the window again after it changed size.
 func (s *screenView) refreshLock(backend lockBackend) {
-	if backend == lockConfine || backend == lockX11 {
+	switch backend {
+	case lockConfine, lockX11:
 		C.oss_x11_confine(s.c, 1)
+	case lockWayland:
+		C.oss_wl_refresh(s.c)
 	}
 }
 

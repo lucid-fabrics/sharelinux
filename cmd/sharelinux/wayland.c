@@ -5,6 +5,7 @@
 // GDK 4.18 deprecates the X11 handles; GDK_IS_X11_DISPLAY is only used to tell the backends apart.
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 
+#include <math.h>
 #include <string.h>
 #include <wayland-client.h>
 
@@ -22,6 +23,8 @@ static gboolean probed = FALSE;
 
 static struct zwp_locked_pointer_v1 *locked = NULL;
 static struct zwp_relative_pointer_v1 *relative = NULL;
+// The rectangle of the surface that the lock covers, as last sent.
+static int region_box[4] = {0, 0, 0, 0};
 
 static void registry_global(void *data, struct wl_registry *registry, uint32_t name, const char *interface, uint32_t version) {
 	if (strcmp(interface, zwp_pointer_constraints_v1_interface.name) == 0) {
@@ -117,6 +120,34 @@ static void drop_objects(void) {
 	}
 }
 
+// picture_box finds the widget's rectangle in the surface's own coordinates,
+// which is what a pointer constraint region is given in.
+static gboolean picture_box(GtkWidget *widget, int box[4]) {
+	GtkNative *native = gtk_widget_get_native(widget);
+	graphene_rect_t bounds;
+	if (native == NULL || !gtk_widget_compute_bounds(widget, GTK_WIDGET(native), &bounds)) {
+		return FALSE;
+	}
+	double offset_x = 0, offset_y = 0;
+	gtk_native_get_surface_transform(native, &offset_x, &offset_y);
+	box[0] = (int)floor(bounds.origin.x + offset_x);
+	box[1] = (int)floor(bounds.origin.y + offset_y);
+	box[2] = (int)ceil(bounds.size.width);
+	box[3] = (int)ceil(bounds.size.height);
+	return box[2] > 0 && box[3] > 0;
+}
+
+// picture_region makes a wl_region of the box; the caller destroys it.
+static struct wl_region *picture_region(GdkDisplay *display, const int box[4]) {
+	struct wl_compositor *compositor = gdk_wayland_display_get_wl_compositor(display);
+	if (compositor == NULL) {
+		return NULL;
+	}
+	struct wl_region *region = wl_compositor_create_region(compositor);
+	wl_region_add(region, box[0], box[1], box[2], box[3]);
+	return region;
+}
+
 gboolean oss_wl_lock(GtkWidget *widget) {
 	GdkDisplay *display = gdk_display_get_default();
 	if (display == NULL || !GDK_IS_WAYLAND_DISPLAY(display) || constraints == NULL || relative_manager == NULL) {
@@ -136,14 +167,51 @@ gboolean oss_wl_lock(GtkWidget *widget) {
 	}
 	// Two locks on one surface are a protocol error that ends the connection.
 	drop_objects();
+	// The lock covers the picture only. Over the header bar, where the toggle
+	// that asks for Exclusive sits, the pointer stays free, and the compositor
+	// begins the lock when the pointer enters the picture, so the first click
+	// after the toggle lands on the Mac and not on the header.
+	int box[4];
+	struct wl_region *region = NULL;
+	if (picture_box(widget, box)) {
+		region = picture_region(display, box);
+		memcpy(region_box, box, sizeof(box));
+	}
 	// Oneshot: when the compositor ends the lock (focus lost) it is gone, and
-	// a later request starts a fresh one. Nothing re-locks behind our back.
-	locked = zwp_pointer_constraints_v1_lock_pointer(constraints, wl_surface, pointer, NULL, ZWP_POINTER_CONSTRAINTS_V1_LIFETIME_ONESHOT);
+	// the session asks again when the pointer next moves over the picture.
+	locked = zwp_pointer_constraints_v1_lock_pointer(constraints, wl_surface, pointer, region, ZWP_POINTER_CONSTRAINTS_V1_LIFETIME_ONESHOT);
+	if (region != NULL) {
+		wl_region_destroy(region);
+	}
 	zwp_locked_pointer_v1_add_listener(locked, &locked_listener, NULL);
 	relative = zwp_relative_pointer_manager_v1_get_relative_pointer(relative_manager, pointer);
 	zwp_relative_pointer_v1_add_listener(relative, &relative_listener, NULL);
+	// A region counts from the next commit, and a compositor that tests the
+	// pointer against it only then has anything to test.
+	wl_surface_commit(wl_surface);
 	wl_display_flush(gdk_wayland_display_get_wl_display(display));
 	return TRUE;
+}
+
+void oss_wl_refresh(GtkWidget *widget) {
+	GdkDisplay *display = gdk_display_get_default();
+	int box[4];
+	if (locked == NULL || display == NULL || !GDK_IS_WAYLAND_DISPLAY(display) || !picture_box(widget, box) || memcmp(box, region_box, sizeof(box)) == 0) {
+		return;
+	}
+	GtkNative *native = gtk_widget_get_native(widget);
+	GdkSurface *surface = native != NULL ? gtk_native_get_surface(native) : NULL;
+	struct wl_surface *wl_surface = surface != NULL && GDK_IS_WAYLAND_SURFACE(surface) ? gdk_wayland_surface_get_wl_surface(surface) : NULL;
+	struct wl_region *region = picture_region(display, box);
+	if (wl_surface == NULL || region == NULL) {
+		return;
+	}
+	memcpy(region_box, box, sizeof(box));
+	zwp_locked_pointer_v1_set_region(locked, region);
+	wl_region_destroy(region);
+	// The region is double buffered: it counts from the next commit.
+	wl_surface_commit(wl_surface);
+	wl_display_flush(gdk_wayland_display_get_wl_display(display));
 }
 
 void oss_wl_unlock(GtkWidget *widget, gboolean has_hint, double x, double y) {

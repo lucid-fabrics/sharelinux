@@ -17,9 +17,14 @@ int oss_x11_caps(void);
 // oss_x11_lock holds the pointer for Exclusive mode: pointer barriers around the
 // window, XInput 2 raw motion read on a connection of its own (the deltas go to
 // ossPointerMotion, in window units), and the pointer warped back to the middle
-// of the widget after every burst so a click always lands on it. It returns
-// FALSE and changes nothing when XInput 2 is missing.
-gboolean oss_x11_lock(GtkWidget *widget);
+// of the widget after every burst so a click always lands on it. It returns an
+// OSS_LOCK_* status and stores the XInput version the server agreed to; with
+// anything but OSS_LOCK_OK nothing is left running. The caller judges the version. XInput 2.2 is asked for,
+// since a 2.0 client gets no raw events while a button is held.
+#define OSS_LOCK_OK 0
+#define OSS_LOCK_NO_XINPUT 1
+#define OSS_LOCK_NO_BARRIERS 2
+int oss_x11_lock(GtkWidget *widget, int *major, int *minor);
 
 // oss_x11_unlock ends it. With has_hint the pointer is put at (x, y), in the
 // widget's units.

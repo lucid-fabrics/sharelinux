@@ -1,6 +1,9 @@
 package main
 
-import "time"
+import (
+	"math"
+	"time"
+)
 
 // lockBackend is how Exclusive mode holds the pointer on this display server.
 type lockBackend int
@@ -135,4 +138,117 @@ func lockStart(reported bool, reportedX, reportedY int, reportedNewer bool, sent
 		return sentX, sentY
 	}
 	return max(frameWidth, 1) / 2, max(frameHeight, 1) / 2
+}
+
+// pointerLock follows one Exclusive-mode lock request.
+type pointerLock struct {
+	// on is set from the request until the release.
+	on bool
+	// held is set while the pointer really is held.
+	held bool
+	// idle is set while a lock is wanted but no request stands at the display
+	// server: it ended the last one, or the pointer was not yet over the picture
+	// when Exclusive began. The next pointer motion over the picture requests it.
+	idle bool
+	// warned is set once the "keyboard only" notice was shown for this stretch of
+	// Exclusive mode, so a focus change does not repeat it.
+	warned bool
+}
+
+// lockNotice is what the user is told about a change of the lock.
+type lockNotice int
+
+const (
+	lockNoticeNone lockNotice = iota
+	lockNoticeLocked
+	lockNoticeEnded
+)
+
+// request records a lock request; held is whether the pointer is held at once.
+func (l *pointerLock) request(held bool) {
+	l.on, l.held, l.idle = true, held, false
+}
+
+// release records the end of the lock by us (focus lost, mode left, session over).
+func (l *pointerLock) release() {
+	l.on, l.held, l.idle = false, false, false
+}
+
+// state takes the display server's report that the lock began or ended.
+func (l *pointerLock) state(locked bool) lockNotice {
+	if !l.on || locked == l.held {
+		return lockNoticeNone
+	}
+	l.held = locked
+	l.idle = !locked
+	if locked {
+		return lockNoticeLocked
+	}
+	return lockNoticeEnded
+}
+
+// wait records a lock that is wanted but cannot be requested yet, because the
+// pointer is not over the picture. Compositors differ on when they begin a lock
+// whose region the pointer is outside of (some never do), so none is asked until
+// the pointer is inside.
+func (l *pointerLock) wait() {
+	l.on, l.held, l.idle = true, false, true
+}
+
+// wantsRequest reports whether a wanted lock has no request standing.
+func (l *pointerLock) wantsRequest() bool {
+	return l.on && l.idle && !l.held
+}
+
+// failedOnce reports true the first time a lock could not be made in this stretch
+// of Exclusive mode; leaving the mode makes the next failure worth a notice again.
+func (l *pointerLock) failedOnce() bool {
+	if l.warned {
+		return false
+	}
+	l.warned = true
+	return true
+}
+
+// leaveExclusive forgets the notice state when the mode is left.
+func (l *pointerLock) leaveExclusive() {
+	l.warned = false
+}
+
+// lockStatus is how the X11 lock with raw motion went.
+type lockStatus int
+
+const (
+	// lockStatusOK: barriers and raw motion are up.
+	lockStatusOK lockStatus = iota
+	// lockStatusNoXInput: XInput 2.1 or later is missing, so raw motion is not
+	// available while a button is held.
+	lockStatusNoXInput
+	// lockStatusNoBarriers: raw motion works but the barriers could not be made,
+	// and without them the pointer is not held.
+	lockStatusNoBarriers
+)
+
+// x11LockResult turns the status of the raw motion lock into held and requested.
+// Without usable XInput the barriers alone still keep the pointer in the window;
+// without barriers nothing holds it and only the keyboard is captured.
+func x11LockResult(status lockStatus, confine func() bool) (held, requested bool) {
+	switch status {
+	case lockStatusOK:
+		return true, true
+	case lockStatusNoXInput:
+		return false, confine()
+	}
+	return false, false
+}
+
+// xinputUsable reports whether a negotiated XInput version delivers raw motion
+// during an implicit grab, which started with 2.1.
+func xinputUsable(major, minor int) bool {
+	return major > 2 || (major == 2 && minor >= 1)
+}
+
+// finiteMotion reports whether both parts of a motion are numbers a pointer can move by.
+func finiteMotion(dx, dy float64) bool {
+	return !math.IsNaN(dx) && !math.IsInf(dx, 0) && !math.IsNaN(dy) && !math.IsInf(dy, 0)
 }

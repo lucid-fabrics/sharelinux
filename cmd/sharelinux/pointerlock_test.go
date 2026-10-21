@@ -193,3 +193,28 @@ func TestLockStart(t *testing.T) {
 		t.Errorf("an empty picture: %d,%d", x, y)
 	}
 }
+
+func TestPointerLockWaitsForThePicture(t *testing.T) {
+	// Exclusive began from the header's toggle: the pointer is not over the
+	// picture, so nothing is requested until it is.
+	var lock pointerLock
+	lock.wait()
+	if !lock.on || lock.held || !lock.wantsRequest() {
+		t.Fatalf("a waiting lock is wanted, not held, and asks for a request: %+v", lock)
+	}
+	if notice := lock.state(true); notice != lockNoticeLocked || !lock.held || lock.wantsRequest() {
+		t.Fatalf("the compositor's answer settles it: %v %+v", notice, lock)
+	}
+	if notice := lock.state(false); notice != lockNoticeEnded || !lock.wantsRequest() {
+		t.Fatalf("an ended lock is asked for again: %v %+v", notice, lock)
+	}
+	lock.request(false)
+	if lock.wantsRequest() {
+		t.Fatalf("a standing request is not asked for twice: %+v", lock)
+	}
+	lock.wait()
+	lock.release()
+	if lock.on || lock.wantsRequest() {
+		t.Fatalf("leaving Exclusive drops a waiting lock: %+v", lock)
+	}
+}

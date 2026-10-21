@@ -18,10 +18,15 @@
 // zwp_relative_pointer_manager_v1 from the registry of GDK's connection.
 int oss_lock_caps(void);
 
-// oss_wl_lock locks the pointer to the widget's surface. The compositor decides
+// oss_wl_lock locks the pointer to the widget's rectangle of its surface; the
+// compositor begins the lock once the pointer is inside it. The compositor decides
 // when the lock begins: locked state changes go to ossPointerLockState, and the
 // relative motion to ossPointerMotion. It returns whether the request was made.
 gboolean oss_wl_lock(GtkWidget *widget);
+
+// oss_wl_refresh fits the region of a lock to the widget's place again after it
+// moved or changed size. It does nothing when the place is the same.
+void oss_wl_refresh(GtkWidget *widget);
 
 // oss_wl_unlock drops the lock, or the request for one. With has_hint the
 // compositor is asked to put the pointer at (x, y) in the widget's units afterwards.
