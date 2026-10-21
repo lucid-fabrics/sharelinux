@@ -69,10 +69,14 @@ final class PairingSquatTests: XCTestCase {
     func testTheAppHearsAboutAnotherDeviceAndARefusedSource() throws {
         _ = try window.receive(try LinuxPairer(key: PrivKey()).message1(), from: Self.hostA)
         XCTAssertEqual(events, [])
-        XCTAssertThrowsError(try window.receive(try LinuxPairer(key: PrivKey()).message1(), from: Self.hostB)) {
+        now += 0.1
+        _ = try window.receive(try LinuxPairer(key: PrivKey()).message1(), from: Self.hostB)  // runs beside A
+        XCTAssertEqual(events, [.anotherDeviceTrying])
+        // Junk from a third address that belongs to no attempt is reported too.
+        XCTAssertThrowsError(try window.receive(Data([DatagramKind.xxMessage3.rawValue]) + Data(count: 80), from: PeerAddress(bytes: [10, 0, 0, 3]))) {
             XCTAssertEqual($0 as? PairingError, .otherSource)
         }
-        XCTAssertEqual(events, [.anotherDeviceTrying])
+        XCTAssertEqual(events, [.anotherDeviceTrying, .anotherDeviceTrying])
         for _ in 0..<ChannelLimits.pairingMaxStartsPerSource {
             now += ChannelLimits.pairingMinStartSpacing
             _ = try? window.receive(try LinuxPairer(key: PrivKey()).message1(), from: Self.hostA)
@@ -92,6 +96,112 @@ final class PairingSquatTests: XCTestCase {
             XCTAssertEqual($0 as? PairingError, .busy)
         }
         XCTAssertEqual(seen, [.anotherDeviceTrying])
+    }
+
+    // MARK: spoofed-source stalls before r_M
+
+    func spoofed(_ i: Int) -> PeerAddress { PeerAddress(bytes: [172, 16, UInt8(i / 250), UInt8(i % 250) + 1])! }
+
+    /// Off-path spoofers send message 1 from forged addresses and never see
+    /// message 2. Each used to hold the single attempt slot for the full 20 s
+    /// timeout, so one packet every 20 s kept an honest device out of the whole
+    /// two-minute window. They now occupy slots that a real device pushes out.
+    func testSpoofedSourcesCannotHoldTheWindowFromAnHonestDevice() throws {
+        for i in 0..<(ChannelLimits.pairingMaxConcurrentAttempts * 3) {
+            now += ChannelLimits.pairingMinGlobalStartSpacing * 2
+            XCTAssertNoThrow(try window.receive(try LinuxPairer(key: PrivKey()).message1(), from: spoofed(i)), "spoof \(i)")
+        }
+        XCTAssertLessThanOrEqual(window.attemptsInFlight, ChannelLimits.pairingMaxConcurrentAttempts)
+        now += ChannelLimits.pairingMinGlobalStartSpacing * 2
+        let honest = try LinuxPairer(key: PrivKey())
+        let rm = try toNonce(honest, from: Self.hostA)
+        _ = try window.receive(try honest.afterResponderNonce(rm), from: Self.hostA)
+        XCTAssertEqual(window.pending?.sas, honest.code)
+        XCTAssertEqual(window.failures, 0, "spoofers cost the honest device nothing")
+        XCTAssertEqual(window.attemptsInFlight, 1, "the spoofed attempts died when the first one reached r_M")
+        XCTAssertNotNil(window.confirm())
+        XCTAssertTrue(events.contains(.anotherDeviceTrying), "the owner still hears that others are trying")
+    }
+
+    /// Pushing an honest attempt out needs a full set of fresh starts inside
+    /// its round trip to message 3, not one stray packet.
+    func testOneOrFewSpoofedStartsDoNotDisturbAnHonestAttemptInFlight() throws {
+        let honest = try LinuxPairer(key: PrivKey())
+        let m2 = try XCTUnwrap(try window.receive(try honest.message1(), from: Self.hostA))
+        for i in 0..<(ChannelLimits.pairingMaxConcurrentAttempts - 2) {
+            now += ChannelLimits.pairingMinGlobalStartSpacing * 2
+            _ = try window.receive(try LinuxPairer(key: PrivKey()).message1(), from: spoofed(i))
+        }
+        let (m3, commit) = try honest.afterMessage2(m2)
+        _ = try window.receive(m3, from: Self.hostA)
+        let rm = try XCTUnwrap(try window.receive(commit, from: Self.hostA))
+        _ = try window.receive(try honest.afterResponderNonce(rm), from: Self.hostA)
+        XCTAssertNotNil(window.pending)
+        XCTAssertEqual(window.failures, 0)
+    }
+
+    /// An attempt whose source answered message 2 cannot be pushed out by newcomers.
+    func testSlotsHeldByConfirmedSourcesAreNotEvicted() throws {
+        var pairers: [LinuxPairer] = []
+        var commits: [Data] = []
+        for i in 0..<ChannelLimits.pairingMaxConcurrentAttempts {
+            now += ChannelLimits.pairingMinGlobalStartSpacing * 2
+            let l = try LinuxPairer(key: PrivKey())
+            let m2 = try XCTUnwrap(try window.receive(try l.message1(), from: spoofed(i)))
+            let (m3, commit) = try l.afterMessage2(m2)
+            _ = try window.receive(m3, from: spoofed(i))
+            pairers.append(l); commits.append(commit)
+        }
+        now += ChannelLimits.pairingMinGlobalStartSpacing * 2
+        XCTAssertThrowsError(try window.receive(try LinuxPairer(key: PrivKey()).message1(), from: spoofed(100))) {
+            XCTAssertEqual($0 as? PairingError, .tooManyAttempts)
+        }
+        XCTAssertEqual(events.last, .anotherDeviceTrying)
+        XCTAssertEqual(window.attemptsInFlight, ChannelLimits.pairingMaxConcurrentAttempts)
+        // The first of them still reaches r_M; the rest are dropped for free.
+        XCTAssertNotNil(try window.receive(commits[0], from: spoofed(0)))
+        XCTAssertEqual(window.attemptsInFlight, 1)
+        XCTAssertEqual(window.failures, 0)
+    }
+
+    func testAnAttemptStalledBeforeTheNonceLetsGoAfterTheShortTimeout() throws {
+        _ = try window.receive(try LinuxPairer(key: PrivKey()).message1(), from: Self.hostA)
+        let junk = Data([DatagramKind.xxMessage3.rawValue]) + Data(count: 80)
+        now += ChannelLimits.pairingUnchargedTimeout - 0.1
+        XCTAssertThrowsError(try window.receive(junk, from: Self.hostB)) { XCTAssertEqual($0 as? PairingError, .otherSource) }
+        now += 0.2
+        XCTAssertThrowsError(try window.receive(junk, from: Self.hostB)) { XCTAssertEqual($0 as? PairingError, .malformed) }
+        XCTAssertEqual(window.attemptsInFlight, 0)
+        XCTAssertEqual(window.failures, 0, "free: nobody saw a code")
+        XCTAssertLessThan(ChannelLimits.pairingUnchargedTimeout, ChannelLimits.pairingAttemptTimeout)
+    }
+
+    func testStartSpacingIsPerSourceAndTheGlobalOneIsSmall() throws {
+        _ = try window.receive(try LinuxPairer(key: PrivKey()).message1(), from: Self.hostA)
+        // Another source right behind it is fine (a global 1 s spacing locked it out).
+        now += ChannelLimits.pairingMinGlobalStartSpacing * 2
+        XCTAssertNoThrow(try window.receive(try LinuxPairer(key: PrivKey()).message1(), from: Self.hostB))
+        // The same source again too soon is not.
+        now += ChannelLimits.pairingMinGlobalStartSpacing * 2
+        XCTAssertThrowsError(try window.receive(try LinuxPairer(key: PrivKey()).message1(), from: Self.hostA)) {
+            XCTAssertEqual($0 as? PairingError, .tooSoon)
+        }
+        // And nobody can start twice inside the global spacing.
+        now += 1
+        _ = try window.receive(try LinuxPairer(key: PrivKey()).message1(), from: spoofed(1))
+        now += ChannelLimits.pairingMinGlobalStartSpacing / 2
+        XCTAssertThrowsError(try window.receive(try LinuxPairer(key: PrivKey()).message1(), from: spoofed(2))) {
+            XCTAssertEqual($0 as? PairingError, .tooSoon)
+        }
+    }
+
+    func testSourceBookkeepingStaysBoundedUnderASpoofedFlood() throws {
+        for i in 0..<(ChannelLimits.pairingMaxTrackedSources * 2) {
+            now += ChannelLimits.pairingMinGlobalStartSpacing * 1.1
+            _ = try? window.receive(try LinuxPairer(key: PrivKey()).message1(), from: spoofed(i))
+        }
+        XCTAssertLessThanOrEqual(window.trackedSourceCount, ChannelLimits.pairingMaxTrackedSources + 1)
+        XCTAssertLessThanOrEqual(window.attemptsInFlight, ChannelLimits.pairingMaxConcurrentAttempts)
     }
 
     // MARK: spoofed message 1 after r_M

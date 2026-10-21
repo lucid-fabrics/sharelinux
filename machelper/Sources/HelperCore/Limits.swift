@@ -26,9 +26,23 @@ public enum ChannelLimits {
     /// Failed pairing attempts (protocol error, bad commit, or "codes differ")
     /// before the window closes.
     public static let pairingMaxFailures = 3
-    /// Minimum time between two pairing attempts starting (message 1), so the
-    /// window cannot be spun through attempts faster than a person could try.
+    /// Minimum time between two pairing attempts starting (message 1) from the
+    /// same source, so one address cannot restart faster than a person could try.
     public static let pairingMinStartSpacing = 1.0
+    /// Minimum time between any two attempt starts (keeps the cost of message 1,
+    /// one Diffie-Hellman, bounded). Kept far below the per-source spacing so a
+    /// spoofer's starts cannot lock an honest device out of the window.
+    public static let pairingMinGlobalStartSpacing = 0.05
+    /// Attempts that have not reached r_M run side by side up to this many (one
+    /// per source); a new one pushes out the oldest whose source never answered
+    /// message 2.
+    public static let pairingMaxConcurrentAttempts = 8
+    /// An attempt that has not reached r_M within this long is dropped for free.
+    /// An honest device needs well under a second; a spoofer that never sees
+    /// message 2 gets nothing out of holding a slot.
+    public static let pairingUnchargedTimeout = 4.0
+    /// Sources remembered for start counting; past this, old entries are dropped.
+    public static let pairingMaxTrackedSources = 1024
     /// Attempt starts (message 1) one source may make per pairing window. A LAN
     /// host using its own address could otherwise restart for free every
     /// `pairingMinStartSpacing` and keep an honest device out for the whole
@@ -39,8 +53,8 @@ public enum ChannelLimits {
     /// is older than the horizon (the owner sees the cooldown).
     public static let pairingFailureCap = 9
     public static let pairingFailureHorizon = 24.0 * 3600
-    /// An attempt that has not finished within this long is dropped. Charged
-    /// attempts (r_M sent) count as a failure when it fires.
+    /// A charged attempt (r_M sent) that has not finished within this long is
+    /// dropped and counts as a failure.
     public static let pairingAttemptTimeout = 20.0
     /// A session with no authenticated packet for this long ends (design 3.4).
     public static let silenceTimeout = 1.0

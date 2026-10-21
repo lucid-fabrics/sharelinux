@@ -528,11 +528,9 @@ final class PairingWindowTests: XCTestCase {
                 XCTAssertEqual($0 as? PairingError, .otherSource)
             }
         }
-        // A spoofed message 1 cannot replace the honest attempt either.
+        // A spoofed message 1 gets its own unconfirmed slot; it cannot replace or charge the honest attempt.
         now += ChannelLimits.pairingMinStartSpacing
-        XCTAssertThrowsError(try window.receive(try LinuxPairer(key: PrivKey()).message1(), from: Self.hostB)) {
-            XCTAssertEqual($0 as? PairingError, .otherSource)
-        }
+        XCTAssertNoThrow(try window.receive(try LinuxPairer(key: PrivKey()).message1(), from: Self.hostB))
         XCTAssertEqual(window.failures, 0)
         XCTAssertTrue(window.isOpen)
         // The honest attempt carries on and finishes.
