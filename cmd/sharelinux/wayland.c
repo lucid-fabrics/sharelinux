@@ -137,13 +137,26 @@ static gboolean picture_box(GtkWidget *widget, int box[4]) {
 	return box[2] > 0 && box[3] > 0;
 }
 
-// picture_region makes a wl_region of the box; the caller destroys it.
+// How many regions are alive, for the leak test.
+static gint live_regions;
+
+int oss_wl_live_regions(void) {
+	return g_atomic_int_get(&live_regions);
+}
+
+static void region_destroy(struct wl_region *region) {
+	wl_region_destroy(region);
+	g_atomic_int_dec_and_test(&live_regions);
+}
+
+// picture_region makes a wl_region of the box; the caller destroys it with region_destroy.
 static struct wl_region *picture_region(GdkDisplay *display, const int box[4]) {
 	struct wl_compositor *compositor = gdk_wayland_display_get_wl_compositor(display);
 	if (compositor == NULL) {
 		return NULL;
 	}
 	struct wl_region *region = wl_compositor_create_region(compositor);
+	g_atomic_int_inc(&live_regions);
 	wl_region_add(region, box[0], box[1], box[2], box[3]);
 	return region;
 }
@@ -181,7 +194,7 @@ gboolean oss_wl_lock(GtkWidget *widget) {
 	// the session asks again when the pointer next moves over the picture.
 	locked = zwp_pointer_constraints_v1_lock_pointer(constraints, wl_surface, pointer, region, ZWP_POINTER_CONSTRAINTS_V1_LIFETIME_ONESHOT);
 	if (region != NULL) {
-		wl_region_destroy(region);
+		region_destroy(region);
 	}
 	zwp_locked_pointer_v1_add_listener(locked, &locked_listener, NULL);
 	relative = zwp_relative_pointer_manager_v1_get_relative_pointer(relative_manager, pointer);
@@ -204,11 +217,14 @@ void oss_wl_refresh(GtkWidget *widget) {
 	struct wl_surface *wl_surface = surface != NULL && GDK_IS_WAYLAND_SURFACE(surface) ? gdk_wayland_surface_get_wl_surface(surface) : NULL;
 	struct wl_region *region = picture_region(display, box);
 	if (wl_surface == NULL || region == NULL) {
+		if (region != NULL) {
+			region_destroy(region);
+		}
 		return;
 	}
 	memcpy(region_box, box, sizeof(box));
 	zwp_locked_pointer_v1_set_region(locked, region);
-	wl_region_destroy(region);
+	region_destroy(region);
 	// The region is double buffered: it counts from the next commit.
 	wl_surface_commit(wl_surface);
 	wl_display_flush(gdk_wayland_display_get_wl_display(display));

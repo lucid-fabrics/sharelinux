@@ -92,3 +92,8 @@ func (s *screenView) unlockPointer(backend lockBackend, hint bool, x, y float64)
 		C.oss_x11_confine(s.c, 0)
 	}
 }
+
+// waylandLiveRegions counts the wl_region objects not yet destroyed, for the leak test.
+func waylandLiveRegions() int {
+	return int(C.oss_wl_live_regions())
+}

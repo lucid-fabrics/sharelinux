@@ -28,6 +28,9 @@ gboolean oss_wl_lock(GtkWidget *widget);
 // moved or changed size. It does nothing when the place is the same.
 void oss_wl_refresh(GtkWidget *widget);
 
+// oss_wl_live_regions counts the wl_region objects not yet destroyed, for the leak test.
+int oss_wl_live_regions(void);
+
 // oss_wl_unlock drops the lock, or the request for one. With has_hint the
 // compositor is asked to put the pointer at (x, y) in the widget's units afterwards.
 void oss_wl_unlock(GtkWidget *widget, gboolean has_hint, double x, double y);
