@@ -60,6 +60,16 @@ func BuiltinHLG() (*Clip, error) {
 	return ParseAnnexB(builtinHLG)
 }
 
+//go:embed testdata/clip_p3.hevc
+var builtinP3 []byte
+
+// BuiltinP3PQ is BuiltinPQ as the Mac really sends it: Display P3 primaries (12), BT.709 matrix
+// (1), full range, PQ transfer, HEVC 4:4:4 10-bit. The picture is the same, luma 500 with
+// chroma 300 (Cb) and 800 (Cr) on the right.
+func BuiltinP3PQ() (*Clip, error) {
+	return ParseAnnexB(builtinP3)
+}
+
 const (
 	payloadTypeHEVC = 100
 	rtpClockRate    = 24000

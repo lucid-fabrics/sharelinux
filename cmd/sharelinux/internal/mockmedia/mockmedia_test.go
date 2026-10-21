@@ -290,7 +290,7 @@ func TestSourceInfo(t *testing.T) {
 }
 
 func TestHDRClips(t *testing.T) {
-	for name, open := range map[string]func() (*Clip, error){"PQ": BuiltinPQ, "HLG": BuiltinHLG} {
+	for name, open := range map[string]func() (*Clip, error){"PQ": BuiltinPQ, "HLG": BuiltinHLG, "P3 PQ": BuiltinP3PQ} {
 		clip := mustClip(t, open)
 		if clip.Width != 320 || clip.Height != 192 || len(clip.Units) != 24 {
 			t.Fatalf("%s: %dx%d, %d pictures", name, clip.Width, clip.Height, len(clip.Units))

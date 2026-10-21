@@ -53,6 +53,12 @@ func hdrFormatOf(clip *mockmedia.Clip, color media.Color) media.VideoFormat {
 	return format
 }
 
+// p3Color is what the SPS of the Mac's real HDR stream says: Display P3 primaries, the BT.709 matrix, full
+// range, PQ.
+func p3Color() media.Color {
+	return media.Color{BitDepth: 10, ChromaFormat: 3, Primaries: 12, Transfer: media.TransferPQ, Matrix: 1, FullRange: true}
+}
+
 // decodeHDR decodes n pictures of an HDR clip.
 func decodeHDR(t *testing.T, kind decoderKind, clip *mockmedia.Clip, transfer, n int) []*videoFrame {
 	t.Helper()
@@ -174,6 +180,66 @@ func TestHDRTextureColors(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The clip the Mac really sends: Display P3, matrix 1 (BT.709), full range, PQ. The right half of the
+// picture is luma 500 with Cb 300 and Cr 800, which the BT.709 matrix turns into about r 238 g 101 b 27
+// (BT.2020 would give 230 92 25), so the right matrix reaches the texture.
+func TestP3PQTextureColors(t *testing.T) {
+	requireDisplay(t)
+	for _, swscale := range []bool{false, true} {
+		name := map[bool]string{false: "planes", true: "swscale"}[swscale]
+		t.Run(name, func(t *testing.T) {
+			forceSwscaleForTest(swscale)
+			defer forceSwscaleForTest(false)
+			clip, err := mockmedia.BuiltinP3PQ()
+			if err != nil {
+				t.Fatal(err)
+			}
+			frames := decodeHDRColor(t, decoderSoftware, clip, p3Color(), 1)
+			defer frames[0].free()
+			gray, matches, ok := frames[0].textureForTest(0, 0, 40, 40, p3Color())
+			if !ok || !matches {
+				t.Fatalf("texture ok %v, in the color state of the stream %v", ok, matches)
+			}
+			for index, value := range gray[:3] {
+				if value < 123 || value > 127 {
+					t.Fatalf("gray channel %d is %d, want 125 (%v)", index, value, gray)
+				}
+			}
+			color, _, ok := frames[0].textureForTest(0, 0, 240, 40, p3Color())
+			if !ok {
+				t.Fatal("no texture")
+			}
+			b, g, r := int(color[0]), int(color[1]), int(color[2])
+			if r < 234 || r > 242 || g < 97 || g > 105 || b < 23 || b > 31 {
+				t.Fatalf("BT.709 chroma gives r %d g %d b %d, want about 238 101 27", r, g, b)
+			}
+		})
+	}
+}
+
+// The stream of the Mac, end to end over the mock: the stats card shows what its parameter sets say.
+func TestMockP3PQStreamEndToEnd(t *testing.T) {
+	clip, err := mockmedia.BuiltinP3PQ()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, _, closeAll := openMockMac(t, clip)
+	defer closeAll()
+	plan := softwareHDRPlan()
+	presenter := &countingPresenter{}
+	stream := newVideoStream(quiet, plan, "", 1, presenter, clientKeyframe(client))
+	if err := client.StartMediaStream(plan.Offer, stream); err != nil {
+		stream.close()
+		t.Fatal(err)
+	}
+	waitFor(t, "P3 pictures", 20*time.Second, func() bool { return presenter.count() >= 10 })
+	if got := stream.stats().Color; got != p3Color() {
+		t.Fatalf("stats color %+v, want %+v", got, p3Color())
+	}
+	stream.close()
+	_ = client.StopMediaStream()
 }
 
 // A GPU decoder that takes 4:4:4 10-bit gives the same picture, read back or imported.
