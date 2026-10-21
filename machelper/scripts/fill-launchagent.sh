@@ -1,6 +1,11 @@
 #!/bin/bash
 # Prints the LaunchAgent template with the app executable filled in.
-# usage: fill-launchagent.sh <template.plist> <absolute path of the executable>
+# usage: fill-launchagent.sh <template.plist> <absolute path of the executable> [output file]
+#
+# With an output file the result goes to a temporary file next to it and is
+# moved into place only when everything succeeded, so a failure never leaves a
+# half-written plist (or replaces a good one). Without it the result is
+# printed, and nothing is printed on failure.
 #
 # Only the <string> element of ProgramArguments is replaced, and the path is
 # XML-escaped first, so characters such as & | \ < > $ or quotes in a home
@@ -9,6 +14,7 @@ set -euo pipefail
 
 template="${1:?template path}"
 exe="${2:?executable path}"
+dest="${3:-}"
 
 case "$exe" in
 /*) ;;
@@ -29,6 +35,9 @@ if [ "$found" != "1" ]; then
 	exit 1
 fi
 
+tmp="$(mktemp "${dest:-${TMPDIR:-/tmp}/fill-launchagent}.XXXXXX")"
+trap 'rm -f "$tmp"' EXIT
+
 # index/substr instead of sub(): the replacement is data, so "&" and "\" in it mean nothing.
 EXE_ESCAPED="$esc" awk '
 	/^[ \t]*<string>__APP_EXECUTABLE__<\/string>[ \t]*$/ {
@@ -38,4 +47,11 @@ EXE_ESCAPED="$esc" awk '
 	}
 	{ print }
 	END { if (done != 1) { print "fill-launchagent: the placeholder is not a ProgramArguments string" > "/dev/stderr"; exit 1 } }
-' "$template"
+' "$template" >"$tmp"
+
+if [ -n "$dest" ]; then
+	chmod 644 "$tmp"
+	mv -f "$tmp" "$dest"
+else
+	cat "$tmp"
+fi

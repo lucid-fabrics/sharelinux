@@ -42,7 +42,7 @@ fi
 
 # The LaunchAgent plist, filled in for this build, NOT installed.
 "$here/scripts/fill-launchagent.sh" "$here/Resources/io.github.sharelinux.mousehelper.plist" \
-	"$HOME/Applications/OSS Mouse Helper.app/Contents/MacOS/MouseHelper" >"$out/io.github.sharelinux.mousehelper.plist"
+	"$HOME/Applications/OSS Mouse Helper.app/Contents/MacOS/MouseHelper" "$out/io.github.sharelinux.mousehelper.plist"
 plutil -lint "$out/io.github.sharelinux.mousehelper.plist" >/dev/null
 
 echo "built: $app"

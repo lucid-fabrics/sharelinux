@@ -93,4 +93,46 @@ final class ResourcesTests: XCTestCase {
         XCTAssertNotEqual(try fill("relative/path").status, 0)
         XCTAssertNotEqual(try fill("/Users/a\nb/x").status, 0)
     }
+
+    func runFill(template: URL, exe: String, output: URL?) throws -> (status: Int32, out: Data) {
+        let p = Process()
+        p.executableURL = root.appendingPathComponent("scripts/fill-launchagent.sh")
+        p.arguments = [template.path, exe] + (output.map { [$0.path] } ?? [])
+        let out = Pipe(), err = Pipe()
+        p.standardOutput = out; p.standardError = err
+        try p.run()
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        _ = err.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        return (p.terminationStatus, data)
+    }
+
+    /// With an output file the plist is built beside it and moved into place
+    /// only on success: a failure leaves the old file as it was and no stray
+    /// temporary file; a success leaves just the file.
+    func testTheOutputFileIsReplacedOnlyWhenTheFillSucceeded() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("fill-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let good = root.appendingPathComponent("Resources/io.github.sharelinux.mousehelper.plist")
+        // The placeholder exists once but not as a ProgramArguments string: awk fails after reading it.
+        let bad = dir.appendingPathComponent("bad.plist")
+        try "<plist><!-- __APP_EXECUTABLE__ --></plist>\n".write(to: bad, atomically: true, encoding: .utf8)
+        let out = dir.appendingPathComponent("out.plist")
+        try "OLD".write(to: out, atomically: true, encoding: .utf8)
+
+        let failed = try runFill(template: bad, exe: "/x/y", output: out)
+        XCTAssertNotEqual(failed.status, 0)
+        XCTAssertEqual(try String(contentsOf: out, encoding: .utf8), "OLD", "a failed fill leaves the old file alone")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: dir.path).sorted(), ["bad.plist", "out.plist"], "no temporary file left")
+        let failedPrint = try runFill(template: bad, exe: "/x/y", output: nil)
+        XCTAssertNotEqual(failedPrint.status, 0)
+        XCTAssertEqual(failedPrint.out.count, 0, "nothing is printed on failure")
+
+        let ok = try runFill(template: good, exe: "/x/y", output: out)
+        XCTAssertEqual(ok.status, 0)
+        let obj = try PropertyListSerialization.propertyList(from: Data(contentsOf: out), format: nil) as? [String: Any]
+        XCTAssertEqual(obj?["ProgramArguments"] as? [String], ["/x/y"])
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: dir.path).sorted(), ["bad.plist", "out.plist"])
+    }
 }
