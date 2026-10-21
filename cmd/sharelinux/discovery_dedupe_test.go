@@ -9,9 +9,9 @@ func TestHostKey(t *testing.T) {
 		other string
 	}{
 		{
-			name:  "case and local suffix",
+			name:  "case and trailing dot",
 			first: "Mac.LOCAL.",
-			other: "mac",
+			other: "mac.local",
 		},
 		{
 			name:  "bracketed IPv6",
@@ -75,9 +75,19 @@ func TestMatchesSavedMac(t *testing.T) {
 			want:  true,
 		},
 		{
-			name:  "by name",
+			name:  "name alone never matches",
 			saved: savedConnection{Name: "studio", Port: 5900},
-			want:  true,
+			want:  false,
+		},
+		{
+			name:  "same name, other host",
+			saved: savedConnection{Name: "Studio", Host: "192.168.1.9", Port: 5900},
+			want:  false,
+		},
+		{
+			name:  "DNS name is not the mDNS name",
+			saved: savedConnection{Host: "studio", Port: 5900},
+			want:  false,
 		},
 		{
 			name:  "different port",
@@ -110,14 +120,27 @@ func TestIPv6OnlyAnswerStillHiddenWhenSavedByIPv4(t *testing.T) {
 		},
 	}
 
-	t.Run("matching name hides Mac", func(t *testing.T) {
+	t.Run("matching name alone does not hide Mac", func(t *testing.T) {
 		saved := []savedConnection{
 			{Name: "Studio", Host: "192.168.1.5", Port: 5900},
 		}
 
 		got := unsaved(found, saved)
-		if len(got) != 0 {
-			t.Fatalf("unsaved returned %d Macs, want none: %+v", len(got), got)
+		if len(got) != 1 {
+			t.Fatalf("unsaved returned %d Macs, want one: %+v", len(got), got)
+		}
+	})
+
+	t.Run("second Mac with the same name stays listed", func(t *testing.T) {
+		two := []discoveredMac{
+			{Name: "Studio", Host: "studio.local", Addresses: []string{"192.168.1.5"}, Port: 5900},
+			{Name: "Studio", Host: "studio-2.local", Addresses: []string{"192.168.1.6"}, Port: 5900},
+		}
+		saved := []savedConnection{{Name: "Studio", Host: "192.168.1.5", Port: 5900}}
+
+		got := unsaved(two, saved)
+		if len(got) != 1 || got[0].Host != "studio-2.local" {
+			t.Fatalf("unsaved returned %+v, want only studio-2.local", got)
 		}
 	})
 

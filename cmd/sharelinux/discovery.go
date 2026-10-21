@@ -138,18 +138,21 @@ func hostKey(host string) string {
 	if err == nil {
 		return address.Unmap().String()
 	}
-	return strings.TrimSuffix(host, ".local")
+	return host
 }
 
-// matches reports whether a saved connection is this Mac: the same port and the
-// same mDNS host name, any address the Mac announced (IPv4 or IPv6, however it
-// is written), or the same name. A Mac saved by its IPv4 address still matches
-// when mDNS only gave its IPv6 address, through the name.
+// matches reports whether a saved connection is this Mac: the same port and
+// either the full mDNS host name or any address the Mac announced (IPv4 or
+// IPv6, however it is written). The desktop name never decides, two Macs can
+// share one, and a plain DNS name only matches the identical name.
 func (m discoveredMac) matches(saved savedConnection) bool {
 	if saved.Port != m.Port {
 		return false
 	}
 	host := hostKey(saved.Host)
+	if host == "" {
+		return false
+	}
 	if m.Host != "" && host == hostKey(m.Host) {
 		return true
 	}
@@ -158,8 +161,7 @@ func (m discoveredMac) matches(saved savedConnection) bool {
 			return true
 		}
 	}
-	name := strings.TrimSpace(saved.Name)
-	return name != "" && strings.EqualFold(name, m.Name)
+	return false
 }
 
 // unsaved drops the Macs that are already in the saved list and sorts by name.
