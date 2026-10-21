@@ -269,3 +269,59 @@ func TestSDRPlanRefusesHDRStream(t *testing.T) {
 		t.Fatal("a stream the plan did not ask for was taken")
 	}
 }
+
+// Where GDK takes no 4:4:4 surface, the GPU's video processor makes a P010 one that it does take, with
+// the same colors: the left half of the clip is gray at luma 500, the right half the BT.2020 chroma.
+func TestVAAPIHDRThroughTheVideoProcessor(t *testing.T) {
+	caps := probeVideo("")
+	if !caps.HEVC444x10VAAPI {
+		t.Skipf("no VA-API HEVC 4:4:4 10-bit decoder (%q %s)", caps.Driver, caps.Error)
+	}
+	requireDisplay(t)
+	defer hdrGPUForTest(-1)
+	clip := hdrClip(t, media.TransferPQ)
+	// A DMA-BUF of the GPU can be drawn only by a renderer on the GPU.
+	view := shownScreen(t, clip)
+	if renderer := view.chooseDMABuf(); !renderer.Accelerated {
+		t.Skipf("the renderer %s does not draw on the GPU", renderer.Name)
+	}
+	frames := decodeHDR(t, decoderVAAPI, clip, media.TransferPQ, 3)
+	frame := frames[len(frames)-1]
+	expect := hdrColor(media.TransferPQ)
+
+	// A small picture is not worth the chroma: it is read back at full resolution.
+	hdrGPUForTest(-1)
+	_, output, _, ok := frame.gpuTextureForTest(40, 40, expect)
+	if !ok || output != outputCopy {
+		t.Fatalf("a small picture goes through memory, not %v (ok %v)", output, ok)
+	}
+	hdrGPUForTest(0)
+	if _, output, _, _ = frame.gpuTextureForTest(40, 40, expect); output != outputCopy {
+		t.Fatalf("with the processor off the picture went as %v", output)
+	}
+
+	hdrGPUForTest(1)
+	gray, output, matches, ok := frame.gpuTextureForTest(40, 40, expect)
+	if !ok {
+		t.Fatal("no texture")
+	}
+	if output != outputDMABuf {
+		t.Skipf("this display takes no P010 DMA-BUF of the GPU (went as %v)", output)
+	}
+	if !matches {
+		t.Fatal("the texture is not in the color state of the stream")
+	}
+	for index, value := range gray[:3] {
+		if value < 122 || value > 128 {
+			t.Fatalf("gray channel %d is %d, want 125 (%v)", index, value, gray)
+		}
+	}
+	color, _, _, _ := frame.gpuTextureForTest(240, 40, expect)
+	b, g, r := int(color[0]), int(color[1]), int(color[2])
+	if r < 227 || r > 234 || g < 88 || g > 96 || b < 21 || b > 29 {
+		t.Fatalf("chroma through the processor gives r %d g %d b %d, want about 230 92 25", r, g, b)
+	}
+	for _, frame := range frames {
+		frame.free()
+	}
+}

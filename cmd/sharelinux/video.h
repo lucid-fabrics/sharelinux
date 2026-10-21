@@ -159,9 +159,16 @@ void oss_video_test_eagain(int sends);
 // oss_video_test_force_swscale makes software pictures go through swscale even where GTK takes planar YUV.
 void oss_video_test_force_swscale(gboolean forced);
 
+// oss_video_test_hdr_gpu chooses whether HDR pictures go through the GPU's video processor to P010
+// DMA-BUFs: -1 by picture size, 0 never, 1 always.
+void oss_video_test_hdr_gpu(int mode);
+
 // oss_frame_test_texture: see video.c.
 gboolean oss_frame_test_texture(OssFrame *frame, int crop_left, int crop_top, int x, int y, OssColor expect, guint8 pixel[4],
                                 gboolean *matches);
+
+gboolean oss_frame_test_texture_on(OssFrame *frame, int crop_left, int crop_top, int x, int y, OssColor expect, guint8 pixel[4],
+                                   gboolean *matches, gboolean gpu, OssOutput *output);
 
 // oss_rgb_color_state is the state of the RGB converted from a stream's YUV.
 GdkColorState *oss_rgb_color_state(OssColor color);

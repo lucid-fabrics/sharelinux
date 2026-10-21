@@ -104,6 +104,11 @@ func failDecodersForTest(kinds ...decoderKind) {
 	C.oss_video_test_fail_decoders(C.int(mask))
 }
 
+// hdrGPUForTest chooses whether HDR pictures of the GPU go through its video processor to P010 DMA-BUFs.
+func hdrGPUForTest(mode int) {
+	C.oss_video_test_hdr_gpu(C.int(mode))
+}
+
 // fullAnswersForTest makes the next sends of a packet to libavcodec answer "full" without taking it.
 func fullAnswersForTest(sends int) {
 	C.oss_video_test_eagain(C.int(sends))
@@ -170,6 +175,24 @@ func colorStateForTest(color media.Color, space colorSpace) (cicp [4]int, pq, ok
 		cicp[index] = int(values[index])
 	}
 	return cicp, C.oss_color_state_is_rec2100_pq(state) != 0, true
+}
+
+// gpuTextureForTest makes the picture's texture as the screen does for a GPU frame, as a DMA-BUF where the display
+// takes one, and returns its pixel (b, g, r, a) at x, y, the way it went, and whether its color state is the one for
+// RGB made from expect.
+func (f *videoFrame) gpuTextureForTest(x, y int, expect media.Color) (pixel [4]byte, output outputKind, matches, ok bool) {
+	var match C.gboolean
+	var out C.OssOutput
+	ok = C.oss_frame_test_texture_on(f.c, 0, 0, C.int(x), C.int(y), cColor(expect), (*C.guint8)(unsafe.Pointer(&pixel[0])), &match, 1, &out) != 0
+	switch out {
+	case C.OSS_OUTPUT_DMABUF:
+		output = outputDMABuf
+	case C.OSS_OUTPUT_COPY:
+		output = outputCopy
+	case C.OSS_OUTPUT_MEMORY:
+		output = outputMemory
+	}
+	return pixel, output, match != 0, ok
 }
 
 // decodeResult is what feeding a unit to the decoder came to.
@@ -670,5 +693,8 @@ func prepareHDR(a *app) {
 	value := gdkDebugWithColorManagement(os.Getenv("GDK_DEBUG"), int(C.gtk_get_major_version()), int(C.gtk_get_minor_version()))
 	if value != os.Getenv("GDK_DEBUG") {
 		_ = os.Setenv("GDK_DEBUG", value)
+	}
+	if renderer := os.Getenv("GSK_RENDERER"); renderer == "" {
+		_ = os.Setenv("GSK_RENDERER", rendererForHDR(renderer))
 	}
 }

@@ -158,3 +158,14 @@ func streamLabel(codec media.Codec, color media.Color, kind decoderKind) string 
 	}
 	return fmt.Sprintf("%s (%s)", name, kind)
 }
+
+// rendererForHDR is the GSK_RENDERER to start GTK with when HDR is wanted. The GPU makes a P010 picture
+// of HDR video for GTK, and only the GL renderer draws that straight from the DMA-BUF: the Vulkan one
+// downloads it and converts it on the CPU, about a quarter of the speed at 4K. A renderer the person
+// chose stays.
+func rendererForHDR(current string) string {
+	if current != "" {
+		return current
+	}
+	return "ngl"
+}

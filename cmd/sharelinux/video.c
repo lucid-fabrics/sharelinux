@@ -289,9 +289,15 @@ void oss_frame_free(OssFrame *frame) {
 	}
 }
 
+static void vpp_release(void);
+
 void oss_video_close(OssVideoDecoder *decoder) {
 	if (decoder == NULL) {
 		return;
+	}
+	if (g_atomic_int_get(&live_decoders) == 1) {
+		// The video processor belongs to the display this decoder opened: let it go while it exists.
+		vpp_release();
 	}
 	OssFrame *frame;
 	while ((frame = g_queue_pop_head(&decoder->frames)) != NULL) {
@@ -682,49 +688,188 @@ void oss_video_test_break_dmabuf(gboolean broken) {
 	test_break_dmabuf = broken;
 }
 
-static DmabufResult texture_from_surface(const OssFrame *frame, GdkDisplay *display, GdkTexture **texture) {
-	const AVFrame *av = frame->av;
-	VADisplay va = hardware_display(av);
-	VADRMPRIMESurfaceDescriptor descriptor;
-	memset(&descriptor, 0, sizeof descriptor);
-	if (vaExportSurfaceHandle(va, hardware_surface(av), VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2,
-	                          VA_EXPORT_SURFACE_READ_ONLY | VA_EXPORT_SURFACE_COMPOSED_LAYERS, &descriptor) != VA_STATUS_SUCCESS) {
-		return DMABUF_FAILED;
+// ---- HDR video on the GPU -------------------------------------------------
+//
+// GDK imports no 4:4:4 10-bit picture from an Intel GPU (Y410 only with a modifier the surface does
+// not have, and no 10-bit RGB with one either), and reading a 4K surface back to memory takes about
+// 50 ms. The video processor of the GPU can still turn the surface into P010 (10-bit 4:2:0), which GDK
+// does import, with no change of colors: the same matrix, range and transfer function in and out. It
+// costs the chroma resolution, so it is used only where the picture is big (or when asked for:
+// SHARELINUX_HDR_GPU=on or off). GTK's Vulkan renderer cannot sample a P010 DMA-BUF and downloads it, so
+// the GL renderer is what draws it fast (see rendererForHDR).
+
+#define HDR_GPU_PIXELS 2200000
+
+static GMutex vpp_lock;
+static struct {
+	VADisplay display;
+	VAConfigID config;
+	VAContextID context;
+	int width, height;
+	gboolean ready;
+} vpp;
+
+static gint test_hdr_gpu = -1; // -1: by size, 0: never, 1: always
+
+void oss_video_test_hdr_gpu(int mode) {
+	g_atomic_int_set(&test_hdr_gpu, mode);
+}
+
+static void vpp_destroy_locked(void) {
+	if (vpp.ready) {
+		vaDestroyContext(vpp.display, vpp.context);
+		vaDestroyConfig(vpp.display, vpp.config);
 	}
+	memset(&vpp, 0, sizeof vpp);
+}
+
+// vpp_prepare_locked makes the video processing context for surfaces of this size on this display.
+static gboolean vpp_prepare_locked(VADisplay display, int width, int height) {
+	if (vpp.ready && vpp.display == display && vpp.width == width && vpp.height == height) {
+		return TRUE;
+	}
+	vpp_destroy_locked();
+	if (vaCreateConfig(display, VAProfileNone, VAEntrypointVideoProc, NULL, 0, &vpp.config) != VA_STATUS_SUCCESS) {
+		return FALSE;
+	}
+	if (vaCreateContext(display, vpp.config, width, height, 0, NULL, 0, &vpp.context) != VA_STATUS_SUCCESS) {
+		vaDestroyConfig(display, vpp.config);
+		return FALSE;
+	}
+	vpp.display = display;
+	vpp.width = width;
+	vpp.height = height;
+	vpp.ready = TRUE;
+	return TRUE;
+}
+
+static void vpp_release(void) {
+	g_mutex_lock(&vpp_lock);
+	vpp_destroy_locked();
+	g_mutex_unlock(&vpp_lock);
+}
+
+static gboolean hdr_gpu_wanted(int width, int height) {
+	int mode = g_atomic_int_get(&test_hdr_gpu);
+	if (mode < 0) {
+		// SHARELINUX_HDR_GPU=on or off overrides the size rule.
+		const char *choice = g_getenv("SHARELINUX_HDR_GPU");
+		if (choice != NULL && (g_ascii_strcasecmp(choice, "on") == 0 || strcmp(choice, "1") == 0)) {
+			mode = 1;
+		} else if (choice != NULL && (g_ascii_strcasecmp(choice, "off") == 0 || strcmp(choice, "0") == 0)) {
+			mode = 0;
+		}
+	}
+	if (mode >= 0) {
+		return mode == 1;
+	}
+	return (gsize)width * height > HDR_GPU_PIXELS;
+}
+
+// vpp_to_p010 converts a 4:4:4 10-bit surface into a new P010 surface of the same size; it returns
+// VA_INVALID_ID when the GPU cannot.
+static VASurfaceID vpp_to_p010(VADisplay display, VASurfaceID input, int width, int height, OssColor color) {
+	VASurfaceID output = VA_INVALID_ID;
+	g_mutex_lock(&vpp_lock);
+	if (vpp_prepare_locked(display, width, height)) {
+		VASurfaceAttrib attrib;
+		memset(&attrib, 0, sizeof attrib);
+		attrib.type = VASurfaceAttribPixelFormat;
+		attrib.flags = VA_SURFACE_ATTRIB_SETTABLE;
+		attrib.value.type = VAGenericValueTypeInteger;
+		attrib.value.value.i = VA_FOURCC_P010;
+		VAProcPipelineParameterBuffer params;
+		memset(&params, 0, sizeof params);
+		params.surface = input;
+		int standard = color.matrix == 9 || color.matrix == 10 ? VAProcColorStandardBT2020
+		               : color.matrix == 5 || color.matrix == 6 ? VAProcColorStandardBT601
+		                                                        : VAProcColorStandardBT709;
+		params.surface_color_standard = standard;
+		params.output_color_standard = standard;
+		params.input_color_properties.color_range = color.full_range ? VA_SOURCE_RANGE_FULL : VA_SOURCE_RANGE_REDUCED;
+		params.output_color_properties.color_range = params.input_color_properties.color_range;
+		VABufferID buffer = VA_INVALID_ID;
+		gboolean done = FALSE;
+		if (vaCreateSurfaces(display, VA_RT_FORMAT_YUV420_10, width, height, &output, 1, &attrib, 1) == VA_STATUS_SUCCESS) {
+			if (vaCreateBuffer(display, vpp.context, VAProcPipelineParameterBufferType, sizeof params, 1, &params, &buffer) ==
+			    VA_STATUS_SUCCESS) {
+				done = vaBeginPicture(display, vpp.context, output) == VA_STATUS_SUCCESS;
+				if (done) {
+					done = vaRenderPicture(display, vpp.context, &buffer, 1) == VA_STATUS_SUCCESS;
+					done = vaEndPicture(display, vpp.context) == VA_STATUS_SUCCESS && done;
+				}
+				vaDestroyBuffer(display, buffer);
+			}
+			if (done) {
+				done = vaSyncSurface(display, output) == VA_STATUS_SUCCESS;
+			}
+			if (!done) {
+				vaDestroySurfaces(display, &output, 1);
+				output = VA_INVALID_ID;
+			}
+		}
+	}
+	g_mutex_unlock(&vpp_lock);
+	return output;
+}
+
+#define DRM_FORMAT_P010 FOURCC('P', '0', '1', '0')
+
+// dmabuf_color_state is the state for the planes of a format GDK is given: NULL for one it is not.
+static GdkColorState *dmabuf_color_state(guint32 fourcc, OssColor color) {
+	switch (fourcc) {
+	case DRM_FORMAT_NV12:
+		return oss_color_state(color);
+	case DRM_FORMAT_Y410:
+	case DRM_FORMAT_P010:
+		return oss_yuv_color_state(color);
+	}
+	return NULL;
+}
+
+static int dmabuf_planes(guint32 fourcc) {
+	return fourcc == DRM_FORMAT_NV12 || fourcc == DRM_FORMAT_P010 ? 2 : fourcc == DRM_FORMAT_Y410 ? 1 : 0;
+}
+
+// dmabuf_import hands an exported surface to GDK. It takes the descriptor's file descriptors whatever
+// happens. keep, if given, is the decoded frame the texture must keep alive.
+static DmabufResult dmabuf_import(GdkDisplay *display, VADRMPRIMESurfaceDescriptor *descriptor, const AVFrame *keep, OssColor color,
+                                  GdkTexture **texture) {
 	DmabufHold *hold = g_new0(DmabufHold, 1);
-	hold->fd_count = (int)MIN(descriptor.num_objects, 4u);
+	hold->fd_count = (int)MIN(descriptor->num_objects, 4u);
 	for (int i = 0; i < hold->fd_count; i++) {
-		hold->fds[i] = descriptor.objects[i].fd;
+		hold->fds[i] = descriptor->objects[i].fd;
 		g_atomic_int_inc(&live_fds);
 	}
-	for (guint i = hold->fd_count; i < descriptor.num_objects; i++) {
-		close(descriptor.objects[i].fd);
+	for (guint i = hold->fd_count; i < descriptor->num_objects; i++) {
+		close(descriptor->objects[i].fd);
 	}
-	hold->frame = frame_ref(av);
+	if (keep != NULL) {
+		hold->frame = frame_ref(keep);
+	}
 	g_atomic_int_inc(&live_textures);
 	DmabufResult result = DMABUF_UNSUPPORTED;
-	// NV12 is the 8-bit 4:2:0 picture, Y410 the packed 4:4:4 10-bit one of HDR video.
-	guint32 fourcc = descriptor.num_layers == 1 ? descriptor.layers[0].drm_format : 0;
-	int planes = fourcc == DRM_FORMAT_NV12 ? 2 : fourcc == DRM_FORMAT_Y410 ? 1 : 0;
+	guint32 fourcc = descriptor->num_layers == 1 ? descriptor->layers[0].drm_format : 0;
+	int planes = dmabuf_planes(fourcc);
 	GdkColorState *state = NULL;
-	if (planes != 0 && (guint)planes == descriptor.layers[0].num_planes) {
-		state = fourcc == DRM_FORMAT_Y410 ? oss_yuv_color_state(frame->info.color) : oss_color_state(frame->info.color);
-	} else if (descriptor.num_layers == 1) {
-		g_debug("dmabuf surface: no import for format %.4s with %u planes", (const char *)&fourcc, descriptor.layers[0].num_planes);
+	if (planes != 0 && (guint)planes == descriptor->layers[0].num_planes) {
+		state = dmabuf_color_state(fourcc, color);
+	} else if (descriptor->num_layers == 1) {
+		g_debug("dmabuf surface: no import for format %.4s with %u planes", (const char *)&fourcc, descriptor->layers[0].num_planes);
 	}
-	if (hold->frame != NULL && state != NULL) {
-		const typeof(descriptor.layers[0]) *layer = &descriptor.layers[0];
-		guint64 modifier = descriptor.objects[layer->object_index[0]].drm_format_modifier;
+	if ((keep == NULL || hold->frame != NULL) && state != NULL) {
+		const typeof(descriptor->layers[0]) *layer = &descriptor->layers[0];
+		guint64 modifier = descriptor->objects[layer->object_index[0]].drm_format_modifier;
 		if (dmabuf_formats_have(display, fourcc, modifier)) {
 			GdkDmabufTextureBuilder *builder = gdk_dmabuf_texture_builder_new();
 			gdk_dmabuf_texture_builder_set_display(builder, display);
 			gdk_dmabuf_texture_builder_set_fourcc(builder, test_break_dmabuf ? FOURCC('X', 'X', 'X', 'X') : fourcc);
 			gdk_dmabuf_texture_builder_set_modifier(builder, modifier);
-			gdk_dmabuf_texture_builder_set_width(builder, descriptor.width);
-			gdk_dmabuf_texture_builder_set_height(builder, descriptor.height);
+			gdk_dmabuf_texture_builder_set_width(builder, descriptor->width);
+			gdk_dmabuf_texture_builder_set_height(builder, descriptor->height);
 			gdk_dmabuf_texture_builder_set_n_planes(builder, planes);
 			for (int plane = 0; plane < planes; plane++) {
-				gdk_dmabuf_texture_builder_set_fd(builder, plane, descriptor.objects[layer->object_index[plane]].fd);
+				gdk_dmabuf_texture_builder_set_fd(builder, plane, descriptor->objects[layer->object_index[plane]].fd);
 				gdk_dmabuf_texture_builder_set_offset(builder, plane, layer->offset[plane]);
 				gdk_dmabuf_texture_builder_set_stride(builder, plane, layer->pitch[plane]);
 			}
@@ -749,6 +894,37 @@ static DmabufResult texture_from_surface(const OssFrame *frame, GdkDisplay *disp
 		dmabuf_release(hold);
 	}
 	return result;
+}
+
+static DmabufResult texture_from_surface(const OssFrame *frame, GdkDisplay *display, GdkTexture **texture) {
+	const AVFrame *av = frame->av;
+	VADisplay va = hardware_display(av);
+	VADRMPRIMESurfaceDescriptor descriptor;
+	memset(&descriptor, 0, sizeof descriptor);
+	if (vaExportSurfaceHandle(va, hardware_surface(av), VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2,
+	                          VA_EXPORT_SURFACE_READ_ONLY | VA_EXPORT_SURFACE_COMPOSED_LAYERS, &descriptor) != VA_STATUS_SUCCESS) {
+		return DMABUF_FAILED;
+	}
+	guint32 fourcc = descriptor.num_layers == 1 ? descriptor.layers[0].drm_format : 0;
+	int width = descriptor.width, height = descriptor.height;
+	DmabufResult result = dmabuf_import(display, &descriptor, av, frame->info.color, texture);
+	if (result != DMABUF_UNSUPPORTED || fourcc != DRM_FORMAT_Y410 || !hdr_gpu_wanted(width, height)) {
+		return result;
+	}
+	// GDK has no import for the 4:4:4 surface itself: the GPU makes a P010 one of it.
+	VASurfaceID converted = vpp_to_p010(va, hardware_surface(av), width, height, frame->info.color);
+	if (converted == VA_INVALID_ID) {
+		return DMABUF_UNSUPPORTED;
+	}
+	memset(&descriptor, 0, sizeof descriptor);
+	VAStatus exported = vaExportSurfaceHandle(va, converted, VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2,
+	                                          VA_EXPORT_SURFACE_READ_ONLY | VA_EXPORT_SURFACE_COMPOSED_LAYERS, &descriptor);
+	// The buffer lives on in the descriptors the export gave; the surface object is no longer needed.
+	vaDestroySurfaces(va, &converted, 1);
+	if (exported != VA_STATUS_SUCCESS) {
+		return DMABUF_FAILED;
+	}
+	return dmabuf_import(display, &descriptor, NULL, frame->info.color, texture);
 }
 
 typedef struct {
@@ -1006,6 +1182,14 @@ void oss_dmabuf_failures_reset(gint *dmabuf_failures) {
 // one pixel (B, G, R, A) of it. matches says whether its color state is the one for expect.
 gboolean oss_frame_test_texture(OssFrame *frame, int crop_left, int crop_top, int x, int y, OssColor expect, guint8 pixel[4],
                                 gboolean *matches) {
+	OssOutput output;
+	return oss_frame_test_texture_on(frame, crop_left, crop_top, x, y, expect, pixel, matches, FALSE, &output);
+}
+
+// oss_frame_test_texture_on is that, and with gpu set the texture is made as the screen makes it for a GPU
+// frame, as a DMA-BUF when the display takes one; output says which way it went.
+gboolean oss_frame_test_texture_on(OssFrame *frame, int crop_left, int crop_top, int x, int y, OssColor expect, guint8 pixel[4],
+                                   gboolean *matches, gboolean gpu, OssOutput *output) {
 	AVFrame *av = frame->av;
 	int old_left = av->crop_left, old_top = av->crop_top;
 	OssFrameInfo old = frame->info;
@@ -1014,8 +1198,7 @@ gboolean oss_frame_test_texture(OssFrame *frame, int crop_left, int crop_top, in
 	frame->info.width -= crop_left;
 	frame->info.height -= crop_top;
 	gint failures = 0;
-	OssOutput output;
-	GdkTexture *texture = oss_frame_texture(frame, NULL, FALSE, &failures, &output);
+	GdkTexture *texture = oss_frame_texture(frame, gpu ? gdk_display_get_default() : NULL, gpu, &failures, output);
 	av->crop_left = old_left;
 	av->crop_top = old_top;
 	gboolean ok = FALSE;

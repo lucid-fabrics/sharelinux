@@ -654,3 +654,12 @@ func TestStreamLabel(t *testing.T) {
 		})
 	}
 }
+
+func TestRendererForHDR(t *testing.T) {
+	if got := rendererForHDR(""); got != "ngl" {
+		t.Fatalf("HDR video draws best with the GL renderer, got %q", got)
+	}
+	if got := rendererForHDR("vulkan"); got != "vulkan" {
+		t.Fatalf("a renderer the person chose stays, got %q", got)
+	}
+}
