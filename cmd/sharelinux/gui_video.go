@@ -3,6 +3,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -155,7 +156,7 @@ func (v *sessionView) pollVideo() {
 		v.g.app.logger.Info("video stats", "decoder", videoLabel(stats.Codec, stats.Kind), "output", stats.Output.String(),
 			"units", stats.Units, "frames", stats.Frames, "presented", stats.Presented, "dropped", stats.Dropped,
 			"decode_ms", float64(stats.DecodeAvg.Microseconds())/1000, "decode_max_ms", float64(stats.DecodeMax.Microseconds())/1000,
-			"age_ms", float64(stats.AgeAvg.Microseconds())/1000, "size", stats.Width, "x", stats.Height)
+			"age_ms", float64(stats.AgeAvg.Microseconds())/1000, "size", fmt.Sprintf("%dx%d", stats.Width, stats.Height))
 	}
 }
 
