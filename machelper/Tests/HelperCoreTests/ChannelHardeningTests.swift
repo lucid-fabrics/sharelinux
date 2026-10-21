@@ -147,7 +147,9 @@ extension ChannelTests {
         // spoofed one) is answered but must not change where the live session is.
         let c2 = try initiate(at: env.wall.addingTimeInterval(1))
         XCTAssertNotNil(channel.receive(c2.datagram, from: Self.source(66)).reply)
-        let r = try send(s1, InputPacket(type: .input, dx: 1))
+        // The next authenticated packet arrives without a known source address:
+        // the session keeps the address of its own earlier packets, not the handshake's.
+        let r = channel.receive(try s1.seal(InputPacket(type: .input, dx: 1).encode(), now: env.mono), from: nil)
         XCTAssertEqual(seen.last, Self.addr)
         XCTAssertEqual(r.events.last, .input(InputPacket(type: .input, dx: 1)))
     }
@@ -172,6 +174,28 @@ extension ChannelTests {
         let r = channel.receive(try s.seal(InputPacket(type: .input, dx: 2).encode(), now: env.mono), from: Self.source(7))
         XCTAssertEqual(seen, [Self.source(7)])
         XCTAssertEqual(r.events.last, .input(InputPacket(type: .input, dx: 2)))
+    }
+
+    func testPendingSessionHasNoAddressUntilItAuthenticatesAPacket() throws {
+        var seen: [PeerAddress?] = []
+        let e = env
+        channel = HelperChannel(
+            staticKey: macKey, pairedKeys: { e.paired },
+            environment: { peer, _ in
+                seen.append(peer)
+                return GateInputs(
+                    toggleOn: true, peerPaired: false, udpPeer: peer, screenSharingPeers: [Self.source(66)],
+                    consoleUID: 501, ownUID: 501, screenLocked: false, accessibilityGranted: true,
+                    rateLimited: false, snapshotAt: e.mono)
+            },
+            clock: ChannelClock(monotonic: { e.mono }, wall: { e.wall }))
+        let c = try initiate()
+        let s = try finish(c, reply: try XCTUnwrap(channel.receive(c.datagram, from: Self.source(66)).reply))
+        // Its first authenticated packet carries no address: the handshake's address is not inherited.
+        let r = channel.receive(try s.seal(InputPacket(type: .input, dx: 2).encode(), now: env.mono), from: nil)
+        XCTAssertEqual(seen.count, 1)
+        XCTAssertNil(seen[0] ?? nil)
+        XCTAssertEqual(r.events.last, .denied(.noSession))
     }
 
     // MARK: environment freshness
