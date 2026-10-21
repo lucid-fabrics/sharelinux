@@ -351,6 +351,7 @@ final class PairingWindowTests: XCTestCase {
 
     /// An attempt that finishes XX (so it counts) and then breaks the protocol.
     func failingAttempt() throws {
+        now += ChannelLimits.pairingMinStartSpacing
         let l = try LinuxPairer(key: PrivKey())
         let m2 = try XCTUnwrap(try window.receive(try l.message1()))
         let (m3, _) = try l.afterMessage2(m2)
@@ -372,6 +373,7 @@ final class PairingWindowTests: XCTestCase {
 
     func testAnswerThatTheCodesDifferCountsAsAFailure() throws {
         for _ in 0..<3 {
+            now += ChannelLimits.pairingMinStartSpacing
             let l = try LinuxPairer(key: PrivKey())
             let m2 = try XCTUnwrap(try window.receive(try l.message1()))
             let (m3, commit) = try l.afterMessage2(m2)
@@ -384,17 +386,196 @@ final class PairingWindowTests: XCTestCase {
         XCTAssertFalse(window.isOpen)
     }
 
-    func testStrayDatagramsAndAbandonedAttemptsAreFree() throws {
+    static let hostA = PeerAddress(bytes: [10, 0, 0, 1])!
+    static let hostB = PeerAddress(bytes: [10, 0, 0, 2])!
+
+    /// Runs an attempt up to the point where the Mac has sent r_M. Returns the
+    /// pairer and the r_M datagram; the pairer has not revealed anything.
+    func toNonce(_ l: LinuxPairer, from src: PeerAddress? = nil) throws -> Data {
+        let m2 = try XCTUnwrap(try window.receive(try l.message1(), from: src))
+        let (m3, commit) = try l.afterMessage2(m2)
+        _ = try window.receive(m3, from: src)
+        return try XCTUnwrap(try window.receive(commit, from: src))
+    }
+
+    func testStrayDatagramsAndAttemptsAbandonedBeforeTheNonceAreFree() throws {
         for i in 0..<20 {
+            now += ChannelLimits.pairingMinStartSpacing
             XCTAssertThrowsError(try window.receive(Data([DatagramKind.xxMessage3.rawValue]) + Data(count: 64 + i)))
             // Message 1 starts an attempt; starting another one abandons it before any code existed.
             let l = try LinuxPairer(key: PrivKey())
             _ = try window.receive(try l.message1())
             // Garbage that fails inside XX never showed a code either.
             XCTAssertThrowsError(try window.receive(Data([DatagramKind.xxMessage3.rawValue]) + Data(count: 80)))
+            // An attempt that finished XX and committed, but was left before r_M, is free too.
+            now += ChannelLimits.pairingMinStartSpacing
+            let l2 = try LinuxPairer(key: PrivKey())
+            let m2 = try XCTUnwrap(try window.receive(try l2.message1()))
+            let (m3, _) = try l2.afterMessage2(m2)
+            _ = try window.receive(m3)
         }
         XCTAssertEqual(window.failures, 0)
         XCTAssertTrue(window.isOpen)
+    }
+
+    /// Finding 1: once the Mac sent r_M the other side can compute the code, so
+    /// walking away (a new message 1) must cost a failure.
+    func testAbandoningAnAttemptAfterTheNonceIsCharged() throws {
+        _ = try toNonce(try LinuxPairer(key: PrivKey()))
+        XCTAssertEqual(window.failures, 0, "charged when the attempt ends, not before")
+        now += ChannelLimits.pairingMinStartSpacing
+        _ = try window.receive(try LinuxPairer(key: PrivKey()).message1())
+        XCTAssertEqual(window.failures, 1)
+    }
+
+    func testAbandonedAttemptTimingOutAfterTheNonceIsCharged() throws {
+        _ = try toNonce(try LinuxPairer(key: PrivKey()), from: Self.hostA)
+        now += ChannelLimits.pairingAttemptTimeout
+        // Another host may take over once the stale attempt is gone.
+        _ = try window.receive(try LinuxPairer(key: PrivKey()).message1(), from: Self.hostB)
+        XCTAssertEqual(window.failures, 1)
+    }
+
+    func testAnAttemptStalledBeforeTheNonceTimesOutForFree() throws {
+        let l = try LinuxPairer(key: PrivKey())
+        _ = try window.receive(try l.message1(), from: Self.hostA)
+        now += ChannelLimits.pairingAttemptTimeout
+        _ = try window.receive(try LinuxPairer(key: PrivKey()).message1(), from: Self.hostB)
+        XCTAssertEqual(window.failures, 0)
+    }
+
+    /// Two failed attempts, then an honest third one: waiting for the person
+    /// and confirming costs nothing, so the window is still there for it.
+    func testAConfirmedAttemptIsNotChargedEvenAfterEarlierFailures() throws {
+        for _ in 0..<2 {
+            now += ChannelLimits.pairingMinStartSpacing
+            let x = try LinuxPairer(key: PrivKey())
+            let rm = try toNonce(x)
+            _ = try window.receive(try x.afterResponderNonce(rm))
+            window.reject()
+        }
+        XCTAssertEqual(window.failures, 2)
+        XCTAssertTrue(window.isOpen)
+        now += ChannelLimits.pairingMinStartSpacing
+        let key = PrivKey()
+        let l = try LinuxPairer(key: key)
+        let rm = try toNonce(l)
+        _ = try window.receive(try l.afterResponderNonce(rm))
+        XCTAssertEqual(window.failures, 2, "waiting for the person costs nothing")
+        let paired = try XCTUnwrap(window.confirm())
+        XCTAssertEqual(paired.key, key.publicKey.rawRepresentation)
+        XCTAssertEqual(window.failures, 2)
+    }
+
+    func testAttemptsCannotStartFasterThanTheSpacing() throws {
+        _ = try window.receive(try LinuxPairer(key: PrivKey()).message1())
+        now += ChannelLimits.pairingMinStartSpacing - 0.01
+        XCTAssertThrowsError(try window.receive(try LinuxPairer(key: PrivKey()).message1())) {
+            XCTAssertEqual($0 as? PairingError, .tooSoon)
+        }
+        XCTAssertEqual(window.failures, 0)
+        now += 0.01
+        XCTAssertNoThrow(try window.receive(try LinuxPairer(key: PrivKey()).message1()))
+    }
+
+    /// Finding 1, the attack itself: a man in the middle completes the Linux
+    /// leg (so he knows the Linux code), runs XX and the commit on the Mac leg,
+    /// gets r_M, computes the Mac's code, and starts over whenever it differs.
+    /// Without charging he could do that ~10^5 times per window; now he sees
+    /// at most three codes and then the window is shut.
+    func testAbortGrindingMitmSeesAtMostThreeCodesPerWindow() throws {
+        var codesSeen = 0
+        var closedAfter: Int?
+        for i in 0..<200 {
+            now += ChannelLimits.pairingMinStartSpacing
+            let attacker = try LinuxPairer(key: PrivKey(), nonce: randomPairingNonce())
+            let m2: Data?
+            do { m2 = try window.receive(try attacker.message1(), from: Self.hostA) } catch PairingError.closed {
+                closedAfter = i
+                break
+            }
+            let (m3, commit) = try attacker.afterMessage2(try XCTUnwrap(m2))
+            _ = try window.receive(m3, from: Self.hostA)
+            let rm = try XCTUnwrap(try window.receive(commit, from: Self.hostA))
+            // The attacker computes the Mac's code without ever revealing r_L.
+            _ = try attacker.afterResponderNonce(rm)
+            XCTAssertEqual(attacker.code?.count, 6)
+            codesSeen += 1
+            // The codes differ (the attacker would only go on if they matched): abort and retry.
+        }
+        XCTAssertEqual(codesSeen, ChannelLimits.pairingMaxFailures)
+        XCTAssertNotNil(closedAfter, "the window must shut")
+        XCTAssertFalse(window.isOpen)
+        XCTAssertThrowsError(try window.receive(try LinuxPairer(key: PrivKey()).message1(), from: Self.hostA))
+    }
+
+    // MARK: off-path senders (finding 2)
+
+    func testForgedDatagramsFromOtherSourcesNeverCount() throws {
+        let l = try LinuxPairer(key: PrivKey())
+        let m2 = try XCTUnwrap(try window.receive(try l.message1(), from: Self.hostA))
+        let (m3, commit) = try l.afterMessage2(m2)
+        _ = try window.receive(m3, from: Self.hostA)
+        // Three or more spoofed pairing-transport packets used to close the window.
+        for i in 0..<10 {
+            var junk = Data([DatagramKind.pairingTransport.rawValue])
+            junk += Data((0..<(WireLimits.transportOverhead - 1 + 33)).map { UInt8(truncatingIfNeeded: $0 &+ i) })
+            XCTAssertThrowsError(try window.receive(junk, from: Self.hostB)) {
+                XCTAssertEqual($0 as? PairingError, .otherSource)
+            }
+        }
+        // A spoofed message 1 cannot replace the honest attempt either.
+        now += ChannelLimits.pairingMinStartSpacing
+        XCTAssertThrowsError(try window.receive(try LinuxPairer(key: PrivKey()).message1(), from: Self.hostB)) {
+            XCTAssertEqual($0 as? PairingError, .otherSource)
+        }
+        XCTAssertEqual(window.failures, 0)
+        XCTAssertTrue(window.isOpen)
+        // The honest attempt carries on and finishes.
+        let rm = try XCTUnwrap(try window.receive(commit, from: Self.hostA))
+        _ = try window.receive(try l.afterResponderNonce(rm), from: Self.hostA)
+        XCTAssertEqual(window.pending?.sas, l.code)
+    }
+
+    func testForgedOrGarbledPacketsFromTheAttemptsSourceAreDroppedNotCounted() throws {
+        let l = try LinuxPairer(key: PrivKey())
+        let m2 = try XCTUnwrap(try window.receive(try l.message1(), from: Self.hostA))
+        let (m3, commit) = try l.afterMessage2(m2)
+        _ = try window.receive(m3, from: Self.hostA)
+        func forge(_ n: Int) -> Data {
+            Data([DatagramKind.pairingTransport.rawValue]) + Data((0..<(WireLimits.transportOverhead - 1 + 33)).map { UInt8(truncatingIfNeeded: $0 &* 7 &+ n) })
+        }
+        // Stage "waiting for the commit".
+        for n in 0..<5 {
+            XCTAssertThrowsError(try window.receive(forge(n), from: Self.hostA)) {
+                XCTAssertEqual($0 as? PairingError, .unauthenticated)
+            }
+        }
+        // Plain handshake kinds out of stage prove nothing either.
+        XCTAssertThrowsError(try window.receive(Data([DatagramKind.xxMessage3.rawValue]) + Data(count: 80), from: Self.hostA))
+        var flipped = commit
+        flipped[flipped.count - 1] ^= 1
+        XCTAssertThrowsError(try window.receive(flipped, from: Self.hostA))
+        XCTAssertEqual(window.failures, 0)
+        let rm = try XCTUnwrap(try window.receive(commit, from: Self.hostA))
+        // Stage "waiting for the reveal".
+        for n in 0..<5 { XCTAssertThrowsError(try window.receive(forge(n), from: Self.hostA)) }
+        XCTAssertThrowsError(try window.receive(Data([DatagramKind.xxMessage3.rawValue]) + Data(count: 80), from: Self.hostA))
+        XCTAssertEqual(window.failures, 0)
+        _ = try window.receive(try l.afterResponderNonce(rm), from: Self.hostA)
+        XCTAssertEqual(window.pending?.sas, l.code)
+    }
+
+    /// An attacker who is on the path and completed XX is not "forged": he
+    /// authenticated, so what he does after r_M is charged.
+    func testAuthenticatedMisbehaviourAfterTheNonceIsCharged() throws {
+        let l = try LinuxPairer(key: PrivKey())
+        let rm = try toNonce(l, from: Self.hostA)
+        _ = try l.afterResponderNonce(rm)
+        // Sealed under the real keys but with the wrong tag.
+        let wrong = try XCTUnwrap(l.session).seal(Data([PairingTag.commit]) + l.nonce, now: 0)
+        XCTAssertThrowsError(try window.receive(wrong, from: Self.hostA)) { XCTAssertEqual($0 as? PairingError, .malformed) }
+        XCTAssertEqual(window.failures, 1)
     }
 
     func testClosesAfterTwoMinutesAndWhenConfirmed() throws {

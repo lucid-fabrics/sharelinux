@@ -12,6 +12,17 @@ public enum PairingError: Error, Equatable {
     case closed
     /// A finished attempt is waiting for the person's decision.
     case busy
+    /// A datagram that did not authenticate under this attempt's keys, or that
+    /// is out of place for its stage. It is dropped and changes nothing: an
+    /// off-path sender can forge these, so they never cost the attempt or the
+    /// window anything.
+    case unauthenticated
+    /// Another source's datagram while an attempt from a different source is
+    /// in flight. Dropped, never counted.
+    case otherSource
+    /// A new attempt asked for before `ChannelLimits.pairingMinStartSpacing`
+    /// passed since the last one started.
+    case tooSoon
 }
 
 /// Plaintext tags of the pairing messages that follow the XX handshake.
@@ -75,6 +86,10 @@ public final class PairingResponder {
     }
 
     public var isComplete: Bool { sas != nil }
+    /// The Mac's random value has been sent: from here on the other side holds
+    /// what it needs to compute the code, so the attempt is one lottery ticket
+    /// whatever happens next.
+    var nonceSent: Bool { stage >= 3 }
     /// XX finished with a valid device name: from here on the attempt is a real
     /// pairing try (a code may follow), not stray traffic.
     var peerAuthenticated: Bool { session != nil }
@@ -86,6 +101,9 @@ public final class PairingResponder {
     /// Any error ends the attempt (the handshake state is poisoned).
     public func receive(_ datagram: Data) throws -> Data? {
         do { return try step(datagram) } catch {
+            // A datagram that proved nothing must not end an attempt: anyone
+            // who can forge a source address could otherwise kill it.
+            if (error as? PairingError) == .unauthenticated { throw error }
             if stage != 4 { stage = -1 }
             throw error
         }
@@ -133,16 +151,21 @@ public final class PairingResponder {
             stage = 4
             return nil
         default:
-            throw stage == 4 ? PairingError.finished : PairingError.malformed
+            // Plain handshake kinds or a transport packet out of stage carry no
+            // proof of who sent them.
+            throw stage == 4 ? PairingError.finished : PairingError.unauthenticated
         }
     }
 
     private func openMessage(_ datagram: Data, tag: UInt8) throws -> Data {
         guard let s = session else { throw PairingError.malformed }
         let pt: Data
+        // A failure here (bad tag, replayed counter, wrong size) proves nothing
+        // about who sent it: dropped, the attempt carries on.
         do { pt = try s.open(datagram, maxPlaintext: PairingTag.messageSize, now: clock()) } catch {
-            throw PairingError.malformed
+            throw PairingError.unauthenticated
         }
+        // Only a packet that authenticated can be at fault below.
         guard pt.count == PairingTag.messageSize, pt[pt.startIndex] == tag else { throw PairingError.malformed }
         return Data(pt.dropFirst())
     }
@@ -183,13 +206,27 @@ public final class PairingResponder {
 }
 
 /// The two-minute pairing window the person opens with a click on the Mac.
-/// It runs one attempt at a time, counts failures and closes itself after
-/// `ChannelLimits.pairingMaxFailures` of them, because each attempt that gets
-/// as far as a finished XX handshake is one lottery ticket for a man in the
-/// middle (1 in 10^6). A failure is a protocol error or bad commitment after
-/// that point, or the person saying the codes differ. An attempt that dies
-/// earlier never showed a code and is free, so stray datagrams cannot lock the
-/// window.
+/// It runs one attempt at a time and closes itself after
+/// `ChannelLimits.pairingMaxFailures` failures.
+///
+/// What a failure is. The moment the Mac sends r_M the other end can compute
+/// the code, so an attempt is *charged* from then on: one lottery ticket
+/// (1 in 10^6) for a man in the middle, who could otherwise read the code,
+/// find it differs from the Linux one and silently start over. Every ending of
+/// a charged attempt except the person confirming it counts as a failure:
+/// abort, a new message 1, a bad or missing reveal, a timeout, the person
+/// saying "codes differ", or the window closing. An attempt that dies before
+/// r_M showed nobody anything and is free, except for a protocol error by a
+/// peer that completed XX. So the attacker sees at most three codes per window.
+///
+/// Who may count. Datagrams carry no proof of their source address, so an
+/// off-path sender can forge them; the window therefore binds each attempt to
+/// the source of its message 1 and drops everything else for that attempt
+/// without counting it. Within the attempt only a datagram that authenticates
+/// under the XX transport keys can fail it: a forged or garbled packet is
+/// dropped. A forger who copies the victim's own address can still restart or
+/// stall an attempt that has not reached r_M (limited by the start spacing and
+/// the attempt timeout) but can never charge it.
 public final class PairingWindow {
     private let staticKey: Curve25519.KeyAgreement.PrivateKey
     private let clock: () -> Double
@@ -197,6 +234,10 @@ public final class PairingWindow {
     private let ephemeralSource: () -> Curve25519.KeyAgreement.PrivateKey
     private let openedAt: Double
     private var current: PairingResponder?
+    private var currentSource: PeerAddress?
+    private var currentStartedAt = 0.0
+    private var charged = false
+    private var lastStart: Double?
     private var shut = false
     public private(set) var failures = 0
 
@@ -218,36 +259,87 @@ public final class PairingWindow {
     /// The attempt waiting for the person's decision, if its code exists.
     public var pending: PairingResponder? { current?.isComplete == true ? current : nil }
 
-    public func close() { shut = true; current = nil }
+    public func close() {
+        settleCurrent()
+        shut = true
+        current = nil
+    }
 
-    public func receive(_ datagram: Data) throws -> Data? {
+    /// - Parameter source: where the datagram came from. Pass the real UDP
+    ///   source; nil only means "unknown" and is treated as one fixed source.
+    public func receive(_ datagram: Data, from source: PeerAddress? = nil) throws -> Data? {
         guard isOpen else { close(); throw PairingError.closed }
+        retireStaleAttempt()
+        guard isOpen else { throw PairingError.closed }
         if current?.isComplete == true { throw PairingError.busy }
+        // Another source cannot touch an attempt in flight, not even to count it.
+        if current != nil, source != currentSource { throw PairingError.otherSource }
         if let (kind, _) = parseDatagram(datagram), kind == .xxMessage1 {
+            let now = clock()
+            if let last = lastStart, now >= last, now - last < ChannelLimits.pairingMinStartSpacing {
+                throw PairingError.tooSoon
+            }
+            // Starting over abandons the old attempt: free before r_M, a failure after it.
+            settleCurrent()
+            guard isOpen else { throw PairingError.closed }
             current = try PairingResponder(
                 staticKey: staticKey, clock: clock, nonceSource: nonceSource, ephemeralSource: ephemeralSource)
+            currentSource = source
+            currentStartedAt = now
+            lastStart = now
+            charged = false
         }
         guard let attempt = current else { throw PairingError.malformed }
-        do { return try attempt.receive(datagram) } catch {
+        do {
+            let reply = try attempt.receive(datagram)
+            if attempt.nonceSent { charged = true }
+            return reply
+        } catch PairingError.unauthenticated {
+            throw PairingError.unauthenticated
+        } catch {
+            let counts = charged || attempt.peerAuthenticated
             current = nil
-            if attempt.peerAuthenticated { fail() }
+            charged = false
+            if counts { fail() }
             throw error
         }
     }
 
     /// The person says the codes differ (or declines). Counts as a failure.
-    public func reject() { current = nil; fail() }
+    public func reject() {
+        current = nil
+        charged = false
+        fail()
+    }
 
     /// The person says the codes match. Hands out the paired device and closes the
-    /// window: one pairing per click.
+    /// window: one pairing per click. The only ending that does not count.
     public func confirm() -> (name: String, key: Data)? {
         guard isOpen, let a = current, let n = a.deviceName, let k = a.remoteStatic else { return nil }
-        close()
+        charged = false
+        shut = true
+        current = nil
         return (n, k)
+    }
+
+    /// Drops an attempt that stopped making progress. Charged ones count.
+    private func retireStaleAttempt() {
+        guard let a = current, !a.isComplete else { return }
+        let age = clock() - currentStartedAt
+        if age >= ChannelLimits.pairingAttemptTimeout || age < 0 { settleCurrent() }
+    }
+
+    /// Ends the current attempt without the person's confirm.
+    private func settleCurrent() {
+        guard current != nil else { return }
+        let wasCharged = charged
+        current = nil
+        charged = false
+        if wasCharged { fail() }
     }
 
     private func fail() {
         failures += 1
-        if failures >= ChannelLimits.pairingMaxFailures { close() }
+        if failures >= ChannelLimits.pairingMaxFailures { shut = true; current = nil }
     }
 }

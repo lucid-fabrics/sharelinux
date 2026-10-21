@@ -11,6 +11,7 @@ import HelperCore
 //   <hex datagram>      -> "EVENT <events>" then "REPLY <hex>" or "NONE"
 //   !toggle on|off, !locked on|off, !console on|off, !sharing on|off,
 //   !grant on|off, !stale on|off, !advance <seconds>, !tick   -> "OK" (tick prints the event)
+//   !src <n>                    -> "OK"; pairing datagrams that follow come from 192.0.2.<n> (default 1)
 //   !pair open|reject|confirm   -> "OK" (confirm prints "confirmed <name> <hex>" or "nothing")
 // Pairing needs the window opened with "!pair open" (the local click). Pairing
 // datagrams (kinds 0x10, 0x12, 0x13) go to a PairingWindow; the event reads
@@ -72,6 +73,7 @@ func out(_ s: String) { print(s); fflush(stdout) }
 out("PUB \(staticKey.publicKey.rawRepresentation.hex)")
 
 var window: PairingWindow?
+var pairSource = PeerAddress(bytes: [192, 0, 2, 1])!
 
 while let line = readLine(strippingNewline: true) {
     if line.hasPrefix("!") {
@@ -84,6 +86,11 @@ while let line = readLine(strippingNewline: true) {
         case "sharing": sharing = on
         case "grant": grant = on
         case "stale": stale = on
+        case "src":
+            guard parts.count > 1, let n = UInt8(parts[1]), let a = PeerAddress(bytes: [192, 0, 2, n]) else {
+                out("ERR bad source"); continue
+            }
+            pairSource = a
         case "pair":
             switch parts.count > 1 ? parts[1] : "" {
             case "open": window = PairingWindow(staticKey: staticKey, clock: { mono })
@@ -108,7 +115,7 @@ while let line = readLine(strippingNewline: true) {
     if let first = dg.first, [DatagramKind.xxMessage1, .xxMessage3, .pairingTransport].map(\.rawValue).contains(first) {
         guard let w = window else { out("EVENT pair-error closed"); out("NONE"); continue }
         do {
-            let reply = try w.receive(dg)
+            let reply = try w.receive(dg, from: pairSource)
             if let p = w.pending, let sas = p.sas, let name = p.deviceName, let rs = p.remoteStatic {
                 out("EVENT pair-sas \(sas) \(name.replacingOccurrences(of: " ", with: "_")) \(rs.hex)")
             } else {

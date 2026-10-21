@@ -465,6 +465,7 @@ func TestInteropPairingWindowClosesAfterThreeFailures(t *testing.T) {
 	p := startPeer(t)
 	p.command("!pair open")
 	for i := 0; i < 3; i++ {
+		p.command("!advance 1") // attempts may not start faster than the spacing
 		static := mustKey(t)
 		ini, reveal := pairUpTo(t, p, static, "Linux box")
 		lie, _ := ini.session.Seal(append([]byte{PairingTagReveal}, bytes.Repeat([]byte{byte(i)}, 32)...), time.Now())
@@ -606,4 +607,100 @@ func TestInteropReplayedInitiationIsRefusedAfterARestart(t *testing.T) {
 		t.Fatalf("captured initiation replayed after restart: %q", event)
 	}
 	second.connect2(t, static) // a new initiation is welcome
+}
+
+// pairToNonce drives a Go initiator against the Swift window up to the point
+// where the Mac has sent r_M. It returns the initiator (its Code() is already
+// known, the reveal has not been sent) or the event that stopped it.
+func pairToNonce(t *testing.T, p *peer, static noise.DHKey) (*PairingInitiator, string) {
+	t.Helper()
+	ini, err := NewPairingInitiator(static, "Linux box")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m1, _ := ini.Start()
+	event, m2 := p.send(m1)
+	if event != "pair-ok" || m2 == nil {
+		return nil, event
+	}
+	out, err := ini.Receive(m2)
+	if err != nil || len(out) != 2 {
+		t.Fatalf("reading Swift message 2: %v", err)
+	}
+	if event, _ := p.send(out[0]); event != "pair-ok" {
+		t.Fatalf("m3: %q", event)
+	}
+	event, rm := p.send(out[1])
+	if event != "pair-ok" || rm == nil {
+		t.Fatalf("commit: %q", event)
+	}
+	if _, err := ini.Receive(rm); err != nil {
+		t.Fatalf("reading Swift nonce: %v", err)
+	}
+	return ini, ""
+}
+
+// The abort-grinding man in the middle: finish the Linux leg, run XX and the
+// commit against the Mac, read r_M, compute the Mac's code, and start over
+// when it is not the one he needs. The window must stop him after three.
+func TestInteropAbortGrindingMITMSeesAtMostThreeCodes(t *testing.T) {
+	p := startPeer(t)
+	p.command("!pair open")
+	codes := 0
+	var stopped string
+	for i := 0; i < 100; i++ {
+		p.command("!advance 1")
+		ini, event := pairToNonce(t, p, mustKey(t))
+		if ini == nil {
+			stopped = event
+			break
+		}
+		if len(ini.Code()) != 6 {
+			t.Fatalf("no code after r_M: %q", ini.Code())
+		}
+		codes++ // he compares it with the Linux code, they differ, he aborts
+	}
+	if codes != 3 || stopped != "pair-error closed" {
+		t.Fatalf("attacker saw %d codes, stopped with %q; want 3 and closed", codes, stopped)
+	}
+}
+
+// Datagrams from another source address cannot touch or count against an
+// attempt in flight (finding 2), and the honest attempt still finishes.
+func TestInteropForgedSourcesCannotChargeOrKillAnAttempt(t *testing.T) {
+	static := mustKey(t)
+	p := startPeer(t)
+	p.command("!pair open")
+	p.command("!src 1")
+	ini, event := pairToNonce(t, p, static)
+	if ini == nil {
+		t.Fatalf("honest attempt: %q", event)
+	}
+	p.command("!src 9")
+	junk := append([]byte{byte(KindPairingTransport)}, bytes.Repeat([]byte{0x5a}, 9+33+16)...)
+	for i := 0; i < 6; i++ {
+		if event, _ := p.send(junk); event != "pair-error otherSource" {
+			t.Fatalf("forged packet %d: %q", i, event)
+		}
+	}
+	p.command("!advance 1")
+	m1, _ := mustPairing(t, mustKey(t), "x").Start()
+	if event, _ := p.send(m1); event != "pair-error otherSource" {
+		t.Fatalf("forged message 1: %q", event)
+	}
+	p.command("!src 1")
+	// Garbage under the attempt's own source is dropped, not counted.
+	for i := 0; i < 6; i++ {
+		if event, _ := p.send(junk); event != "pair-error unauthenticated" {
+			t.Fatalf("garbled packet %d: %q", i, event)
+		}
+	}
+	reveal, err := ini.session.Seal(append([]byte{PairingTagReveal}, ini.nonce...), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "pair-sas " + ini.Code() + " Linux_box " + hex.EncodeToString(static.Public)
+	if event, _ := p.send(reveal); event != want {
+		t.Fatalf("honest reveal after forgeries\n got %q\nwant %q", event, want)
+	}
 }

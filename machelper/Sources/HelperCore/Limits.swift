@@ -22,6 +22,12 @@ public enum ChannelLimits {
     public static let silenceTimeout = 1.0
     /// Sessions older than this, or past `maxMessages`, must be re-keyed with a new handshake.
     public static let maxSessionAge = 120.0
+    /// Minimum time between two pairing attempts starting (message 1), so the
+    /// window cannot be spun through attempts faster than a person could try.
+    public static let pairingMinStartSpacing = 1.0
+    /// An attempt that has not finished within this long is dropped. Charged
+    /// attempts (r_M sent) count as a failure when it fires.
+    public static let pairingAttemptTimeout = 20.0
     public static let maxMessages: UInt64 = 1 << 20
     /// Accepted distance between a handshake timestamp and our wall clock.
     public static let handshakeClockSkew = 300.0

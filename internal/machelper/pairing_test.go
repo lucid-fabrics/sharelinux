@@ -333,6 +333,55 @@ func pairAsAttacker(t testing.TB, key noise.DHKey, name string, rL []byte, macKe
 // The codes cannot be predicted from anything the attacker fixes: with both
 // handshakes and the commitment held constant, each fresh honest random value
 // gives a fresh code.
+// chargedWindow is the pairing window rule (the shipped window is Swift; the
+// interop tests run the same attack against it) as a model over macPairer: an
+// attempt is charged the moment r_M is sent, only a confirm refunds, three
+// charges close the window.
+type chargedWindow struct {
+	failures, nonces int
+	open             bool
+}
+
+// TestAbortGrindingNeedsTheMacsNonceAndIsCappedByCharging pins the premise of
+// the charging rule with the real Go initiator: the code on screen is known to
+// the man in the middle as soon as r_M arrives, before any reveal, so every
+// r_M handed out is one comparison. Under the rule he gets three.
+func TestAbortGrindingNeedsTheMacsNonceAndIsCappedByCharging(t *testing.T) {
+	w := chargedWindow{open: true}
+	seen := 0
+	for i := 0; i < 200 && w.open; i++ {
+		mac := newMacPairer(t, mustKey(t), rand.Reader)
+		ini := mustPairing(t, mustKey(t), "Linux box")
+		m1, _ := ini.Start()
+		m2, _ := mac.receive(m1)
+		out, _ := ini.Receive(m2)
+		_, _ = mac.receive(out[0])
+		rm, err := mac.receive(out[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.nonces++ // r_M leaves the Mac: this attempt is charged
+		if _, err := ini.Receive(rm); err != nil {
+			t.Fatal(err)
+		}
+		if ini.Code() == "" {
+			t.Fatal("the attacker must be able to read the code before revealing")
+		}
+		if mac.code != "" {
+			t.Fatal("the Mac shows nothing before the reveal")
+		}
+		seen++
+		// He aborts (codes differ): charged, never refunded.
+		w.failures++
+		if w.failures >= 3 {
+			w.open = false
+		}
+	}
+	if seen != 3 || w.nonces != 3 {
+		t.Fatalf("attacker saw %d codes (%d nonces); want 3", seen, w.nonces)
+	}
+}
+
 func TestCodesAreUnpredictableFromAttackerControlledState(t *testing.T) {
 	h, fixed := make([]byte, 32), bytes.Repeat([]byte{3}, 32)
 	_, _ = rand.Read(h)
