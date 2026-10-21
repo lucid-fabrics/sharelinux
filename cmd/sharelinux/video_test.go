@@ -349,6 +349,8 @@ type mockMac struct {
 	clip *mockmedia.Clip
 
 	source atomic.Pointer[mockmedia.Source]
+	// pixelFormats are the formats the viewer offered, as the media negotiation delivered them.
+	pixelFormats atomic.Uint32
 	// mute holds back the video packets, as a Mac with a still screen sends none; its sender reports go on.
 	mute atomic.Bool
 }
@@ -381,6 +383,7 @@ func (m *mockMac) Clipboard(context.Context) (*rfb.Clipboard, error) {
 }
 func (m *mockMac) OpenAudio() (media.ServerAudioSource, error) { return nil, media.ErrAudioUnsupported }
 func (m *mockMac) OpenVideo(ctx context.Context, request media.ServerVideoRequest) (media.ServerVideoSource, error) {
+	m.pixelFormats.Store(uint32(request.PixelFormats))
 	source, err := m.clip.OpenVideo(60)(ctx, request)
 	if err == nil {
 		m.source.Store(source.(*mockmedia.Source))

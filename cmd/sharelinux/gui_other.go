@@ -6,3 +6,6 @@ package main
 func runGUI(*app) error {
 	return errNoWindow
 }
+
+// prepareHDR is only needed where GTK is.
+func prepareHDR(*app) {}

@@ -54,6 +54,7 @@ func runGUI(a *app) error {
 	if err != nil {
 		return err
 	}
+	prepareHDR(a)
 	g := &gui{app: a, startup: start}
 	g.ctx, g.cancel = context.WithCancel(context.Background())
 	defer g.cancel()
@@ -74,6 +75,8 @@ func (g *gui) activate() {
 	}
 	glib.SetPrgname(applicationID)
 	glib.SetApplicationName(windowName)
+	// The display is open: find out what it offers for HDR on this, the GTK thread.
+	g.app.displayHDR()
 	gtk.WindowSetDefaultIconName(applicationID)
 	// The symbolic icons of the design are Adwaita's. Other icon themes draw
 	// some of them differently or not at all, so the window pins this one.

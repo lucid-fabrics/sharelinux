@@ -20,6 +20,7 @@
 static struct zwp_pointer_constraints_v1 *constraints = NULL;
 static struct zwp_relative_pointer_manager_v1 *relative_manager = NULL;
 static gboolean probed = FALSE;
+static gboolean color_manager = FALSE;
 
 static struct zwp_locked_pointer_v1 *locked = NULL;
 static struct zwp_relative_pointer_v1 *relative = NULL;
@@ -31,6 +32,9 @@ static void registry_global(void *data, struct wl_registry *registry, uint32_t n
 		constraints = wl_registry_bind(registry, name, &zwp_pointer_constraints_v1_interface, 1);
 	} else if (strcmp(interface, zwp_relative_pointer_manager_v1_interface.name) == 0) {
 		relative_manager = wl_registry_bind(registry, name, &zwp_relative_pointer_manager_v1_interface, 1);
+	} else if (strcmp(interface, "wp_color_manager_v1") == 0) {
+		// Only its presence matters: GTK binds it for itself.
+		color_manager = TRUE;
 	}
 }
 
@@ -79,7 +83,8 @@ int oss_lock_caps(void) {
 	}
 	if (GDK_IS_WAYLAND_DISPLAY(display)) {
 		bind_globals(display);
-		return OSS_CAP_WAYLAND | (constraints != NULL ? OSS_CAP_CONSTRAINTS : 0) | (relative_manager != NULL ? OSS_CAP_RELATIVE : 0);
+		return OSS_CAP_WAYLAND | (constraints != NULL ? OSS_CAP_CONSTRAINTS : 0) | (relative_manager != NULL ? OSS_CAP_RELATIVE : 0) |
+			(color_manager ? OSS_CAP_COLOR_MANAGER : 0);
 	}
 	if (GDK_IS_X11_DISPLAY(display)) {
 		return oss_x11_caps();

@@ -16,6 +16,7 @@
 
 #define FOURCC(a, b, c, d) ((guint32)(a) | ((guint32)(b) << 8) | ((guint32)(c) << 16) | ((guint32)(d) << 24))
 #define DRM_FORMAT_NV12 FOURCC('N', 'V', '1', '2')
+#define DRM_FORMAT_Y410 FOURCC('Y', '4', '1', '0')
 
 // What is alive, process wide, for the leak checks.
 static gint live_decoders, live_frames, live_av_frames, live_fds, live_textures;
@@ -96,6 +97,62 @@ void oss_video_probe(OssVideoProbe *out, const char *device) {
 		g_strlcpy(out->error, "VA-API has no HEVC or H.264 decoder", sizeof out->error);
 	}
 	av_buffer_unref(&context);
+}
+
+static enum AVPixelFormat hardware_format(AVCodecContext *context, const enum AVPixelFormat *formats);
+
+// probe_decodes decodes a stream of one keyframe with the decoder of this kind and says whether a
+// picture came out.
+static gboolean probe_decodes(OssDecoderKind kind, const char *device, const guint8 *stream, gsize length) {
+	const AVCodec *codec = avcodec_find_decoder(AV_CODEC_ID_HEVC);
+	if (codec == NULL || length == 0 || length > G_MAXINT - AV_INPUT_BUFFER_PADDING_SIZE) {
+		return FALSE;
+	}
+	AVCodecContext *context = avcodec_alloc_context3(codec);
+	AVBufferRef *hardware = NULL;
+	AVPacket *packet = av_packet_alloc();
+	AVFrame *frame = av_frame_alloc();
+	gboolean decoded = FALSE;
+	if (context == NULL || packet == NULL || frame == NULL) {
+		goto done;
+	}
+	if (kind == OSS_DECODER_VAAPI) {
+		if (av_hwdevice_ctx_create(&hardware, AV_HWDEVICE_TYPE_VAAPI, device, NULL, 0) < 0) {
+			goto done;
+		}
+		context->hw_device_ctx = av_buffer_ref(hardware);
+		context->get_format = hardware_format;
+	} else {
+		context->thread_count = 1;
+	}
+	if (avcodec_open2(context, codec, NULL) < 0 || av_new_packet(packet, (int)length) < 0) {
+		goto done;
+	}
+	memcpy(packet->data, stream, length);
+	if (avcodec_send_packet(context, packet) < 0) {
+		goto done;
+	}
+	// The end of the stream makes the decoder give out what it holds back.
+	avcodec_send_packet(context, NULL);
+	while (avcodec_receive_frame(context, frame) >= 0) {
+		decoded = decoded || (kind == OSS_DECODER_VAAPI ? frame->format == AV_PIX_FMT_VAAPI : frame->format == AV_PIX_FMT_YUV444P10LE);
+		av_frame_unref(frame);
+	}
+done:
+	av_frame_free(&frame);
+	av_packet_free(&packet);
+	avcodec_free_context(&context);
+	av_buffer_unref(&hardware);
+	return decoded;
+}
+
+void oss_video_probe_hdr(OssVideoProbe *out, const char *device, const guint8 *stream, gsize length) {
+	if (device != NULL && device[0] == '\0') {
+		device = NULL;
+	}
+	out->software_444_10 = probe_decodes(OSS_DECODER_SOFTWARE, NULL, stream, length);
+	// VA-API opened in oss_video_probe when the driver told its name.
+	out->vaapi_444_10 = out->driver[0] != '\0' && probe_decodes(OSS_DECODER_VAAPI, device, stream, length);
 }
 
 // ---- the decoder ---------------------------------------------------------
@@ -498,6 +555,31 @@ GdkColorState *oss_rgb_color_state(OssColor color) {
 	return state;
 }
 
+GdkColorState *oss_yuv_color_state(OssColor color) {
+	int primaries = color.primaries, transfer = color.transfer, matrix = color.matrix;
+	if (primaries == 0 || primaries == 2 || transfer == 0 || transfer == 2) {
+		return NULL;
+	}
+	if (matrix == 0 || matrix == 2) {
+		matrix = primaries == 9 ? 9 : 1;
+	}
+	guint key = ((guint)primaries & 0xff) | (((guint)transfer & 0xff) << 8) | (((guint)matrix & 0xff) << 16) | (color.full_range ? 1u << 24 : 0) |
+	            (1u << 26);
+	g_mutex_lock(&color_lock);
+	if (color_cache == NULL) {
+		color_cache = g_hash_table_new(g_direct_hash, g_direct_equal);
+	}
+	GdkColorState *state = g_hash_table_lookup(color_cache, GUINT_TO_POINTER(key));
+	if (state == NULL) {
+		state = build_cicp(primaries, transfer, matrix, color.full_range);
+		if (state != NULL) {
+			g_hash_table_insert(color_cache, GUINT_TO_POINTER(key), state);
+		}
+	}
+	g_mutex_unlock(&color_lock);
+	return state;
+}
+
 GdkColorState *oss_color_state(OssColor color) {
 	int primaries = color.primaries, transfer = color.transfer, matrix = color.matrix;
 	// 0 and 2 are "unspecified", and matrix 0 is RGB, which cannot describe a YUV picture.
@@ -526,6 +608,23 @@ GdkColorState *oss_color_state(OssColor color) {
 	}
 	g_mutex_unlock(&color_lock);
 	return state;
+}
+
+gboolean oss_color_state_cicp(GdkColorState *state, int cicp[4]) {
+	GdkCicpParams *params = state != NULL ? gdk_color_state_create_cicp_params(state) : NULL;
+	if (params == NULL) {
+		return FALSE;
+	}
+	cicp[0] = (int)gdk_cicp_params_get_color_primaries(params);
+	cicp[1] = (int)gdk_cicp_params_get_transfer_function(params);
+	cicp[2] = (int)gdk_cicp_params_get_matrix_coefficients(params);
+	cicp[3] = gdk_cicp_params_get_range(params) == GDK_CICP_RANGE_FULL ? 1 : 0;
+	g_object_unref(params);
+	return TRUE;
+}
+
+gboolean oss_color_state_is_rec2100_pq(GdkColorState *state) {
+	return state != NULL && gdk_color_state_equal(state, gdk_color_state_get_rec2100_pq());
 }
 
 // ---- textures ------------------------------------------------------------
@@ -604,24 +703,32 @@ static DmabufResult texture_from_surface(const OssFrame *frame, GdkDisplay *disp
 	hold->frame = frame_ref(av);
 	g_atomic_int_inc(&live_textures);
 	DmabufResult result = DMABUF_UNSUPPORTED;
-	if (hold->frame != NULL && descriptor.num_layers == 1 && descriptor.layers[0].drm_format == DRM_FORMAT_NV12 &&
-	    descriptor.layers[0].num_planes == 2) {
+	// NV12 is the 8-bit 4:2:0 picture, Y410 the packed 4:4:4 10-bit one of HDR video.
+	guint32 fourcc = descriptor.num_layers == 1 ? descriptor.layers[0].drm_format : 0;
+	int planes = fourcc == DRM_FORMAT_NV12 ? 2 : fourcc == DRM_FORMAT_Y410 ? 1 : 0;
+	GdkColorState *state = NULL;
+	if (planes != 0 && (guint)planes == descriptor.layers[0].num_planes) {
+		state = fourcc == DRM_FORMAT_Y410 ? oss_yuv_color_state(frame->info.color) : oss_color_state(frame->info.color);
+	} else if (descriptor.num_layers == 1) {
+		g_debug("dmabuf surface: no import for format %.4s with %u planes", (const char *)&fourcc, descriptor.layers[0].num_planes);
+	}
+	if (hold->frame != NULL && state != NULL) {
 		const typeof(descriptor.layers[0]) *layer = &descriptor.layers[0];
 		guint64 modifier = descriptor.objects[layer->object_index[0]].drm_format_modifier;
-		if (dmabuf_formats_have(display, DRM_FORMAT_NV12, modifier)) {
+		if (dmabuf_formats_have(display, fourcc, modifier)) {
 			GdkDmabufTextureBuilder *builder = gdk_dmabuf_texture_builder_new();
 			gdk_dmabuf_texture_builder_set_display(builder, display);
-			gdk_dmabuf_texture_builder_set_fourcc(builder, test_break_dmabuf ? FOURCC('X', 'X', 'X', 'X') : DRM_FORMAT_NV12);
+			gdk_dmabuf_texture_builder_set_fourcc(builder, test_break_dmabuf ? FOURCC('X', 'X', 'X', 'X') : fourcc);
 			gdk_dmabuf_texture_builder_set_modifier(builder, modifier);
 			gdk_dmabuf_texture_builder_set_width(builder, descriptor.width);
 			gdk_dmabuf_texture_builder_set_height(builder, descriptor.height);
-			gdk_dmabuf_texture_builder_set_n_planes(builder, 2);
-			for (int plane = 0; plane < 2; plane++) {
+			gdk_dmabuf_texture_builder_set_n_planes(builder, planes);
+			for (int plane = 0; plane < planes; plane++) {
 				gdk_dmabuf_texture_builder_set_fd(builder, plane, descriptor.objects[layer->object_index[plane]].fd);
 				gdk_dmabuf_texture_builder_set_offset(builder, plane, layer->offset[plane]);
 				gdk_dmabuf_texture_builder_set_stride(builder, plane, layer->pitch[plane]);
 			}
-			gdk_dmabuf_texture_builder_set_color_state(builder, oss_color_state(frame->info.color));
+			gdk_dmabuf_texture_builder_set_color_state(builder, state);
 			GError *error = NULL;
 			*texture = gdk_dmabuf_texture_builder_build(builder, dmabuf_release, hold, &error);
 			if (*texture != NULL) {
@@ -633,6 +740,8 @@ static DmabufResult texture_from_surface(const OssFrame *frame, GdkDisplay *disp
 			}
 			g_clear_error(&error);
 			g_object_unref(builder);
+		} else {
+			g_debug("dmabuf surface: the display has no %.4s with modifier %lx", (const char *)&fourcc, (unsigned long)modifier);
 		}
 	}
 	if (hold != NULL) {
@@ -646,6 +755,8 @@ typedef struct {
 	GBytes *bytes;
 	GdkMemoryFormat format;
 	gboolean yuv;
+	// state is the color state of the pixels when it is not the SDR one of the stream's colors.
+	GdkColorState *state;
 	int planes;
 	gsize offsets[3], strides[3];
 } Pixels;
@@ -712,8 +823,63 @@ static gboolean pack_planar(const AVFrame *av, int width, int height, Pixels *pi
 #endif
 
 
-// Anything else is converted to BGRA by swscale.
-static gboolean convert_bgra(const AVFrame *picture, int width, int height, OssColor color, Pixels *pixels) {
+// pack_planar_444_10 packs a 4:4:4 10-bit picture (three planes of 16 bit words, or the packed XV30 a
+// GPU decoder gives back) into the three planes GTK takes: luma, then the two chromas, a 16 bit
+// word each with the value in its low 10 bits. GTK before 4.20 has no such format.
+#if GTK_CHECK_VERSION(4, 20, 0)
+static gboolean pack_planar_444_10(const AVFrame *av, int width, int height, OssColor color, Pixels *pixels) {
+	if ((av->format != AV_PIX_FMT_YUV444P10LE && av->format != AV_PIX_FMT_XV30LE) || test_force_swscale || G_BYTE_ORDER != G_LITTLE_ENDIAN) {
+		return FALSE;
+	}
+	GdkColorState *state = oss_yuv_color_state(color);
+	if (state == NULL) {
+		return FALSE;
+	}
+	gsize plane = (gsize)width * height * 2;
+	guint8 *buffer = g_malloc(plane * 3);
+	for (int row = 0; row < height; row++) {
+		guint16 *y = (guint16 *)(buffer) + (gsize)width * row;
+		guint16 *u = (guint16 *)(buffer + plane) + (gsize)width * row;
+		guint16 *v = (guint16 *)(buffer + 2 * plane) + (gsize)width * row;
+		if (av->format == AV_PIX_FMT_YUV444P10LE) {
+			memcpy(y, av->data[0] + (gsize)(av->crop_top + row) * av->linesize[0] + (gsize)av->crop_left * 2, (gsize)width * 2);
+			memcpy(u, av->data[1] + (gsize)(av->crop_top + row) * av->linesize[1] + (gsize)av->crop_left * 2, (gsize)width * 2);
+			memcpy(v, av->data[2] + (gsize)(av->crop_top + row) * av->linesize[2] + (gsize)av->crop_left * 2, (gsize)width * 2);
+		} else {
+			const guint8 *source = av->data[0] + (gsize)(av->crop_top + row) * av->linesize[0] + (gsize)av->crop_left * 4;
+			for (int x = 0; x < width; x++) {
+				guint32 word = GUINT32_FROM_LE(((const guint32 *)source)[x]);
+				u[x] = word & 0x3ff;
+				y[x] = (word >> 10) & 0x3ff;
+				v[x] = (word >> 20) & 0x3ff;
+			}
+		}
+	}
+	pixels->bytes = g_bytes_new_take(buffer, plane * 3);
+	pixels->format = GDK_MEMORY_X6G10_X6B10_X6R10_444;
+	pixels->strides[0] = pixels->strides[1] = pixels->strides[2] = (gsize)width * 2;
+	pixels->offsets[1] = plane;
+	pixels->offsets[2] = 2 * plane;
+	pixels->planes = 3;
+	pixels->yuv = TRUE;
+	pixels->state = state;
+	return TRUE;
+}
+#else
+static gboolean pack_planar_444_10(const AVFrame *av, int width, int height, OssColor color, Pixels *pixels) {
+	return FALSE;
+}
+#endif
+
+static gboolean is_444_10(const AVFrame *av) {
+	return av->format == AV_PIX_FMT_YUV444P10LE || av->format == AV_PIX_FMT_XV30LE;
+}
+
+// Anything else is converted by swscale: to BGRA, or for 4:4:4 10-bit to 16 bit RGBA that keeps the
+// stream's primaries and transfer, so a PQ picture is still PQ.
+static gboolean convert_rgb(const AVFrame *picture, int width, int height, OssColor color, Pixels *pixels) {
+	gboolean deep = is_444_10(picture);
+	enum AVPixelFormat out_format = deep ? AV_PIX_FMT_RGBA64LE : AV_PIX_FMT_BGRA;
 	// The crop of a decoded picture only says what is visible; the planes still start at the coded corner.
 	AVFrame *cropped = av_frame_clone(picture);
 	if (cropped == NULL) {
@@ -724,16 +890,18 @@ static gboolean convert_bgra(const AVFrame *picture, int width, int height, OssC
 		return FALSE;
 	}
 	const AVFrame *av = cropped;
-	gsize stride = (gsize)width * 4;
+	gsize stride = (gsize)width * (deep ? 8 : 4);
 	// swscale's vector code may write a few bytes past the last row when the width is not a multiple of its block.
 	guint8 *buffer = g_malloc(stride * height + 64);
-	struct SwsContext *sws = sws_getContext(width, height, av->format, width, height, AV_PIX_FMT_BGRA, SWS_BILINEAR, NULL, NULL, NULL);
+	struct SwsContext *sws = sws_getContext(width, height, av->format, width, height, out_format, SWS_BILINEAR, NULL, NULL, NULL);
 	if (sws == NULL) {
 		g_free(buffer);
 		av_frame_free(&cropped);
 		return FALSE;
 	}
-	int space = color.matrix == 6 || color.matrix == 5 ? SWS_CS_SMPTE170M : SWS_CS_ITU709;
+	int space = color.matrix == 9 || color.matrix == 10 || (deep && color.primaries == 9 && (color.matrix == 0 || color.matrix == 2))
+	                ? SWS_CS_BT2020
+	                : (color.matrix == 6 || color.matrix == 5 ? SWS_CS_SMPTE170M : SWS_CS_ITU709);
 	sws_setColorspaceDetails(sws, sws_getCoefficients(space), color.full_range ? 1 : 0, sws_getCoefficients(SWS_CS_DEFAULT), 1, 0, 1 << 16,
 	                         1 << 16);
 	const uint8_t *source[4] = {av->data[0], av->data[1], av->data[2], av->data[3]};
@@ -744,7 +912,7 @@ static gboolean convert_bgra(const AVFrame *picture, int width, int height, OssC
 	sws_freeContext(sws);
 	av_frame_free(&cropped);
 	pixels->bytes = g_bytes_new_take(buffer, stride * height);
-	pixels->format = GDK_MEMORY_B8G8R8X8;
+	pixels->format = deep ? GDK_MEMORY_R16G16B16A16 : GDK_MEMORY_B8G8R8X8;
 	pixels->strides[0] = stride;
 	pixels->planes = 1;
 	pixels->yuv = FALSE;
@@ -754,7 +922,8 @@ static gboolean convert_bgra(const AVFrame *picture, int width, int height, OssC
 static GdkTexture *texture_from_memory(const AVFrame *av, const OssFrameInfo *info) {
 	Pixels pixels;
 	memset(&pixels, 0, sizeof pixels);
-	if (!pack_planar(av, info->width, info->height, &pixels) && !convert_bgra(av, info->width, info->height, info->color, &pixels)) {
+	if (!pack_planar_444_10(av, info->width, info->height, info->color, &pixels) && !pack_planar(av, info->width, info->height, &pixels) &&
+	    !convert_rgb(av, info->width, info->height, info->color, &pixels)) {
 		return NULL;
 	}
 	GdkMemoryTextureBuilder *builder = gdk_memory_texture_builder_new();
@@ -771,7 +940,8 @@ static GdkTexture *texture_from_memory(const AVFrame *av, const OssFrameInfo *in
 #endif
 	// Planes go to GTK as YUV in the stream's color state. What swscale made is RGB in the same
 	// primaries and transfer, and has to say so, or a wide gamut picture is shown as sRGB.
-	gdk_memory_texture_builder_set_color_state(builder, pixels.yuv ? oss_color_state(info->color) : oss_rgb_color_state(info->color));
+	GdkColorState *state = pixels.state != NULL ? pixels.state : pixels.yuv ? oss_color_state(info->color) : oss_rgb_color_state(info->color);
+	gdk_memory_texture_builder_set_color_state(builder, state);
 	GdkTexture *texture = gdk_memory_texture_builder_build(builder);
 	g_object_unref(builder);
 	g_bytes_unref(pixels.bytes);
@@ -851,15 +1021,26 @@ gboolean oss_frame_test_texture(OssFrame *frame, int crop_left, int crop_top, in
 	gboolean ok = FALSE;
 	if (texture != NULL) {
 		int width = gdk_texture_get_width(texture), height = gdk_texture_get_height(texture);
+		GdkColorState *rgb = oss_rgb_color_state(expect);
 		if (x < width && y < height) {
 			gsize stride = (gsize)width * 4;
 			guint8 *data = g_malloc(stride * height);
-			gdk_texture_download(texture, data, stride);
+			// The pixels in the color state of the stream's RGB: planes of YUV are converted by their
+			// matrix and range, and a transfer function is not applied or undone.
+			GdkTextureDownloader *downloader = gdk_texture_downloader_new(texture);
+			gdk_texture_downloader_set_format(downloader, GDK_MEMORY_B8G8R8A8_PREMULTIPLIED);
+			gdk_texture_downloader_set_color_state(downloader, rgb);
+			gdk_texture_downloader_download_into(downloader, data, stride);
+			gdk_texture_downloader_free(downloader);
 			memcpy(pixel, data + stride * y + 4 * x, 4);
 			g_free(data);
 			ok = TRUE;
 		}
-		*matches = gdk_color_state_equal(gdk_texture_get_color_state(texture), oss_rgb_color_state(expect));
+		// A YUV texture keeps its matrix and range in its state: the primaries and the transfer say
+		// whether it is the stream's picture.
+		int got[4], want[4];
+		*matches = oss_color_state_cicp(gdk_texture_get_color_state(texture), got) && oss_color_state_cicp(rgb, want) && got[0] == want[0] &&
+		           got[1] == want[1];
 		g_object_unref(texture);
 	}
 	frame->info = old;

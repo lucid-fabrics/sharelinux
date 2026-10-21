@@ -12,6 +12,8 @@
 #define OSS_CAP_X11 8
 #define OSS_CAP_XFIXES 16
 #define OSS_CAP_XINPUT2 32
+// The compositor offers wp_color_manager_v1 (Wayland only).
+#define OSS_CAP_COLOR_MANAGER 64
 
 // oss_lock_caps says which pointer-holding features the display server has. On
 // Wayland the first call binds zwp_pointer_constraints_v1 and

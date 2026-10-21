@@ -7,11 +7,14 @@ package main
 #include <stdlib.h>
 #include "video.h"
 #include "screen.h"
+#include "wayland.h"
 */
 import "C"
 
 import (
+	_ "embed"
 	"log/slog"
+	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -22,8 +25,16 @@ import (
 	E "github.com/sagernet/sing/common/exceptions"
 )
 
+// hdrProbeStream is a 128x128 HEVC 4:4:4 10-bit picture, one keyframe in Annex B with its parameter
+// sets: what a machine has to decode to show HDR video. The Swift apps probe the same way, with a
+// tiny stream of the profile.
+//
+//go:embed hdr_probe.hevc
+var hdrProbeStream []byte
+
 func init() {
 	videoProbe = probeVideo
+	hdrEnvironment = probeHDREnvironment
 }
 
 // probeVideo asks what decoders this machine has.
@@ -32,14 +43,18 @@ func probeVideo(device string) videoCaps {
 	cDevice := C.CString(device)
 	defer C.free(unsafe.Pointer(cDevice))
 	C.oss_video_probe(&probe, cDevice)
+	C.oss_video_probe_hdr(&probe, cDevice, (*C.guint8)(unsafe.Pointer(&hdrProbeStream[0])), C.gsize(len(hdrProbeStream)))
 	caps := videoCaps{
 		HEVCVAAPI:    probe.vaapi[C.OSS_VIDEO_HEVC] != 0,
 		HEVCSoftware: probe.software[C.OSS_VIDEO_HEVC] != 0,
 		H264VAAPI:    probe.vaapi[C.OSS_VIDEO_H264] != 0,
 		H264Software: probe.software[C.OSS_VIDEO_H264] != 0,
-		Device:       C.GoString(&probe.device[0]),
-		Driver:       C.GoString(&probe.driver[0]),
-		Error:        C.GoString(&probe.error[0]),
+
+		HEVC444x10VAAPI:    probe.vaapi_444_10 != 0,
+		HEVC444x10Software: probe.software_444_10 != 0,
+		Device:             C.GoString(&probe.device[0]),
+		Driver:             C.GoString(&probe.driver[0]),
+		Error:              C.GoString(&probe.error[0]),
 	}
 	return caps
 }
@@ -110,6 +125,51 @@ func (f *videoFrame) textureForTest(cropLeft, cropTop, x, y int, expect media.Co
 	var match C.gboolean
 	ok = C.oss_frame_test_texture(f.c, C.int(cropLeft), C.int(cropTop), C.int(x), C.int(y), color, (*C.guint8)(unsafe.Pointer(&pixel[0])), &match) != 0
 	return pixel, match != 0, ok
+}
+
+func cColor(color media.Color) C.OssColor {
+	return C.OssColor{
+		primaries: C.int(color.Primaries), transfer: C.int(color.Transfer), matrix: C.int(color.Matrix),
+		full_range: boolToC(color.FullRange), bit_depth: C.int(color.BitDepth), chroma_format: C.int(color.ChromaFormat),
+	}
+}
+
+// colorSpace says which state of a stream's colors a test asks for.
+type colorSpace int
+
+const (
+	// spaceYUV is the state of 4:2:0 planes, where values GTK has no name for become BT.709.
+	spaceYUV colorSpace = iota
+	// spaceYUV444 is the state of the 4:4:4 10-bit planes of HDR, which is never guessed.
+	spaceYUV444
+	// spaceRGB is the state of the RGB converted from either.
+	spaceRGB
+)
+
+// colorStateForTest says what GTK is told about a stream's colors: the code points (primaries, transfer,
+// matrix, full range) of the state in space, and whether it is GTK's own Rec. 2100 PQ. ok is false where
+// GTK has no state for the stream.
+func colorStateForTest(color media.Color, space colorSpace) (cicp [4]int, pq, ok bool) {
+	var state *C.GdkColorState
+	switch space {
+	case spaceYUV:
+		state = C.oss_color_state(cColor(color))
+	case spaceYUV444:
+		state = C.oss_yuv_color_state(cColor(color))
+	default:
+		state = C.oss_rgb_color_state(cColor(color))
+	}
+	if state == nil {
+		return cicp, false, false
+	}
+	var values [4]C.int
+	if C.oss_color_state_cicp(state, &values[0]) == 0 {
+		return cicp, false, false
+	}
+	for index := range cicp {
+		cicp[index] = int(values[index])
+	}
+	return cicp, C.oss_color_state_is_rec2100_pq(state) != 0, true
 }
 
 // decodeResult is what feeding a unit to the decoder came to.
@@ -298,8 +358,10 @@ type videoEvent struct {
 // videoStream is one run of the media stream: the sink the core delivers into, a
 // queue, and the goroutine that decodes and presents.
 type videoStream struct {
-	logger  *slog.Logger
-	plan    videoPlan
+	logger *slog.Logger
+	plan   videoPlan
+	// hdr is whether the offer asked for HDR; it never changes, so the core's goroutine may read it.
+	hdr     bool
 	options decoderOptions
 	queue   *unitQueue
 	out     presenter
@@ -331,6 +393,7 @@ func newVideoStream(logger *slog.Logger, plan videoPlan, device string, threads 
 	s := &videoStream{
 		logger:   logger,
 		plan:     plan,
+		hdr:      plan.HDR,
 		options:  decoderOptions{Codec: plan.Codec, Device: device, Threads: threads},
 		queue:    newUnitQueue(queueDepth),
 		out:      out,
@@ -357,12 +420,17 @@ func (s *videoStream) VideoFormat(format media.VideoFormat) {
 		s.event(videoEvent{Kind: videoFailed, Text: "the stream is cut into " + strconv.Itoa(format.Bands) + " strips"})
 		return
 	}
-	if format.Color.BitDepth != 8 || format.Color.ChromaFormat != 1 {
+	if !streamSupported(format.Color, s.hdr) {
 		s.event(videoEvent{Kind: videoFailed, Text: "the stream is " + strconv.Itoa(format.Color.BitDepth) + " bit, chroma " + strconv.Itoa(format.Color.ChromaFormat)})
 		return
 	}
 	s.logger.Info("video format", "codec", codecName(format.Codec), "width", format.Width, "height", format.Height,
-		"primaries", format.Color.Primaries, "transfer", format.Color.Transfer, "matrix", format.Color.Matrix, "full-range", format.Color.FullRange)
+		"bit-depth", format.Color.BitDepth, "chroma", format.Color.ChromaFormat,
+		"primaries", format.Color.Primaries, "transfer", format.Color.Transfer, "matrix", format.Color.Matrix, "full-range", format.Color.FullRange,
+		"hdr", format.Color.HDR())
+	s.access.Lock()
+	s.snap.Color = format.Color
+	s.access.Unlock()
 	copied := format
 	copied.ParameterSets = make([][]byte, len(format.ParameterSets))
 	for index, set := range format.ParameterSets {
@@ -432,23 +500,31 @@ func (s *videoStream) reopen(format *media.VideoFormat) {
 	if old != nil {
 		old.close()
 	}
-	for len(s.plan.Kinds) > 0 {
+	for {
+		kinds := s.plan.kindsFor(format.Color)
+		if len(kinds) == 0 {
+			break
+		}
 		options := s.options
-		options.Kind = s.plan.Kinds[0]
+		options.Kind = kinds[0]
 		dec, err := openDecoder(options, *format)
 		if err == nil {
 			s.access.Lock()
 			s.dec = dec
 			s.snap.Kind = dec.kind
 			s.access.Unlock()
-			s.logger.Info("video decoder", "kind", dec.kind.String(), "codec", codecName(format.Codec))
+			s.logger.Info("video decoder", "kind", dec.kind.String(), "codec", codecName(format.Codec), "bit-depth", format.Color.BitDepth, "chroma", format.Color.ChromaFormat)
 			return
 		}
 		s.logger.Warn("video decoder", "kind", options.Kind.String(), "error", err)
 		s.plan = s.plan.withoutKind(options.Kind)
 		s.event(videoEvent{Kind: videoDecoderChanged, Text: err.Error()})
 	}
-	s.event(videoEvent{Kind: videoFailed, Text: s.plan.Reason})
+	reason := s.plan.Reason
+	if reason == "" {
+		reason = "no decoder takes the HDR stream (HEVC 4:4:4 10-bit)"
+	}
+	s.event(videoEvent{Kind: videoFailed, Text: reason})
 }
 
 func (s *videoStream) decodeUnit(item videoItem) {
@@ -572,4 +648,27 @@ func (s *videoStream) close() {
 	}
 	s.queue.close()
 	<-s.done
+}
+
+// probeHDREnvironment asks the open display what it offers for HDR. It is called on the GTK thread.
+func probeHDREnvironment() hdrEnv {
+	bits := int(C.oss_lock_caps())
+	return hdrEnv{
+		Wayland:         bits&C.OSS_CAP_WAYLAND != 0,
+		ColorManager:    bits&C.OSS_CAP_COLOR_MANAGER != 0,
+		ColorManagement: colorManagementActive(os.Getenv("GDK_DEBUG"), int(C.gtk_get_major_version()), int(C.gtk_get_minor_version())),
+	}
+}
+
+// prepareHDR turns GTK's color management on before GTK starts when HDR is wanted on a Wayland
+// desktop: GTK reads GDK_DEBUG once, and without the flag it tells the compositor nothing about
+// the colors of its surfaces.
+func prepareHDR(a *app) {
+	if !a.hdrWanted() || !waylandSession(os.Getenv) {
+		return
+	}
+	value := gdkDebugWithColorManagement(os.Getenv("GDK_DEBUG"), int(C.gtk_get_major_version()), int(C.gtk_get_minor_version()))
+	if value != os.Getenv("GDK_DEBUG") {
+		_ = os.Setenv("GDK_DEBUG", value)
+	}
 }

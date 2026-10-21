@@ -288,3 +288,17 @@ func TestSourceInfo(t *testing.T) {
 		t.Fatalf("pixel format %v", info.PixelFormat)
 	}
 }
+
+func TestHDRClips(t *testing.T) {
+	for name, open := range map[string]func() (*Clip, error){"PQ": BuiltinPQ, "HLG": BuiltinHLG} {
+		clip := mustClip(t, open)
+		if clip.Width != 320 || clip.Height != 192 || len(clip.Units) != 24 {
+			t.Fatalf("%s: %dx%d, %d pictures", name, clip.Width, clip.Height, len(clip.Units))
+		}
+		for index, unit := range clip.Units {
+			if want := index%12 == 0; unit.Sync != want {
+				t.Errorf("%s picture %d: sync %v, want %v", name, index, unit.Sync, want)
+			}
+		}
+	}
+}

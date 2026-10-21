@@ -42,6 +42,24 @@ func BuiltinSmall() (*Clip, error) {
 	return ParseAnnexB(builtinSmall)
 }
 
+//go:embed testdata/clip_pq.hevc
+var builtinPQ []byte
+
+//go:embed testdata/clip_hlg.hevc
+var builtinHLG []byte
+
+// BuiltinPQ is a 320x192 HEVC 4:4:4 10-bit clip of 24 frames, a keyframe every 12, in BT.2020 full
+// range with PQ transfer: the HDR the Mac sends. The left half is neutral gray, luma 500 of 1023;
+// the right half has the same luma with chroma 300 (Cb) and 800 (Cr).
+func BuiltinPQ() (*Clip, error) {
+	return ParseAnnexB(builtinPQ)
+}
+
+// BuiltinHLG is BuiltinPQ with HLG transfer.
+func BuiltinHLG() (*Clip, error) {
+	return ParseAnnexB(builtinHLG)
+}
+
 const (
 	payloadTypeHEVC = 100
 	rtpClockRate    = 24000

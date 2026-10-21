@@ -40,11 +40,18 @@ typedef struct {
 	char device[96];      // the VA-API render node asked for, empty for the first one
 	char driver[96];      // what the VA-API driver says it is
 	char error[192];      // why VA-API is missing, empty when it works
+	gboolean vaapi_444_10;    // VA-API decoded the HEVC 4:4:4 10-bit probe stream
+	gboolean software_444_10; // libavcodec decoded it in software
 } OssVideoProbe;
 
 // oss_video_probe opens VA-API on device (NULL: the first render node) and
 // asks libavcodec for the software decoders. It is quick and has no effects.
 void oss_video_probe(OssVideoProbe *out, const char *device);
+
+// oss_video_probe_hdr tries to decode stream, a tiny HEVC 4:4:4 10-bit keyframe in Annex B with its
+// parameter sets, on each decoder and fills vaapi_444_10 and software_444_10. Call it after
+// oss_video_probe, which tells whether VA-API opens at all.
+void oss_video_probe_hdr(OssVideoProbe *out, const char *device, const guint8 *stream, gsize length);
 
 // OssColor is what the stream's sequence header says about its colors.
 typedef struct {
@@ -159,8 +166,20 @@ gboolean oss_frame_test_texture(OssFrame *frame, int crop_left, int crop_top, in
 // oss_rgb_color_state is the state of the RGB converted from a stream's YUV.
 GdkColorState *oss_rgb_color_state(OssColor color);
 
+// oss_yuv_color_state is the state of the YUV planes of a 4:4:4 10-bit stream, taken as they are,
+// or NULL when GTK has no state for the stream's primaries, transfer, matrix and range. An
+// unspecified matrix of BT.2020 primaries is BT.2020 non-constant luminance.
+GdkColorState *oss_yuv_color_state(OssColor color);
+
 // oss_color_state builds the GdkColorState for a stream. Values GTK cannot use
 // become BT.709 limited range.
 GdkColorState *oss_color_state(OssColor color);
+
+// oss_color_state_cicp reads a state back as its four code points: primaries, transfer, matrix and
+// range (1 for full). It fails for a state that has none.
+gboolean oss_color_state_cicp(GdkColorState *state, int cicp[4]);
+
+// oss_color_state_is_rec2100_pq says whether a state is GTK's own Rec. 2100 PQ.
+gboolean oss_color_state_is_rec2100_pq(GdkColorState *state);
 
 #endif
