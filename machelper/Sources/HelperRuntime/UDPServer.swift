@@ -20,6 +20,9 @@ public final class UDPServer {
     /// harness uses it to simulate a stalled poller; the app always allows).
     private let samplingEnabled: () -> Bool
     private var fd: Int32 = -1
+    /// Tests: called at the end of every read pass with the number of datagrams
+    /// that pass read. Set before `start()`; it runs on the runtime queue.
+    var onPass: ((Int) -> Void)?
     private var readSource: DispatchSourceRead?
     private var timer: DispatchSourceTimer?
     private let log = Logger(subsystem: "io.github.sharelinux.mousehelper", category: "udp")
@@ -118,7 +121,8 @@ public final class UDPServer {
     private func drain() {
         var buf = [UInt8](repeating: 0, count: 2048)
         let started = DispatchTime.now().uptimeNanoseconds
-        var read = 0
+        var read = 0, received = 0
+        defer { onPass?(received) }
         while read < UDPServer.maxDatagramsPerPass {
             read += 1
             if read % 8 == 0,
@@ -134,6 +138,7 @@ public final class UDPServer {
                 }
             }
             if n < 0 { return }  // EAGAIN: drained (any other error also ends this round)
+            received += 1
             guard n > 0, n <= WireLimits.maxDatagram else { continue }
             let family = Int32(from.ss_family)
             let bytes: [UInt8]? = withUnsafeBytes(of: &from) { raw in

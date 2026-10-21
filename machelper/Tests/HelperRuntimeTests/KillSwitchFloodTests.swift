@@ -201,9 +201,46 @@ final class KillSwitchFloodTests: XCTestCase {
         XCTAssertGreaterThan((after ?? 0) - before, 0.3, "the snapshot kept refreshing")
     }
 
-    func testTheDrainPassIsBounded() {
-        XCTAssertLessThanOrEqual(UDPServer.maxDatagramsPerPass, 64)
-        XCTAssertLessThanOrEqual(UDPServer.maxPassSeconds, 0.005)
+    /// Behaviour, not constants: with a real socket under a sustained flood no
+    /// read pass takes more than the cap, passes are many (the flood needs
+    /// them), the sampling timer keeps firing in between, and work queued on
+    /// the runtime queue is not kept waiting for the whole flood.
+    func testAFloodIsReadInBoundedPassesWhileTimersAndQueuedWorkRun() {
+        server.stop()
+        // A fresh server with a fast timer and a pass recorder.
+        final class Log: @unchecked Sendable {
+            let lock = NSLock()
+            var passes: [Int] = []
+            var timerFires = 0
+            func pass(_ n: Int) { lock.lock(); passes.append(n); lock.unlock() }
+            func fire() { lock.lock(); timerFires += 1; lock.unlock() }
+            var snapshot: ([Int], Int) { lock.lock(); defer { lock.unlock() }; return (passes, timerFires) }
+        }
+        let log = Log()
+        server = UDPServer(
+            runtime: runtime, port: 0, loopbackOnly: true, interval: 0.02,
+            samplingEnabled: { log.fire(); return true })
+        server.onPass = { log.pass($0) }
+        port = try! server.start()
+        startFlood()
+        var worst = 0.0
+        let t0 = now()
+        while now() - t0 < 0.5 {
+            let queued = now()
+            let ran = DispatchSemaphore(value: 0)
+            var latency = 0.0
+            runtime.queue.async { latency = self.now() - queued; ran.signal() }
+            XCTAssertEqual(ran.wait(timeout: .now() + 2), .success, "queued work ran during the flood")
+            worst = max(worst, latency)
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        stopFlood()
+        let (passes, fires) = log.snapshot
+        let heavy = passes.filter { $0 > 0 }
+        XCTAssertGreaterThan(heavy.count, 20, "the flood needed many passes")
+        XCTAssertLessThanOrEqual(passes.max() ?? 0, UDPServer.maxDatagramsPerPass, "no pass reads more than the cap")
+        XCTAssertGreaterThanOrEqual(fires, 10, "the sampling timer kept firing during the flood (\(fires))")
+        XCTAssertLessThan(worst, 0.1, "work queued behind the flood waited \(worst) s")
     }
 
     // MARK: a stuck or busy runtime queue
