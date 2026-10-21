@@ -64,6 +64,15 @@ func builtinClip(t *testing.T) *mockmedia.Clip {
 	return clip
 }
 
+func croppedClip(t *testing.T) *mockmedia.Clip {
+	t.Helper()
+	clip, err := mockmedia.BuiltinCropped()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return clip
+}
+
 func smallClip(t *testing.T) *mockmedia.Clip {
 	t.Helper()
 	clip, err := mockmedia.BuiltinSmall()
@@ -192,6 +201,25 @@ func TestSoftwareDecodesTheClip(t *testing.T) {
 	}
 	if d.next() != nil {
 		t.Fatal("nothing is left")
+	}
+}
+
+// A picture with a conformance window is shown at its visible size, not the coded one.
+func TestDecodedPictureIsCropped(t *testing.T) {
+	clip := croppedClip(t)
+	d := openSoftware(t, clip, 1)
+	defer d.close()
+	unit := clipUnit(clip, 0)
+	if frames, result := d.decode(unit.Data, unit.Sync, 0); result != decodeOK || frames != 1 {
+		t.Fatalf("%d frames, %v", frames, result)
+	}
+	frame := d.next()
+	defer frame.free()
+	if frame.Width != 318 || frame.Height != 190 {
+		t.Fatalf("%dx%d, want the visible 318x190", frame.Width, frame.Height)
+	}
+	if mean := frame.lumaMean(); mean < 20 || mean > 235 {
+		t.Fatalf("luma %.1f", mean)
 	}
 }
 

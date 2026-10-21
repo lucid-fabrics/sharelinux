@@ -28,6 +28,15 @@ func Builtin() (*Clip, error) {
 	return ParseAnnexB(builtin)
 }
 
+//go:embed testdata/clip_cropped.hevc
+var builtinCropped []byte
+
+// BuiltinCropped is a clip whose picture is 318x190 inside a 320x192 coded picture, so the
+// decoder has to crop.
+func BuiltinCropped() (*Clip, error) {
+	return ParseAnnexB(builtinCropped)
+}
+
 // BuiltinSmall is the same kind of clip at 192x128, for a stream that changes size.
 func BuiltinSmall() (*Clip, error) {
 	return ParseAnnexB(builtinSmall)

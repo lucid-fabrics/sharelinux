@@ -181,3 +181,25 @@ func TestDMABufFailureFallsBackAndLeaksNothing(t *testing.T) {
 		t.Fatalf("negative counts: %+v", live)
 	}
 }
+
+// The decoder's GPU surface can be bigger than the picture; the widget draws only the picture.
+func TestScreenDrawsTheVisiblePartOfAGPUSurface(t *testing.T) {
+	clip := croppedClip(t)
+	vaapiOrSkip(t)
+	view := shownScreen(t, clip)
+	view.chooseDMABuf()
+	frames := decodeFrames(t, decoderVAAPI, clip, 2)
+	view.setVideo(true)
+	for _, frame := range frames {
+		if frame.Width != 318 || frame.Height != 190 {
+			t.Fatalf("the picture is %dx%d, want the visible 318x190 (surface %dx%d)", frame.Width, frame.Height, frame.TexWidth, frame.TexHeight)
+		}
+		t.Logf("visible %dx%d, surface %dx%d", frame.Width, frame.Height, frame.TexWidth, frame.TexHeight)
+		if output := view.present(frame); output == outputNone {
+			t.Fatal("the picture was not shown")
+		}
+	}
+	if !pump(func() bool { return view.videoCounters().Presented > 0 }, 5*time.Second) {
+		t.Fatal("never drawn")
+	}
+}

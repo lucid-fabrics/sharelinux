@@ -47,6 +47,14 @@ func TestBuiltinClips(t *testing.T) {
 	}
 }
 
+func TestCroppedClip(t *testing.T) {
+	clip := mustClip(t, BuiltinCropped)
+	// The sequence header gives the coded size; the conformance window is what the decoder crops.
+	if clip.Width != 320 || clip.Height != 192 || len(clip.Units) != 24 || !clip.Units[0].Sync {
+		t.Fatalf("%dx%d with %d pictures", clip.Width, clip.Height, len(clip.Units))
+	}
+}
+
 func TestParseAnnexBRefusesBadClips(t *testing.T) {
 	if _, err := ParseAnnexB(nil); err == nil {
 		t.Fatal("an empty clip must be refused")
