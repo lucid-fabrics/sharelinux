@@ -480,7 +480,8 @@ func (v *sessionView) end() {
 		v.g.window.Unfullscreen()
 	}
 	v.g.window.SetTitle(windowName)
-	v.release()
+	// The page may still be animating out of view: tear it down afterwards.
+	releaseAfterTransition(v.page, v.release)
 }
 
 // release frees what the session's widgets hold. A page that was merely

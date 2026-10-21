@@ -3,6 +3,7 @@
 package main
 
 import (
+	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
 	coreglib "github.com/diamondburned/gotk4/pkg/core/glib"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 )
@@ -50,4 +51,34 @@ func widgetOf(object *coreglib.Object) *gtk.Widget {
 		Buildable:        gtk.Buildable{Object: object},
 		ConstraintTarget: gtk.ConstraintTarget{Object: object},
 	}
+}
+
+// releaseTimeout is the longest a popped page waits for its transition to
+// finish before it is released anyway.
+const releaseTimeout = 2000
+
+// releaseAfterTransition runs release once the page has left the screen. The
+// popped signal fires when the pop starts, while the page still animates out
+// and can still deliver input and drawing callbacks, so tearing the tree down
+// there pulls widgets from under live handlers. The hidden signal says the
+// transition is over; release then runs from an idle callback, not inside the
+// signal that is still being emitted by the page about to be destroyed. A
+// timeout covers a page that never reports hidden, for example one in a
+// window that is closing. release runs at most once.
+func releaseAfterTransition(page *adw.NavigationPage, release func()) {
+	done := false
+	run := func() {
+		if done {
+			return
+		}
+		done = true
+		release()
+	}
+	page.ConnectHidden(func() {
+		coreglib.IdleAdd(run)
+	})
+	coreglib.TimeoutAdd(releaseTimeout, func() bool {
+		run()
+		return false
+	})
 }
