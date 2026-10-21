@@ -81,6 +81,10 @@ type app struct {
 
 	access sync.Mutex
 
+	helperOnce sync.Once
+	helper     *helperKeys
+	pairing    *helperPairing
+
 	videoOnce sync.Once
 	caps      videoCaps
 
@@ -306,3 +310,22 @@ func securityTypes(req *request) []rfb.SecurityType {
 }
 
 var errNoWindow = E.New("the graphical interface needs Linux with GTK 4 and libadwaita")
+
+// helperKeys is the keyring-backed store of the Mac mouse helper keys.
+func (a *app) helperKeys() *helperKeys {
+	a.initHelper()
+	return a.helper
+}
+
+// helperPairingFlow starts pairing attempts, one per explicit call.
+func (a *app) helperPairingFlow() *helperPairing {
+	a.initHelper()
+	return a.pairing
+}
+
+func (a *app) initHelper() {
+	a.helperOnce.Do(func() {
+		a.helper = &helperKeys{secrets: keyringSecrets{}}
+		a.pairing = newHelperPairing(a.helper)
+	})
+}

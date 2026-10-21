@@ -143,6 +143,7 @@ func (g *gui) keyboardPage(prefs settings, change func(func(*settings))) *adw.Pr
 		change(func(s *settings) { s.NaturalScrolling = on })
 	}))
 	page.Add(group)
+	page.Add(g.mouseHelperGroup())
 	return page
 }
 
