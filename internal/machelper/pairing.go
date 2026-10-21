@@ -126,6 +126,14 @@ func NormalizeDeviceName(name string) (string, error) {
 }
 
 // PairingInitiator is the Linux side of one pairing attempt.
+//
+// It never retries. An initiator is single use: Start works once, and any
+// error, an unexpected datagram or a finished run leaves it dead (every later
+// call returns ErrPairingState). There is no timer, no resend and no loop in
+// this package. A new attempt is a new initiator, created by an explicit call
+// of the application on behalf of the person, because the Mac charges every
+// attempt that got as far as its nonce (3 per window) and a client that retried
+// by itself would burn the person's window, or hand a spoofer free tickets.
 type PairingInitiator struct {
 	hs     *Handshake
 	name   string

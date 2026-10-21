@@ -330,58 +330,38 @@ func pairAsAttacker(t testing.TB, key noise.DHKey, name string, rL []byte, macKe
 	return mac.code
 }
 
+// TestAbortGrindingPremiseTheCodeIsKnownBeforeTheReveal pins the premise of
+// the Mac's charging rule with the real Go initiator: the code on screen is
+// known to a man in the middle as soon as r_M arrives, before any reveal, so
+// every r_M the Mac hands out is one comparison for him. The cap itself (three
+// charged attempts per window) is the Mac's; it is exercised against the real
+// Swift window in TestInteropAbortGrindingMITMSeesAtMostThreeCodes, not
+// re-counted here.
+func TestAbortGrindingPremiseTheCodeIsKnownBeforeTheReveal(t *testing.T) {
+	mac := newMacPairer(t, mustKey(t), rand.Reader)
+	ini := mustPairing(t, mustKey(t), "Linux box")
+	m1, _ := ini.Start()
+	m2, _ := mac.receive(m1)
+	out, _ := ini.Receive(m2)
+	_, _ = mac.receive(out[0])
+	rm, err := mac.receive(out[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ini.Receive(rm); err != nil {
+		t.Fatal(err)
+	}
+	if ini.Code() == "" {
+		t.Fatal("the attacker must be able to read the code before revealing")
+	}
+	if mac.code != "" {
+		t.Fatal("the Mac shows nothing before the reveal")
+	}
+}
+
 // The codes cannot be predicted from anything the attacker fixes: with both
 // handshakes and the commitment held constant, each fresh honest random value
 // gives a fresh code.
-// chargedWindow is the pairing window rule (the shipped window is Swift; the
-// interop tests run the same attack against it) as a model over macPairer: an
-// attempt is charged the moment r_M is sent, only a confirm refunds, three
-// charges close the window.
-type chargedWindow struct {
-	failures, nonces int
-	open             bool
-}
-
-// TestAbortGrindingNeedsTheMacsNonceAndIsCappedByCharging pins the premise of
-// the charging rule with the real Go initiator: the code on screen is known to
-// the man in the middle as soon as r_M arrives, before any reveal, so every
-// r_M handed out is one comparison. Under the rule he gets three.
-func TestAbortGrindingNeedsTheMacsNonceAndIsCappedByCharging(t *testing.T) {
-	w := chargedWindow{open: true}
-	seen := 0
-	for i := 0; i < 200 && w.open; i++ {
-		mac := newMacPairer(t, mustKey(t), rand.Reader)
-		ini := mustPairing(t, mustKey(t), "Linux box")
-		m1, _ := ini.Start()
-		m2, _ := mac.receive(m1)
-		out, _ := ini.Receive(m2)
-		_, _ = mac.receive(out[0])
-		rm, err := mac.receive(out[1])
-		if err != nil {
-			t.Fatal(err)
-		}
-		w.nonces++ // r_M leaves the Mac: this attempt is charged
-		if _, err := ini.Receive(rm); err != nil {
-			t.Fatal(err)
-		}
-		if ini.Code() == "" {
-			t.Fatal("the attacker must be able to read the code before revealing")
-		}
-		if mac.code != "" {
-			t.Fatal("the Mac shows nothing before the reveal")
-		}
-		seen++
-		// He aborts (codes differ): charged, never refunded.
-		w.failures++
-		if w.failures >= 3 {
-			w.open = false
-		}
-	}
-	if seen != 3 || w.nonces != 3 {
-		t.Fatalf("attacker saw %d codes (%d nonces); want 3", seen, w.nonces)
-	}
-}
-
 func TestCodesAreUnpredictableFromAttackerControlledState(t *testing.T) {
 	h, fixed := make([]byte, 32), bytes.Repeat([]byte{3}, 32)
 	_, _ = rand.Read(h)
@@ -592,4 +572,42 @@ func FuzzPairing(f *testing.F) {
 			}
 		}
 	})
+}
+
+// The initiator never retries: it is single use, and once it failed or
+// finished it refuses to send or accept anything, so a retry loop in the
+// application has to build a new one on purpose.
+func TestInitiatorNeverRetriesAnAttempt(t *testing.T) {
+	// Start twice.
+	ini := mustPairing(t, mustKey(t), "Linux box")
+	if _, err := ini.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := ini.Start(); err == nil || m != nil {
+		t.Fatal("a second Start on the same initiator must be refused")
+	}
+
+	// A bad reply kills it; a good reply afterwards is not accepted.
+	mac := newMacPairer(t, mustKey(t), rand.Reader)
+	ini = mustPairing(t, mustKey(t), "Linux box")
+	m1, _ := ini.Start()
+	if _, err := ini.Receive([]byte{0x11, 1, 2, 3}); err == nil {
+		t.Fatal("garbage must fail the attempt")
+	}
+	m2, _ := mac.receive(m1)
+	if out, err := ini.Receive(m2); err == nil || out != nil {
+		t.Fatal("a dead initiator must not resume on a later valid reply")
+	}
+	if _, err := ini.Start(); err == nil {
+		t.Fatal("a dead initiator must not restart")
+	}
+
+	// A finished one accepts nothing more and does not restart.
+	done := runPairing(t, mustKey(t), newMacPairer(t, mustKey(t), rand.Reader), "Linux box")
+	if out, err := done.Receive(m2); err == nil || out != nil {
+		t.Fatal("a finished initiator must refuse more datagrams")
+	}
+	if _, err := done.Start(); err == nil {
+		t.Fatal("a finished initiator must not restart")
+	}
 }
