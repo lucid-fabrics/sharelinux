@@ -5,6 +5,8 @@ package main
 import (
 	"bytes"
 	"log/slog"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +31,16 @@ func hdrClip(t *testing.T, transfer int) *mockmedia.Clip {
 		t.Fatal(err)
 	}
 	return clip
+}
+
+const hdrChildEnv = "SHARELINUX_TEST_CHILD"
+
+// tail is the last n bytes of output.
+func tail(output []byte, n int) []byte {
+	if len(output) > n {
+		return output[len(output)-n:]
+	}
+	return output
 }
 
 func hdrFormat(clip *mockmedia.Clip, transfer int) media.VideoFormat {
@@ -273,6 +285,21 @@ func TestSDRPlanRefusesHDRStream(t *testing.T) {
 // Where GDK takes no 4:4:4 surface, the GPU's video processor makes a P010 one that it does take, with
 // the same colors: the left half of the clip is gray at luma 500, the right half the BT.2020 chroma.
 func TestVAAPIHDRThroughTheVideoProcessor(t *testing.T) {
+	// Downloading a DMA-BUF texture makes GDK's one GL context current on this thread, and a context
+	// that an earlier test made current on another thread aborts the process ("Couldn't find current
+	// GLX or EGL context"). The test runs in a process of its own.
+	if os.Getenv(hdrChildEnv) == "" {
+		command := exec.Command(os.Args[0], "-test.run=^TestVAAPIHDRThroughTheVideoProcessor$", "-test.v")
+		command.Env = append(os.Environ(), hdrChildEnv+"=1")
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v\n%s", err, tail(output, 3000))
+		}
+		if bytes.Contains(output, []byte("--- SKIP")) {
+			t.Skip("skipped in its own process: " + string(tail(output, 300)))
+		}
+		return
+	}
 	caps := probeVideo("")
 	if !caps.HEVC444x10VAAPI {
 		t.Skipf("no VA-API HEVC 4:4:4 10-bit decoder (%q %s)", caps.Driver, caps.Error)
