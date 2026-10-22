@@ -204,7 +204,7 @@ public final class HelperRuntime {
             if keyCheckDue(), !checkKeys() { return nil }
         }
         let r = channel.receive(datagram, from: source)
-        process(r.events, source: source)
+        process(r.events, source: source, inputCounter: r.inputCounter)
         // The keys turned out changed while this datagram was processed: it gets no answer.
         return keysChangedLatch ? nil : r.reply
     }
@@ -265,7 +265,7 @@ public final class HelperRuntime {
 
     // MARK: events from the channel
 
-    private func process(_ events: [ChannelEvent], source: PeerAddress?) {
+    private func process(_ events: [ChannelEvent], source: PeerAddress?, inputCounter: UInt64? = nil) {
         var changed = false
         for e in events {
             switch e {
@@ -287,7 +287,7 @@ public final class HelperRuntime {
                 acceptedInputs += 1
                 if lastDeny != nil { lastDeny = nil; lastLoggedDeny = nil; changed = true }
                 announceIfNew()
-                controller.apply(p)
+                controller.apply(p, counter: inputCounter)
             case .keepalive:
                 activeSource = source ?? activeSource
                 sharingSeen = true
@@ -297,6 +297,7 @@ public final class HelperRuntime {
             case .denied(let s):
                 activeSource = source ?? activeSource
                 deniedInputs += 1
+                if let c = inputCounter { controller.noteInput(counter: c) }
                 controller.releaseAll(.denied)
                 if lastDeny != s { lastDeny = s; changed = true }
                 if lastLoggedDeny != s {

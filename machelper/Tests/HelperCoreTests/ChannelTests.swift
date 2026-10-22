@@ -76,6 +76,18 @@ final class ChannelTests: XCTestCase {
         channel.receive(try s.seal(p.encode(), now: env.mono), from: Self.addr)
     }
 
+    func testResultCarriesTheTransportCounterOfInputPacketsOnly() throws {
+        let s = try connect()
+        let a = try send(s, InputPacket(type: .input, dx: 1))
+        env.mono += 0.01
+        let k = try send(s, InputPacket(type: .keepalive))
+        env.mono += 0.01
+        let b = try send(s, InputPacket(type: .input, dx: 1))
+        XCTAssertNotNil(a.inputCounter)
+        XCTAssertNil(k.inputCounter)
+        XCTAssertEqual(b.inputCounter, a.inputCounter.map { $0 + 2 })
+    }
+
     func testFullFlowInputKeepaliveAndStatus() throws {
         let s = try connect()
         let first = try send(s, InputPacket(type: .input, buttons: .left, dx: 5, dy: -5))

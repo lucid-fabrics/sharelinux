@@ -36,6 +36,41 @@ final class MouseControllerTests: XCTestCase {
         XCTAssertEqual(poster.downs, 1, "a fresh press after all-up is a real one")
     }
 
+    // Late packets: an older input packet arriving after a newer one never changes buttons.
+
+    func testALatePressAfterReleaseIsIgnored() {
+        controller.apply(input([.left]), counter: 10)
+        controller.apply(input(), counter: 12)  // the release
+        poster.log.removeAll()
+        controller.apply(input([.left], dx: 32), counter: 11)  // the repeat, overtaken by the release
+        XCTAssertEqual(poster.log, [], "a late packet is dropped whole, motion included")
+        XCTAssertEqual(controller.held, [])
+        controller.apply(input([.left]), counter: 13)
+        XCTAssertEqual(poster.downs, 1, "a newer press is real")
+    }
+
+    func testALateAllUpAfterADenyDoesNotClearTheLatch() {
+        controller.apply(input([.left]), counter: 5)
+        controller.noteInput(counter: 7)  // a denied packet, newer than the late all-up
+        controller.releaseAll(.denied)
+        poster.log.removeAll()
+        controller.apply(input(), counter: 6)  // the delayed all-up
+        controller.apply(input([.left]), counter: 8)  // the still-held mask of a newer packet
+        XCTAssertEqual(poster.downs, 0, "a late all-up must not turn a held mask into a press")
+        XCTAssertTrue(controller.needsUpFirst)
+        controller.apply(input(), counter: 9)  // a newer all-up clears it
+        controller.apply(input([.left]), counter: 10)
+        XCTAssertEqual(poster.downs, 1)
+    }
+
+    func testANewSessionResetsTheCounterFloor() {
+        controller.apply(input(), counter: 900)
+        controller.requireUpFirst()  // the new session counts from zero
+        controller.apply(input(), counter: 0)
+        controller.apply(input([.left]), counter: 1)
+        XCTAssertEqual(poster.downs, 1)
+    }
+
     func testANewSessionNeedsAllUpBeforeItsFirstPress() {
         controller.requireUpFirst()
         controller.apply(input([.left]))

@@ -39,6 +39,9 @@ public enum EndReason: Equatable, Sendable {
 public struct ChannelResult: Equatable, Sendable {
     public var reply: Data?
     public var events: [ChannelEvent]
+    /// Transport counter of the authenticated INPUT packet this datagram carried (accepted or
+    /// denied), nil for anything else. The runtime uses it to ignore late input packets.
+    public var inputCounter: UInt64? = nil
 }
 
 /// Per-source handshake limiter with bounded memory: at most
@@ -442,6 +445,7 @@ public final class HelperChannel {
             }
         }
         active = live
-        return ChannelResult(reply: reply, events: events)
+        let counter = packet.type == .input ? Data(datagram).le64(at: 1) : nil
+        return ChannelResult(reply: reply, events: events, inputCounter: counter)
     }
 }

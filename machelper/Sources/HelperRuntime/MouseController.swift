@@ -42,7 +42,17 @@ public final class MouseController {
     /// buttons up: the Linux side may still be holding a button the Mac already let go of (its
     /// last "deny" status can be lost or rate limited), and that must not become a new press. The
     /// first packet with every button up clears it, and a press after that is a real one.
+    ///
+    /// Only an all-up from a packet NEWER than the one that set the latch clears it: a late
+    /// all-up (reordered on the network) must not clear it and turn the still-held mask of a
+    /// newer packet into a press. See `newestCounter`.
     public private(set) var needsUpFirst = false
+    /// Transport counter of the newest input packet seen in this session (applied or denied).
+    /// An input packet with a lower counter is late: it is dropped whole (button mask AND
+    /// motion; dropping motion is the simple choice, a late delta is a few points at most).
+    /// The latch records this value when it is set, and any packet newer than it is, by
+    /// construction, newer than whatever set the latch. nil: no counter seen yet.
+    private var newestCounter: UInt64?
     /// Called when `injecting` changes (menu bar icon).
     public var onInjectingChange: ((Bool) -> Void)?
     /// Releases that actually posted something, for logs and tests.
@@ -59,8 +69,18 @@ public final class MouseController {
     }
 
     /// Posts one accepted input packet (already clamped by the channel).
-    public func apply(_ p: InputPacket) {
+    ///
+    /// `counter` is the packet's transport counter. A packet older than the newest input
+    /// packet already seen in this session is ignored (see `newestCounter`); nil skips the check.
+    public func apply(_ p: InputPacket, counter: UInt64? = nil) {
         let now = clock()
+        if let c = counter {
+            if let n = newestCounter, c < n {
+                lastActivity = now  // the link is alive, but this packet says nothing new
+                return
+            }
+            newestCounter = c
+        }
         lastActivity = now
         lastInput = now
         setInjecting(true)
@@ -108,7 +128,14 @@ public final class MouseController {
     }
 
     /// A new session starts: its first press must follow a packet with every button up.
-    public func requireUpFirst() { needsUpFirst = true }
+    public func requireUpFirst() { needsUpFirst = true; newestCounter = nil }
+
+    /// An input packet was refused (denied): it still counts as the newest seen, so an older
+    /// one arriving after the deny stays late.
+    public func noteInput(counter: UInt64) {
+        if let n = newestCounter, n >= counter { return }
+        newestCounter = counter
+    }
 
     /// Releases every held button and forgets the motion remainder. Safe to
     /// call at any time, any number of times.
