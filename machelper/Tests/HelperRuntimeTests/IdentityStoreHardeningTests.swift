@@ -59,4 +59,29 @@ final class IdentityStoreHardeningTests: XCTestCase {
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: dir.path), [])
         XCTAssertEqual(try String(contentsOf: elsewhere, encoding: .utf8), "keep", "the link target is untouched")
     }
+
+    /// The gap between "the directory is vetted" and "the stale files are unlinked": the directory
+    /// is swapped for a symlink to someone else's folder right there. The unlink must go through the
+    /// vetted descriptor, so the other folder's file with the same name survives.
+    func testSwappingTheDirectoryForASymlinkAfterTheCheckDoesNotRedirectTheUnlink() throws {
+        let dir = tempDir(), moved = tempDir(), victim = tempDir()
+        defer { for u in [dir, moved, victim] { try? FileManager.default.removeItem(at: u) } }
+        try FileManager.default.createDirectory(at: victim, withIntermediateDirectories: false)
+        try Data("precious".utf8).write(to: victim.appendingPathComponent("identity.key"))
+        try Data("precious".utf8).write(to: victim.appendingPathComponent("paired.json"))
+        let store = IdentityStore(directory: dir)
+        try store.prepareDirectory()
+        try Data("stale".utf8).write(to: dir.appendingPathComponent("identity.key"))
+        store.afterVettingForTests = {
+            // What a same-user attacker does in the window: move the real directory away and put a
+            // symlink to a folder holding files with the same names in its place.
+            try? FileManager.default.moveItem(at: dir, to: moved)
+            try? FileManager.default.createSymbolicLink(at: dir, withDestinationURL: victim)
+        }
+        try store.removeStaleLegacyFiles()
+        XCTAssertEqual(
+            Set(try FileManager.default.contentsOfDirectory(atPath: victim.path)), ["identity.key", "paired.json"],
+            "nothing was deleted through the swapped-in link")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: moved.path), [], "the vetted directory was cleaned")
+    }
 }
