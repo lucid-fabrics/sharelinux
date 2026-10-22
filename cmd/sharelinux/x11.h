@@ -41,6 +41,11 @@ gboolean oss_x11_geometry(GtkWidget *widget, int geometry[OSS_GEOMETRY_LEN]);
 // oss_x11_center warps the pointer to the middle of the widget.
 void oss_x11_center(GtkWidget *widget);
 
+// oss_x11_round_trips counts the blocking X requests the lock has made, and
+// oss_x11_geometry_ticks the calls of oss_x11_geometry.
+unsigned long oss_x11_round_trips(void);
+unsigned long oss_x11_geometry_ticks(void);
+
 // oss_x11_confined reports whether barriers are up.
 gboolean oss_x11_confined(void);
 

@@ -901,7 +901,8 @@ func (v *sessionView) setPointerLock(on bool) {
 		lockSink.motion, lockSink.state = nil, nil
 		v.helper.reroute()
 		hint, x, y := v.unlockHint()
-		v.g.app.logger.Debug("pointer lock released", "backend", int(v.lockBackend), "hint", hint, "x", x, "y", y, "mac_x", v.pointerX, "mac_y", v.pointerY)
+		trips, ticks := x11Cost()
+		v.g.app.logger.Debug("pointer lock released", "round_trips", trips, "ticks", ticks, "backend", int(v.lockBackend), "hint", hint, "x", x, "y", y, "mac_x", v.pointerX, "mac_y", v.pointerY)
 		v.screen.unlockPointer(v.lockBackend, hint, x, y)
 		return
 	}

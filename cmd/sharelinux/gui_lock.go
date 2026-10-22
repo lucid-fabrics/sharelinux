@@ -120,6 +120,12 @@ func (s *screenView) unlockPointer(backend lockBackend, hint bool, x, y float64)
 	}
 }
 
+// x11Cost is how many blocking X requests the lock made and how often its
+// geometry was read, since the program began.
+func x11Cost() (roundTrips, ticks uint64) {
+	return uint64(C.oss_x11_round_trips()), uint64(C.oss_x11_geometry_ticks())
+}
+
 // waylandLiveRegions counts the wl_region objects not yet destroyed, for the leak test.
 func waylandLiveRegions() int {
 	return int(C.oss_wl_live_regions())

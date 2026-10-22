@@ -25,6 +25,19 @@ static int barrier_box[4];
 static Display *barrier_display = NULL;
 static GdkDisplay *barrier_gdk_display = NULL;
 
+// Blocking X requests (each waits for the server's answer) are counted so a
+// test and the debug log can show what the lock costs per tick.
+static unsigned long round_trips = 0, geometry_ticks = 0;
+#define ROUND_TRIP() (round_trips++)
+
+unsigned long oss_x11_round_trips(void) {
+	return round_trips;
+}
+
+unsigned long oss_x11_geometry_ticks(void) {
+	return geometry_ticks;
+}
+
 static void drop_barriers(void) {
 	if (barrier_count == 0) {
 		return;
@@ -34,6 +47,7 @@ static void drop_barriers(void) {
 		XFixesDestroyPointerBarrier(barrier_display, barriers[i]);
 	}
 	XSync(barrier_display, False);
+	ROUND_TRIP();
 	gdk_x11_display_error_trap_pop_ignored(barrier_gdk_display);
 	barrier_count = 0;
 }
@@ -65,7 +79,12 @@ gboolean oss_x11_confine(GtkWidget *widget, gboolean on) {
 	Window root = DefaultRootWindow(display), child;
 	XWindowAttributes attributes;
 	int x, y;
-	if (!XGetWindowAttributes(display, window, &attributes) || !XTranslateCoordinates(display, window, root, 0, 0, &x, &y, &child)) {
+	ROUND_TRIP();
+	if (!XGetWindowAttributes(display, window, &attributes)) {
+		return FALSE;
+	}
+	ROUND_TRIP();
+	if (!XTranslateCoordinates(display, window, root, 0, 0, &x, &y, &child)) {
 		return FALSE;
 	}
 	// Barrier coordinates are unsigned, and a window with its shadow can reach past the screen.
@@ -83,6 +102,7 @@ gboolean oss_x11_confine(GtkWidget *widget, gboolean on) {
 	barriers[2] = XFixesCreatePointerBarrier(display, root, x, y - 1, x, bottom + 1, BarrierPositiveX, 0, NULL);
 	barriers[3] = XFixesCreatePointerBarrier(display, root, right, y - 1, right, bottom + 1, BarrierNegativeX, 0, NULL);
 	XSync(display, False);
+	ROUND_TRIP();
 	if (gdk_x11_display_error_trap_pop(gdk_display) != 0) {
 		return FALSE;
 	}
@@ -101,7 +121,12 @@ static gboolean window_box(GtkWidget *widget, GdkSurface *surface, Display *disp
 	Window window = gdk_x11_surface_get_xid(surface), root = DefaultRootWindow(display), child;
 	XWindowAttributes attributes;
 	int x, y;
-	if (!XGetWindowAttributes(display, window, &attributes) || !XTranslateCoordinates(display, window, root, 0, 0, &x, &y, &child)) {
+	ROUND_TRIP();
+	if (!XGetWindowAttributes(display, window, &attributes)) {
+		return FALSE;
+	}
+	ROUND_TRIP();
+	if (!XTranslateCoordinates(display, window, root, 0, 0, &x, &y, &child)) {
 		return FALSE;
 	}
 	box[0] = MAX(x, 1);
@@ -122,7 +147,16 @@ gboolean oss_x11_geometry(GtkWidget *widget, int geometry[OSS_GEOMETRY_LEN]) {
 	Window root = DefaultRootWindow(display), window = gdk_x11_surface_get_xid(surface), child, root_return, child_return;
 	int origin_x, origin_y, pointer_x, pointer_y, win_x, win_y;
 	unsigned int mask;
-	if (!window_box(widget, surface, display, geometry) || !XTranslateCoordinates(display, window, root, 0, 0, &origin_x, &origin_y, &child) || !XQueryPointer(display, root, &root_return, &child_return, &pointer_x, &pointer_y, &win_x, &win_y, &mask)) {
+	geometry_ticks++;
+	if (!window_box(widget, surface, display, geometry)) {
+		return FALSE;
+	}
+	ROUND_TRIP();
+	if (!XTranslateCoordinates(display, window, root, 0, 0, &origin_x, &origin_y, &child)) {
+		return FALSE;
+	}
+	ROUND_TRIP();
+	if (!XQueryPointer(display, root, &root_return, &child_return, &pointer_x, &pointer_y, &win_x, &win_y, &mask)) {
 		return FALSE;
 	}
 	double offset_x = 0, offset_y = 0;
