@@ -233,7 +233,7 @@ func (h *helperUse) engage() {
 	h.link.SetPointerLocked(true)
 	width, _ := v.client.FramebufferSize()
 	v.g.app.logger.Info("mouse helper: routing locked pointer to the helper", "mac_x", v.pointerX, "mac_y", v.pointerY,
-		"view_w", v.viewport().W, "frame_w", width, "scale", h.scale())
+		"view_w", v.viewport().W, "frame_w", width, "scale", h.scale(), "rfb_pointer_sends", v.pointerSends)
 }
 
 // endRouting drops routing by hand (the session is stopping) and does the
@@ -262,7 +262,7 @@ func (h *helperUse) afterDrop() {
 	v.sent, v.sentReports = true, reports
 	v.g.app.logger.Info("mouse helper: routing back to Screen Sharing",
 		"mac_x", v.pointerX, "mac_y", v.pointerY, "sent_x16", h.route.TotalX, "sent_y16", h.route.TotalY,
-		"packets", h.route.Packets, "held_ms", time.Since(h.engagedAt).Milliseconds())
+		"packets", h.route.Packets, "held_ms", time.Since(h.engagedAt).Milliseconds(), "rfb_pointer_sends", v.pointerSends)
 }
 
 func (h *helperUse) cancelFlush() {

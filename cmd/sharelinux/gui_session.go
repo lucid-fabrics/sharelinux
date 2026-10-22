@@ -97,6 +97,9 @@ type sessionView struct {
 	// cursor reports the Mac had made by then.
 	sent        bool
 	sentReports uint64
+	// pointerSends counts the pointer and scroll events sent over Screen Sharing
+	// (logged around helper routing, which must send none).
+	pointerSends uint64
 
 	// overScreen is set while the pointer is over the picture's widget.
 	overScreen bool
@@ -1196,6 +1199,7 @@ func (v *sessionView) sendPointer(x, y int) {
 		return
 	}
 	v.sent, v.sentReports = true, v.h.cursorReports()
+	v.pointerSends++
 	v.live.echo.Sent(time.Now())
 	err := v.client.SendPointer(x, y, v.buttons)
 	if err != nil {
@@ -1290,6 +1294,7 @@ func (v *sessionView) onScroll(dx, dy float64) bool {
 		v.helper.scroll(px, py)
 		return true
 	}
+	v.pointerSends++
 	err := v.client.SendScroll(v.pointerX, v.pointerY, px, py)
 	if err != nil {
 		v.g.app.logger.Debug("scroll", "error", err)
