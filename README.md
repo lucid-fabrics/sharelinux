@@ -102,6 +102,12 @@ Open **Preferences** (Ctrl+comma) for quality, the Command key (Super or Alt), n
 
 `cmd/sharelinux/Dockerfile` builds the viewer on Debian 14 and runs a check under Xvfb; `cmd/sharelinux/internal/mockrfb` is a tiny RFB server (`-size WxH`, `-damage N`) for checking it without a Mac.
 
+#### Mac helper: using it from Linux
+
+Once this computer is paired (Preferences, Keyboard, Mouse helper), Exclusive mode uses the helper by itself whenever the pointer is locked and the Mac you are connected to is the one you paired. The mouse then moves the Mac's pointer by real deltas, so games and 3D tools get smooth, unlimited movement; the keyboard stays on Screen Sharing. A chip in the session header says what is going on: "Helper not paired", "Helper waiting", "Helper active", "Helper off on the Mac" (Allow raw mouse is off there) or "Helper unavailable" (the app is not running, the Mac is locked, or it asked for Accessibility access). Hover it for what to do.
+
+Whenever the helper is not usable, or you release the lock, the mouse goes back to ordinary Screen Sharing within a quarter of a second or so, from where the Mac's pointer is, and a button that was held is let go instead of left pressed. The switch "Use the mouse helper when available" in the same Preferences group turns this off. Nothing is ever sent to a Mac other than the one the session is connected to.
+
 #### Mac helper: your keys and what protects them
 
 The raw-mouse helper (`machelper`, a menu bar app on the Mac) trusts a Linux device only after you paired it at the Mac and compared the code on both screens. Its own key and the list of paired devices live in your login Keychain.
