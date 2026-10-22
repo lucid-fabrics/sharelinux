@@ -211,9 +211,7 @@ public final class PairingWindowController: NSWindowController, NSWindowDelegate
         confirm.keyEquivalent = ""
         confirm.refusesFirstResponder = true
         confirm.target = self; confirm.action = #selector(confirmClicked)
-        reject.keyEquivalent = "\u{1b}"  // Esc rejects
         reject.target = self; reject.action = #selector(rejectClicked)
-        cancel.keyEquivalent = "\u{1b}"
         cancel.target = self; cancel.action = #selector(cancelClicked)
         unlock.target = self; unlock.action = #selector(unlockClicked)
         let spacer = NSView()
@@ -339,6 +337,9 @@ public final class PairingWindowController: NSWindowController, NSWindowDelegate
         confirm.isHidden = !showsConfirm
         reject.isHidden = !showsConfirm
         cancel.isHidden = !waiting
+        // Esc belongs to whichever of the two is on screen: reject a code, or cancel the wait.
+        reject.keyEquivalent = showsConfirm ? "\u{1b}" : ""
+        cancel.keyEquivalent = waiting ? "\u{1b}" : ""
         var locked = false
         if case .lockedOut = s.phase { locked = true }
         unlock.isHidden = !locked
@@ -437,7 +438,7 @@ public final class PairingWindowController: NSWindowController, NSWindowDelegate
     }
 
     @objc private func rejectClicked() { onReject() }
-    @objc private func cancelClicked() { onClose(); window?.close() }
+    @objc private func cancelClicked() { window?.close() }  // windowWillClose tells the coordinator
 
     @objc private func unlockClicked() {
         let alert = NSAlert()

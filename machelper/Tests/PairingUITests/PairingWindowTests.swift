@@ -68,6 +68,23 @@ final class PairingWindowTests: XCTestCase {
         XCTAssertTrue(confirmed.isEmpty)
     }
 
+    func testEscCancelsAWaitingPairingAndOnlyThen() throws {
+        var closed = 0
+        controller.onClose = { closed += 1 }
+        var waiting = PairingStatus()
+        waiting.phase = .waiting
+        controller.update(waiting)
+        XCTAssertEqual(controller.reject.keyEquivalent, "", "no code, nothing to reject")
+        let window = try XCTUnwrap(controller.window)
+        let esc = try XCTUnwrap(
+            NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
+        _ = window.performKeyEquivalent(with: esc)
+        XCTAssertGreaterThanOrEqual(closed, 1, "Esc ended the wait")
+        XCTAssertEqual(rejected, 0)
+    }
+
     // MARK: no focus stealing
 
     func testANewAttemptNeverShowsOrFocusesTheWindow() throws {
