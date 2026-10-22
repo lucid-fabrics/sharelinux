@@ -25,6 +25,8 @@ public struct PairingStatus: Equatable, Sendable {
         case storeFailed(String)
         /// A Confirm (or a new window) was refused; the reason is shown.
         case refused(ConfirmRefusal)
+        /// "Unlock pairing" was refused because a helper session is live.
+        case unlockRefusedSessionActive
     }
     public var phase: Phase = .closed
     /// Another address tried to start or finish a pairing while one was in progress.
@@ -239,10 +241,20 @@ public final class PairingCoordinator {
         publish()
     }
 
-    /// The owner clears the cooldown on purpose (the UI asks first).
-    public func resetCooldown() {
+    /// The owner clears the cooldown on purpose (the UI asks first). Refused while a helper
+    /// session is live: the clicks that reach the dialog could be that session's.
+    /// - Returns: whether the cooldown was cleared.
+    @discardableResult
+    public func resetCooldown() -> Bool {
+        track()
+        if isSessionActive() {
+            notice = .unlockRefusedSessionActive
+            publish()
+            return false
+        }
         ledger.reset()
         publish()
+        return true
     }
 
     /// Removes a paired device. The runtime then drops its live session.

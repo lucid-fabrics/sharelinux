@@ -63,6 +63,8 @@ public enum PairingText {
         if let n = s.notice, case .refused(let r) = n { return refusal(r) }
         switch s.notice {
         case .refused: return nil
+        case .unlockRefusedSessionActive:
+            return "A Linux device is using the mouse helper right now, so pairing cannot be unlocked. Try again after that session ends."
         case .paired(let name): return "Paired with \(name)."
         case .rejected: return "Rejected. Nothing was saved. You can start again from the Linux device."
         case .expired: return "The pairing window closed. Open it again to pair."
@@ -81,7 +83,7 @@ public enum PairingText {
     public static func isWarning(_ s: PairingStatus) -> Bool {
         if s.anotherDeviceTrying || s.nameCollision != nil && s.notice == nil { return true }
         switch s.notice {
-        case .refused, .storeFailed: return true
+        case .refused, .storeFailed, .unlockRefusedSessionActive: return true
         case .paired, .rejected, .expired, .closedAfterFailures: return false
         case nil: return s.ignoredRecords > 0
         }

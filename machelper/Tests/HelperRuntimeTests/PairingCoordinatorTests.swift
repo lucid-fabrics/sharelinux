@@ -135,6 +135,27 @@ final class PairingCoordinatorTests: XCTestCase {
         XCTAssertTrue(rig.coordinator!.open())
     }
 
+    /// Follow-up audit, finding 8: unlocking runs from a dialog whose clicks could be the live session's.
+    func testTheCooldownCannotBeResetWhileASessionIsLive() throws {
+        let rig = RuntimeRig(pairing: true)
+        for _ in 0..<3 {
+            XCTAssertTrue(rig.coordinator!.open())
+            for _ in 0..<3 {
+                advance(rig, 2)
+                try pair(rig, try LinuxPairer())
+                rig.coordinator?.reject()
+            }
+        }
+        var live = true
+        rig.coordinator?.isSessionActive = { live }
+        XCTAssertEqual(rig.coordinator?.resetCooldown(), false)
+        guard case .lockedOut = rig.coordinator!.status.phase else { return XCTFail("unlocked during a live session") }
+        XCTAssertEqual(rig.coordinator?.status.notice, .unlockRefusedSessionActive)
+        live = false
+        XCTAssertEqual(rig.coordinator?.resetCooldown(), true)
+        XCTAssertTrue(rig.coordinator!.open())
+    }
+
     func testTheWindowClosesByItselfAfterTwoMinutes() throws {
         let rig = RuntimeRig(pairing: true)
         rig.coordinator?.open()
