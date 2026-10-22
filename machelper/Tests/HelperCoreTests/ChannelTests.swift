@@ -213,6 +213,20 @@ final class ChannelTests: XCTestCase {
         XCTAssertNil(try send(s, InputPacket(type: .input)).reply)
     }
 
+    func testADenyThatLiftsAHeldButtonIsAlwaysTold() throws {
+        let s = try connect()
+        XCTAssertTrue(try send(s, InputPacket(type: .input, buttons: [.left])).events.contains(.input(InputPacket(type: .input, buttons: [.left]))))
+        XCTAssertNotNil(try send(s, InputPacket(type: .keepalive)).reply)  // a status just went out
+        env.mono += 0.05
+        env.toggle = false
+        let r = try send(s, InputPacket(type: .input, buttons: [.left]))
+        XCTAssertEqual(r.events.last, .denied(.disabled))
+        let reply = try XCTUnwrap(r.reply, "the deny that released a button must reach the other side")
+        XCTAssertEqual(try StatusPacket.decode(try s.open(reply, maxPlaintext: 2, now: env.mono)).state, .disabled)
+        env.mono += 0.05
+        XCTAssertNil(try send(s, InputPacket(type: .input, buttons: [.left])).reply, "later denies stay throttled")
+    }
+
     func testInputRateLimit() throws {
         let s = try connect()
         var delivered = 0, limited = 0

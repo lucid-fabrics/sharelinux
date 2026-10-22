@@ -37,6 +37,12 @@ public final class MouseController {
     private var lastInput = -Double.infinity
     private var lastDown: (button: MouseButton, at: Double, count: Int)?
     private var movedSinceDown = 0
+    /// "Buttons must be seen up first". Set by every release (deny, kill, gate flip, end, sleep,
+    /// timeout) and by a session start. While set, a packet with buttons down is applied with the
+    /// buttons up: the Linux side may still be holding a button the Mac already let go of (its
+    /// last "deny" status can be lost or rate limited), and that must not become a new press. The
+    /// first packet with every button up clears it, and a press after that is a real one.
+    public private(set) var needsUpFirst = false
     /// Called when `injecting` changes (menu bar icon).
     public var onInjectingChange: ((Bool) -> Void)?
     /// Releases that actually posted something, for logs and tests.
@@ -69,7 +75,10 @@ public final class MouseController {
         }
 
         // Buttons from the full mask: releases first so a swapped button never overlaps.
-        let want = p.buttons
+        var want = p.buttons
+        if needsUpFirst {
+            if want.isEmpty { needsUpFirst = false } else { want = [] }
+        }
         for b in MouseButton.allCases where held.contains(b.mask) && !want.contains(b.mask) {
             held.remove(b.mask)
             poster.postButton(b, down: false, clickState: lastDown?.button == b ? (lastDown?.count ?? 1) : 1)
@@ -98,11 +107,15 @@ public final class MouseController {
         lastActivity = clock()
     }
 
+    /// A new session starts: its first press must follow a packet with every button up.
+    public func requireUpFirst() { needsUpFirst = true }
+
     /// Releases every held button and forgets the motion remainder. Safe to
     /// call at any time, any number of times.
     public func releaseAll(_ reason: ReleaseReason) {
         let wasHeld = held, last = lastDown
         held = []
+        needsUpFirst = true
         remX = 0; remY = 0
         lastDown = nil
         for b in MouseButton.allCases where wasHeld.contains(b.mask) {

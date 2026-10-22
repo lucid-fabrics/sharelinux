@@ -77,6 +77,7 @@ final class KillSwitchFloodTests: XCTestCase {
         _ = try hs.readMessage(reply.dropFirst())
         let t = TransportSession(keys: try hs.split(), now: now())
         send(t, InputPacket(type: .keepalive))
+        send(t, InputPacket(type: .input))  // every button up first, or the latch swallows the press
         return t
     }
 

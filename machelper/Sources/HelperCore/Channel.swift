@@ -129,6 +129,10 @@ public final class HelperChannel {
         let peerKey: Data
         var lastRx: Double
         var lastStatus: Double = -.infinity
+        /// The last accepted input packet had a button down, so the Mac is holding one. A deny
+        /// that lifts it must always be told to the other side (it is never rate limited away),
+        /// or the Linux side keeps pressing a button the Mac no longer holds.
+        var buttonsDown = false
         /// Where the last authenticated packet of this session came from. nil
         /// until the session authenticated a packet; never taken from an
         /// initiation, which does not prove anything about later datagrams.
@@ -413,8 +417,8 @@ public final class HelperChannel {
         let decision = Gate.evaluate(inputs, now: now)
         var reply: Data?
 
-        func status(_ s: HelperState) {
-            guard now - live.lastStatus >= ChannelLimits.statusMinInterval else { return }
+        func status(_ s: HelperState, force: Bool = false) {
+            guard force || now - live.lastStatus >= ChannelLimits.statusMinInterval else { return }
             if let sealed = try? live.session.seal(StatusPacket(state: s).encode(), now: now) {
                 reply = sealed
                 live.lastStatus = now
@@ -427,10 +431,13 @@ public final class HelperChannel {
             active = nil
             return ChannelResult(reply: nil, events: events + [.ended(.unpaired), .dropped(.unpaired)])
         case .deny(let s):
-            status(s)
+            let releasing = live.buttonsDown
+            live.buttonsDown = false
+            status(s, force: releasing)
             events.append(.denied(s))
         case .accept:
             if packet.type == .keepalive { status(.active); events.append(.keepalive) } else {
+                live.buttonsDown = !packet.clamped().buttons.isEmpty
                 events.append(.input(packet.clamped()))
             }
         }

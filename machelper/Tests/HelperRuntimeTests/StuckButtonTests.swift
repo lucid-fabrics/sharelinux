@@ -42,6 +42,42 @@ final class StuckButtonTests: XCTestCase {
         XCTAssertEqual(after, [], "\(name): nothing posted afterwards", file: file, line: line)
     }
 
+    // MARK: a lost "all up" must not become a new press
+
+    func testHeldMaskAfterALockIsNotAPressUntilTheLinuxSideLetsGo() {
+        startDrag()
+        rig.session.locked = true
+        rig.runtime.refreshEnvironment()
+        rig.session.locked = false
+        rig.runtime.refreshEnvironment()
+        rig.poster.log.removeAll()
+        let posted = rig.posted {
+            for _ in 0..<5 {
+                rig.run(0.05)
+                rig.send(client, InputPacket(type: .input, buttons: [.left], dx: 16, dy: 0))
+            }
+        }
+        XCTAssertEqual(posted.filter { $0.contains("down") }, [], "the still-held mask must not press again")
+        XCTAssertEqual(rig.runtime.controller.held, [])
+        rig.send(client, InputPacket(type: .input))
+        rig.send(client, InputPacket(type: .input, buttons: [.left]))
+        XCTAssertEqual(rig.runtime.controller.held, [.left], "a fresh press after all-up works")
+    }
+
+    func testAKilledAndReEnabledHelperDoesNotPressWithoutAFreshPress() {
+        startDrag()
+        rig.runtime.killSwitch()
+        rig.runtime.setAllowRawMouse(true)
+        rig.run(0.1)
+        rig.poster.log.removeAll()
+        rig.allUpFirst = false
+        let c2 = try! rig.connect()
+        let posted = rig.posted {
+            for _ in 0..<3 { rig.send(c2, InputPacket(type: .input, buttons: [.left], dx: 16, dy: 0)) }
+        }
+        XCTAssertEqual(posted.filter { $0.contains("down") }, [])
+    }
+
     // MARK: the gate says no
 
     func testScreenLockedReleasesAndStopsAtOnce() {

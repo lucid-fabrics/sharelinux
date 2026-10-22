@@ -80,6 +80,7 @@ final class GuardedPosterTests: XCTestCase {
         rig.runtime.setAllowRawMouse(true)
         rig.run(0.1)
         XCTAssertNil(rig.runtime.state.badgeText)
+        rig.allUpFirst = false
         let c = try! rig.connect()
         XCTAssertNil(rig.runtime.state.badgeText, "connected but nothing posted yet")
         rig.send(c, InputPacket(type: .input, dx: 32, dy: 0))

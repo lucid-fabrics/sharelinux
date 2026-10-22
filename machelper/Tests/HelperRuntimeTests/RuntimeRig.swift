@@ -129,8 +129,14 @@ final class RuntimeRig {
         _ = try hs.readMessage(reply.dropFirst())
         let client = Client(session: TransportSession(keys: try hs.split(), now: mono))
         _ = send(client, InputPacket(type: .keepalive), from: source)
+        // A session's first press must follow a packet with every button up (the latch in
+        // `MouseController`); a real client always opens with a plain move or a keepalive.
+        if allUpFirst { _ = send(client, InputPacket(type: .input), from: source) }
         return client
     }
+
+    /// Off in the tests that check the latch itself.
+    var allUpFirst = true
 
     /// Like `connect` but nil when the Mac does not answer the handshake (an
     /// unpaired key), without recording a failure.

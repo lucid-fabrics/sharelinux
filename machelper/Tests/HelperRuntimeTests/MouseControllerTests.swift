@@ -21,6 +21,30 @@ final class MouseControllerTests: XCTestCase {
         InputPacket(type: .input, buttons: buttons, dx: dx, dy: dy, sx: sx, sy: sy)
     }
 
+    // The latch: after a release the Linux side may still be holding, and that is no new press.
+
+    func testAHeldMaskAfterAReleaseIsNotAPressUntilAllUpIsSeen() {
+        controller.apply(input([.left]))
+        XCTAssertEqual(poster.downs, 1)
+        controller.releaseAll(.denied)
+        poster.log.removeAll()
+        for _ in 0..<5 { controller.apply(input([.left], dx: 16)) }  // the repeat of the held mask
+        XCTAssertEqual(poster.downs, 0, "a held mask after a deny must not press again")
+        XCTAssertEqual(controller.held, [])
+        controller.apply(input())  // all up seen
+        controller.apply(input([.left]))
+        XCTAssertEqual(poster.downs, 1, "a fresh press after all-up is a real one")
+    }
+
+    func testANewSessionNeedsAllUpBeforeItsFirstPress() {
+        controller.requireUpFirst()
+        controller.apply(input([.left]))
+        XCTAssertEqual(poster.downs, 0)
+        controller.apply(input())
+        controller.apply(input([.left]))
+        XCTAssertEqual(poster.downs, 1)
+    }
+
     func testSubPixelRemainderCarriesBetweenPackets() {
         for _ in 0..<16 { controller.apply(input(dx: 1)) }
         XCTAssertEqual(poster.log, ["move 1 0 held=0"], "sixteen sixteenths make one point, once")

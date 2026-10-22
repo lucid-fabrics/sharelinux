@@ -274,6 +274,7 @@ public final class HelperRuntime {
                 // keys changed, nothing else in this datagram's events is acted on either (the
                 // same datagram can carry the first input packet of the session).
                 if !checkKeys() { return }
+                controller.requireUpFirst()
                 activeKey = key; activeSource = source; sharingSeen = false
                 acceptedInputs = 0; deniedInputs = 0; droppedDatagrams = 0
                 lastDeny = nil; lastLoggedDeny = nil
