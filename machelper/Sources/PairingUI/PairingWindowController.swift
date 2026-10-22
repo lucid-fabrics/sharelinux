@@ -320,7 +320,11 @@ public final class PairingWindowController: NSWindowController, NSWindowDelegate
             let triplets = String(c.prefix(3)) + "\u{2009}" + String(c.suffix(3))
             code.stringValue = triplets
             deviceName.stringValue = d
-            deviceFingerprint.stringValue = s.pendingKey.map(PairingText.fingerprint) ?? ""
+            if let peer = s.pendingKey, let own = s.ownKey {
+                deviceFingerprint.stringValue = PairingText.fingerprintLines(mac: own, computer: peer)
+            } else {
+                deviceFingerprint.stringValue = s.pendingKey.map(PairingText.fingerprint) ?? ""
+            }
             if let k = s.pendingKey { tuple = (c, k) }
         }
         // The one-second clock restarts whenever the code or the device changes.
@@ -439,6 +443,9 @@ public final class PairingWindowController: NSWindowController, NSWindowDelegate
         window.contentMaxSize = NSSize(width: Self.width, height: height)
         content.layoutSubtreeIfNeeded()
     }
+
+    /// The key lines under the device name (tests).
+    var fingerprintText: String { deviceBlock.isHidden ? "" : deviceFingerprint.stringValue }
 
     /// The text of the notice area (tests).
     var noticeText: String { noticeBox.isHidden ? "" : notice.stringValue }

@@ -33,6 +33,8 @@ public struct PairingStatus: Equatable, Sendable {
     public var anotherDeviceTrying = false
     public var notice: Notice?
     public var devices: [PairedDevice] = []
+    /// This Mac's own public key, so the window can show its fingerprint beside the device's.
+    public var ownKey: Data?
     /// The key of the device whose code is on screen (set with `.confirm`). A
     /// Confirm must name this key and that code, or it is refused.
     public var pendingKey: Data?
@@ -114,6 +116,7 @@ public final class PairingCoordinator {
 
     public var status: PairingStatus {
         var s = PairingStatus()
+        s.ownKey = staticKey.publicKey.rawRepresentation
         s.devices = devices
         s.anotherDeviceTrying = anotherDeviceTrying
         s.notice = notice

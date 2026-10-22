@@ -315,7 +315,7 @@ func (p *pairDialog) begin() {
 			}
 			onMain(func() {
 				p.code.SetMarkup(`<span size="300%" weight="bold">` + code[:3] + " " + code[3:] + `</span>`)
-				p.codeNote.SetLabel("This computer shows up on the Mac as " + quoteName(selfName) + ".\nThe Mac's key: " + attempt.Fingerprint())
+				p.codeNote.SetLabel("This computer shows up on the Mac as " + quoteName(selfName) + ".\n" + attempt.FingerprintLines())
 				p.stack.SetVisibleChildName("compare")
 			})
 			<-attempt.Done()

@@ -3,6 +3,15 @@ import XCTest
 @testable import HelperRuntime
 
 final class PairingTextTests: XCTestCase {
+    /// Follow-up audit, finding 5: both sides show both keys under the same two labels. The Go test
+    /// (TestFingerprintLinesMatchTheMacWindow) pins the same string for the same two keys.
+    func testBothFingerprintsAreShownUnderTheSameTwoLabelsAsOnTheLinuxDialog() {
+        let mac = Data(repeating: 1, count: 32), computer = Data(repeating: 2, count: 32)
+        XCTAssertEqual(
+            PairingText.fingerprintLines(mac: mac, computer: computer),
+            "This Mac: 72cd 6e84 22c4 07fb\nThis computer: 7587 7bb4 1d39 3b5f")
+    }
+
     func allStrings() -> [String] {
         var out = [
             PairingText.windowTitle, PairingText.confirmButton, PairingText.rejectButton, PairingText.removeButton,

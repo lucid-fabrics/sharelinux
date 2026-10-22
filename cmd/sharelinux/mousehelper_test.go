@@ -162,6 +162,33 @@ func fakePairing(keys *helperKeys, run *fakeRun, calls *[]string) *helperPairing
 	return pairing
 }
 
+// The Mac window shows the same two lines for the same two keys; the Swift test
+// testBothFingerprintsAreShownUnderTheSameTwoLabelsAsOnTheLinuxDialog pins the same string.
+func TestFingerprintLinesMatchTheMacWindow(t *testing.T) {
+	got := fingerprintLines(bytes.Repeat([]byte{1}, 32), bytes.Repeat([]byte{2}, 32))
+	if got != "This Mac: 72cd 6e84 22c4 07fb\nThis computer: 7587 7bb4 1d39 3b5f" {
+		t.Fatalf("%q", got)
+	}
+}
+
+func TestAnAttemptShowsTheMacsKeyAndThisComputersKey(t *testing.T) {
+	keys := testKeys()
+	macKey := bytes.Repeat([]byte{9}, 32)
+	var calls []string
+	attempt, err := fakePairing(keys, newFakeRun(macKey), &calls).Begin(context.Background(), "studio.local", "Desk PC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	own, err := keys.ClientKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "This Mac: " + keyFingerprint(macKey) + "\nThis computer: " + keyFingerprint(own.Public)
+	if got := attempt.FingerprintLines(); got != want {
+		t.Fatalf("%q want %q", got, want)
+	}
+}
+
 func TestConfirmPinsTheMacKeyAndRejectPinsNothing(t *testing.T) {
 	keys := testKeys()
 	macKey := bytes.Repeat([]byte{9}, 32)

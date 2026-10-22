@@ -246,6 +246,8 @@ type pairingAttempt struct {
 	run     pairingRunner
 	address string
 	keys    *helperKeys
+	// own is this computer's public key.
+	own []byte
 }
 
 // Begin starts one attempt. It is called from a click and from nowhere else.
@@ -275,7 +277,7 @@ func (h *helperPairing) Begin(ctx context.Context, address, deviceName string) (
 		return nil, err
 	}
 	h.begun++
-	a := &pairingAttempt{owner: h, run: run, address: normalized, keys: h.keys}
+	a := &pairingAttempt{owner: h, run: run, address: normalized, keys: h.keys, own: static.Public}
 	h.active = a
 	return a, nil
 }
@@ -289,9 +291,16 @@ func (a *pairingAttempt) Done() <-chan struct{} { return a.run.Done() }
 // Err is why it failed, nil if it did not.
 func (a *pairingAttempt) Err() error { return a.run.Err() }
 
-// Fingerprint is the short fingerprint of the Mac's key, to show next to the
-// code. Only meaningful after the code has been delivered.
-func (a *pairingAttempt) Fingerprint() string { return keyFingerprint(a.run.PeerKey()) }
+// FingerprintLines is both keys, worded exactly as the Mac's pairing window
+// words them: "This Mac" is the Mac, "This computer" is this one. The person
+// reads the two lines here and on the Mac and sees they are the same.
+func (a *pairingAttempt) FingerprintLines() string {
+	return fingerprintLines(a.run.PeerKey(), a.own)
+}
+
+func fingerprintLines(mac, computer []byte) string {
+	return "This Mac: " + keyFingerprint(mac) + "\nThis computer: " + keyFingerprint(computer)
+}
 
 // Confirm is the person saying the codes match: the Mac's key is pinned in the keyring.
 func (a *pairingAttempt) Confirm(name string) (pairedMac, error) {

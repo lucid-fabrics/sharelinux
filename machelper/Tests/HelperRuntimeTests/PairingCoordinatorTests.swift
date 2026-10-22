@@ -156,6 +156,11 @@ final class PairingCoordinatorTests: XCTestCase {
         XCTAssertTrue(rig.coordinator!.open())
     }
 
+    func testTheStatusCarriesThisMacsPublicKey() {
+        let rig = RuntimeRig(pairing: true)
+        XCTAssertEqual(rig.coordinator?.status.ownKey, rig.macKey.publicKey.rawRepresentation)
+    }
+
     func testTheWindowClosesByItselfAfterTwoMinutes() throws {
         let rig = RuntimeRig(pairing: true)
         rig.coordinator?.open()

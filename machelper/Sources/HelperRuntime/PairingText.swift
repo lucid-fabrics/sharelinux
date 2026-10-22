@@ -19,6 +19,13 @@ public enum PairingText {
     /// "1a2b 3c4d 5e6f 7a8b": the same string the Linux side shows for the key.
     public static func fingerprint(_ key: Data) -> String { DeviceIdentity.fingerprint(key) }
 
+    /// Both keys, worded the same on both screens ("This Mac" is the Mac, "This computer" is the
+    /// Linux machine), so the person can read the two lines on the Mac and on the Linux dialog
+    /// and see that they are the same.
+    public static func fingerprintLines(mac: Data, computer: Data) -> String {
+        "This Mac: \(fingerprint(mac))\nThis computer: \(fingerprint(computer))"
+    }
+
     /// One sentence for a refused Confirm.
     public static func refusal(_ r: ConfirmRefusal) -> String {
         switch r {

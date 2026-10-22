@@ -33,6 +33,14 @@ final class PairingWindowTests: XCTestCase {
         return s
     }
 
+    func testTheWindowShowsThisMacsKeyAndTheComputersKey() {
+        var s = confirmStatus(key: Data(repeating: 2, count: 32))
+        s.ownKey = Data(repeating: 1, count: 32)
+        controller.update(s)
+        controller.renderPNG()
+        XCTAssertEqual(controller.fingerprintText, "This Mac: 72cd 6e84 22c4 07fb\nThis computer: 7587 7bb4 1d39 3b5f")
+    }
+
     // MARK: Enter must never confirm
 
     func testConfirmIsNotTheDefaultButtonAndHasNoKeyEquivalent() throws {
