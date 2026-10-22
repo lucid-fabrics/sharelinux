@@ -34,6 +34,9 @@ type settings struct {
 	HiDPI            bool   `json:"hidpi"`
 	HDR              bool   `json:"hdr"`
 	Video            string `json:"video"`
+	// MouseHelper lets a paired Mac helper carry the locked pointer. It starts
+	// on: pairing is the person's opt-in, and a file without the key keeps it on.
+	MouseHelper bool `json:"mouse_helper"`
 }
 
 func defaultSettings() settings {
@@ -45,6 +48,7 @@ func defaultSettings() settings {
 		SharedClipboard:  true,
 		VirtualSize:      virtualSizeWindow,
 		Video:            string(videoAuto),
+		MouseHelper:      true,
 	}
 }
 

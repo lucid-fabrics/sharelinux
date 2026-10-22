@@ -177,3 +177,25 @@ func TestVideoSettingSanitized(t *testing.T) {
 		}
 	}
 }
+
+func TestSettingsMouseHelperIsOnUnlessTheFileSaysOff(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	store := &settingsStore{path: path}
+	got, err := store.Load()
+	if err != nil || !got.MouseHelper {
+		t.Fatalf("no file: %+v %v", got, err)
+	}
+	if err := os.WriteFile(path, []byte(`{"show_stats": true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = store.Load(); !got.MouseHelper {
+		t.Fatal("a file from before the setting existed turned the helper off")
+	}
+	got.MouseHelper = false
+	if err := store.Save(got); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = store.Load(); got.MouseHelper {
+		t.Fatal("off did not survive a save")
+	}
+}
