@@ -3,6 +3,7 @@ package machelper
 import (
 	"errors"
 	"net"
+	"sync"
 	"testing"
 	"time"
 )
@@ -98,5 +99,34 @@ func TestLinkStillHeldButtonIsNotPressedAgainByANewSession(t *testing.T) {
 	time.Sleep(400 * time.Millisecond)
 	if n := m2.pressesDown(); n < 3 {
 		t.Fatalf("%d presses after a fresh press, want it repeated", n)
+	}
+}
+
+// A held-button repeat takes its sequence number and mask together with the send, so a release
+// made at the same moment can never go out first and leave the Mac to see release, then press.
+func TestLinkRepeatNeverOvertakesARelease(t *testing.T) {
+	m := newFakeMac(t)
+	timing := fastTiming()
+	timing.RepeatHeld = time.Nanosecond
+	link, log := startTestLink(t, m, timing)
+	log.await(t, 2*time.Second, isActive)
+	const rounds = 3000
+	for i := 0; i < rounds; i++ {
+		if err := link.Send(InputPacket{Buttons: ButtonLeft}); err != nil {
+			t.Fatal(err)
+		}
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); link.repeatHeld() }()
+		go func() { defer wg.Done(); link.Send(InputPacket{}) }()
+		wg.Wait()
+	}
+	time.Sleep(300 * time.Millisecond)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := 1; i < len(m.inputs); i++ {
+		if m.inputs[i].Seq <= m.inputs[i-1].Seq {
+			t.Fatalf("packet seq %d arrived after seq %d: a repeat overtook a newer send", m.inputs[i].Seq, m.inputs[i-1].Seq)
+		}
 	}
 }

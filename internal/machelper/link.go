@@ -138,6 +138,11 @@ type Link struct {
 	cfg  LinkConfig
 	conn net.Conn
 
+	// sendMu orders sends: the sequence number and button mask are taken and the datagram
+	// is sealed and written under it, so a held-button repeat can never overtake a newer
+	// release (the Mac would see release, then press). Taken before mu, never inside it.
+	sendMu sync.Mutex
+
 	mu        sync.Mutex
 	sess      *Session
 	prev      *Session
@@ -237,6 +242,8 @@ func (l *Link) flags() uint8 {
 // Send seals and sends one input packet. A refused datagram (the helper's port
 // is closed) marks the link down at once and is returned as an error.
 func (l *Link) Send(p InputPacket) error {
+	l.sendMu.Lock()
+	defer l.sendMu.Unlock()
 	l.mu.Lock()
 	if l.closed || l.sess == nil {
 		l.mu.Unlock()
@@ -526,6 +533,8 @@ type rekeyAttempt struct {
 
 // repeatHeld sends the held buttons again as input (see LinkTiming.RepeatHeld).
 func (l *Link) repeatHeld() {
+	l.sendMu.Lock()
+	defer l.sendMu.Unlock()
 	l.mu.Lock()
 	sess := l.sess
 	if sess == nil || l.buttons == 0 || time.Since(l.lastInput) < l.cfg.Timing.RepeatHeld ||
