@@ -29,9 +29,15 @@ You need macOS 13 or later and the Xcode command line tools (`xcode-select --ins
 
 2. Put the app where it will live: copy it to `~/Applications/OSS Mouse Helper.app`. That is the path the LaunchAgent file was filled in for.
 
+   ```
+   mkdir -p ~/Applications && cp -R "build/OSS Mouse Helper.app" ~/Applications/
+   ```
+
 3. Open it once (`open "$HOME/Applications/OSS Mouse Helper.app"`). A pointer icon appears in the menu bar. If your menu bar is crowded the icon can hide behind the notch; the always-on-top badge and the shortcut below work without it.
 
 4. Give it Accessibility access. In its menu choose **Request Accessibility access...**, then in System Settings, Privacy & Security, Accessibility, switch **OSS Mouse Helper** on. Nothing asks for this by itself. Because the build is signed ad hoc, macOS treats every rebuild as a new program and asks again: approve it only right after you rebuilt the helper yourself.
+
+   **Keychain prompts after a rebuild.** For the same reason macOS may ask whether the new build may use the helper's items in your login Keychain. Click **Allow**, not **Always Allow**, and only right after a rebuild you did yourself. If the prompt shows up at any other time, click **Deny** and treat it as an alarm: something other than your rebuild is asking for the helper's keys.
 
 5. Start it at login, one of two ways (not both):
 
@@ -64,7 +70,7 @@ What it does instead is notice. It remembers how its Keychain items looked after
 
 ## Remove it completely
 
-Do these in order. Step 3 is the one people forget.
+Do these in order.
 
 1. **Quit** the app: menu, Quit. This puts every button up first.
 
@@ -75,7 +81,13 @@ Do these in order. Step 3 is the one people forget.
    rm ~/Library/LaunchAgents/io.github.sharelinux.mousehelper.plist
    ```
 
-3. **Delete its Keychain items.** The easy way is to do this before step 1's Quit: open the app, choose **Reset helper keys...** and confirm. It deletes the identity, the paired devices and the removed-devices list, then quits. Or do it by hand in Terminal, exactly these commands (macOS may ask you to allow each deletion):
+3. **Take back the Accessibility grant:**
+
+   ```
+   tccutil reset Accessibility io.github.sharelinux.mousehelper
+   ```
+
+4. **Delete its Keychain items.** The easy way is the app's own: open it again, choose **Reset helper keys...** and confirm. It deletes the identity, the paired devices and the removed-devices list, then quits (do not let it start at login again). Or do it by hand in Terminal, exactly these commands (macOS may ask you to allow each deletion; click Allow):
 
    ```
    security delete-generic-password -s io.github.sharelinux.mousehelper.identity
@@ -83,23 +95,12 @@ Do these in order. Step 3 is the one people forget.
    while security delete-generic-password -s io.github.sharelinux.mousehelper.paired; do :; done
    ```
 
-   The last line removes one item per paired device and stops with "The specified item could not be found in the keychain". That message means it is done.
+   The last line removes one item per paired device and stops with "The specified item could not be found in the keychain". That message means it is done. This is the step people forget.
 
-4. **Take back the Accessibility grant:**
-
-   ```
-   tccutil reset Accessibility io.github.sharelinux.mousehelper
-   ```
-
-5. **Delete the app:**
+5. **Delete the app and what it kept on disk** (no secrets or trust in the files; they hold handshake timestamps, the pairing failure counter and two remembered fingerprints):
 
    ```
    rm -rf "$HOME/Applications/OSS Mouse Helper.app"
-   ```
-
-6. **Delete what it kept on disk** (no secrets or trust in these; they hold handshake timestamps, the pairing failure counter and two remembered fingerprints):
-
-   ```
    rm -rf "$HOME/Library/Application Support/OSS Mouse Helper"
    defaults delete io.github.sharelinux.mousehelper
    rm -f "$HOME/Library/Preferences/io.github.sharelinux.mousehelper.plist"
@@ -107,7 +108,7 @@ Do these in order. Step 3 is the one people forget.
 
    And the build folder in this repository: `rm -rf machelper/build`.
 
-7. **On the Linux computer**, forget the Mac: Preferences, Keyboard, Mouse helper, Remove. To clear the keyring by hand: `secret-tool clear service sharelinux username mouse-helper/macs` and `secret-tool clear service sharelinux username mouse-helper/client-key`.
+6. **On the Linux computer**, forget the Mac: Preferences, Keyboard, Mouse helper, Remove. To clear the keyring by hand: `secret-tool clear service sharelinux username mouse-helper/macs` and `secret-tool clear service sharelinux username mouse-helper/client-key`.
 
 ## For developers
 
