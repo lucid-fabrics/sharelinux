@@ -489,3 +489,32 @@ func TestLinkWrongMacKeyNeverGoesLive(t *testing.T) {
 		}
 	}
 }
+
+func TestLinkSendIsStillAllowedWhileTheHelperIsOnlyQuiet(t *testing.T) {
+	m := newFakeMac(t)
+	link, log := startTestLink(t, m, fastTiming())
+	log.await(t, 2*time.Second, isActive)
+	m.setMute(true)
+	log.await(t, time.Second, func(s LinkStatus) bool { return s.State == LinkDown && errors.Is(s.Reason, ErrSilent) })
+	// The packet that lifts a held button must still go out.
+	if err := link.Send(InputPacket{}); err != nil {
+		t.Fatalf("send while quiet: %v", err)
+	}
+}
+
+func TestLinkDefaultsGiveTheMacARegularKeepaliveAndNoticeWithinAThirdOfASecond(t *testing.T) {
+	d := LinkTiming{}.withDefaults()
+	if d.Keepalive > 50*time.Millisecond {
+		t.Fatalf("keepalive %v", d.Keepalive)
+	}
+	// The Mac answers at most every 250 ms: a shorter timeout would call a healthy helper lost.
+	if d.StatusTimeout < 250*time.Millisecond+d.Keepalive || d.StatusTimeout > 350*time.Millisecond {
+		t.Fatalf("status timeout %v", d.StatusTimeout)
+	}
+	if d.Retry <= time.Second {
+		t.Fatalf("retry %v: the Mac allows one handshake per second", d.Retry)
+	}
+	if d.RekeyLatest >= MaxSessionAge {
+		t.Fatalf("rekey deadline %v is not before the session expires", d.RekeyLatest)
+	}
+}

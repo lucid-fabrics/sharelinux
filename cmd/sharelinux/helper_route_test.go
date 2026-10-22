@@ -104,12 +104,15 @@ func TestRouteDropWhileAButtonIsHeldLiftsItOnTheMacAndSwallowsTheRelease(t *test
 	if r.decide(in) != routeDropped {
 		t.Fatal("no drop")
 	}
-	if len(log.packets) != 1 {
-		t.Fatalf("%d packets on drop, want the one that lifts the buttons", len(log.packets))
+	if len(log.packets) != 2 {
+		t.Fatalf("%d packets on drop, want the one that lifts the buttons and a repeat of it", len(log.packets))
 	}
-	last := log.packets[0]
-	if last.Buttons != 0 || last.DX != 32 || last.DY != 16 {
-		t.Fatalf("drop packet %+v: buttons must be up and the waiting motion must not be lost", last)
+	first, repeat := log.packets[0], log.packets[1]
+	if first.Buttons != 0 || first.DX != 32 || first.DY != 16 {
+		t.Fatalf("drop packet %+v: buttons must be up and the waiting motion must not be lost", first)
+	}
+	if repeat.Buttons != 0 || repeat.DX != 0 || repeat.DY != 0 {
+		t.Fatalf("repeat %+v: must only say buttons up", repeat)
 	}
 	if !r.swallowRelease(machelper.ButtonLeft) {
 		t.Fatal("the physical release was not swallowed")
@@ -460,5 +463,17 @@ func TestSameMacSpellings(t *testing.T) {
 		if got := sameMac(c.a, c.b, nil); got != c.want {
 			t.Errorf("sameMac(%q, %q) = %v", c.a, c.b, got)
 		}
+	}
+}
+
+func TestDropPositionPrefersAFreshReportElseTheRunningTotal(t *testing.T) {
+	if x, y := dropPosition(7, 7, 100, 200, 10, 20); x != 10 || y != 20 {
+		t.Fatalf("no new report: %d,%d, want the running total", x, y)
+	}
+	if x, y := dropPosition(8, 7, 100, 200, 10, 20); x != 100 || y != 200 {
+		t.Fatalf("fresh report: %d,%d, want the Mac's own position", x, y)
+	}
+	if x, y := dropPosition(0, 0, 0, 0, 3261, 2077); x != 3261 || y != 2077 {
+		t.Fatalf("a Mac that never reported must not pull the pointer to the corner: %d,%d", x, y)
 	}
 }

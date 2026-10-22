@@ -184,9 +184,16 @@ func (r *helperRoute) drop(linkAlive bool) {
 	r.mode = routeRFB
 	r.orphan |= r.buttons
 	if linkAlive && (r.buttons != 0 || r.pendX != 0 || r.pendY != 0 || r.pendSX != 0 || r.pendSY != 0) {
+		held := r.buttons != 0
 		r.buttons = 0
 		r.dirty = true
 		_ = r.flush()
+		if held {
+			// A button is a full bitmask in every packet, so repeating the
+			// "all up" costs nothing and survives one lost datagram.
+			r.dirty = true
+			_ = r.flush()
+		}
 	}
 	r.reset()
 }
@@ -350,4 +357,16 @@ func helperTarget(sessionHost string, macs []pairedMac, lookup func(string) []st
 		return mac, net.JoinHostPort(addressHost(sessionHost), strconv.Itoa(port)), true
 	}
 	return pairedMac{}, "", false
+}
+
+// dropPosition is where the Mac's pointer is believed to be when helper
+// routing ends. The helper moved it without Screen Sharing carrying the
+// moves, so the Mac's own cursor report counts when one arrived after our last
+// packet (reports now beyond the count at that packet); otherwise the running
+// total, which followed every delta, is the best knowledge.
+func dropPosition(reports, reportsAtLastPacket uint64, reportedX, reportedY, totalX, totalY int) (int, int) {
+	if reports > reportsAtLastPacket {
+		return reportedX, reportedY
+	}
+	return totalX, totalY
 }

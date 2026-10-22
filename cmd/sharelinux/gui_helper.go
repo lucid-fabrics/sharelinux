@@ -231,7 +231,9 @@ func (h *helperUse) engage() {
 	h.flushReport = v.h.cursorReports()
 	h.route.TotalX, h.route.TotalY, h.route.Packets = 0, 0, 0
 	h.link.SetPointerLocked(true)
-	v.g.app.logger.Info("mouse helper: routing locked pointer to the helper", "mac_x", v.pointerX, "mac_y", v.pointerY)
+	width, _ := v.client.FramebufferSize()
+	v.g.app.logger.Info("mouse helper: routing locked pointer to the helper", "mac_x", v.pointerX, "mac_y", v.pointerY,
+		"view_w", v.viewport().W, "frame_w", width, "scale", h.scale())
 }
 
 // endRouting drops routing by hand (the session is stopping) and does the
@@ -253,11 +255,10 @@ func (h *helperUse) afterDrop() {
 		h.link.SetPointerLocked(false)
 	}
 	reports := v.h.cursorReports()
-	if reports > h.flushReport {
-		x, y := v.h.remoteCursor()
-		v.rel.set(x, y)
-		v.pointerX, v.pointerY = x, y
-	}
+	rx, ry := v.h.remoteCursor()
+	x, y := dropPosition(reports, h.flushReport, rx, ry, v.pointerX, v.pointerY)
+	v.rel.set(x, y)
+	v.pointerX, v.pointerY = x, y
 	v.sent, v.sentReports = true, reports
 	v.g.app.logger.Info("mouse helper: routing back to Screen Sharing",
 		"mac_x", v.pointerX, "mac_y", v.pointerY, "sent_x16", h.route.TotalX, "sent_y16", h.route.TotalY,

@@ -52,11 +52,18 @@ func (s LinkStatus) Active() bool { return s.State == LinkLive && s.Helper == St
 
 // LinkTiming holds the intervals; zero values use the defaults.
 type LinkTiming struct {
-	// Keepalive is the interval between keepalives (design: 250 ms).
+	// Keepalive is the interval between keepalives. The design asks for 250 ms,
+	// which is what the Mac needs to keep a session; this side sends them every
+	// 50 ms because the Mac answers a keepalive with a status at most once per
+	// 250 ms, and the answer comes at the first keepalive after that, so a
+	// faster keepalive makes the answers regular and shortens the time to
+	// notice that they stopped.
 	Keepalive time.Duration
 	// StatusTimeout is how long a live link may go without a status before it
-	// counts as lost. The Mac sends at most one status per 250 ms, and
-	// answers every second keepalive when the timers are tight.
+	// counts as lost: the Mac's 250 ms between statuses, one keepalive
+	// interval and some slack. Shorter would call a healthy helper lost. A
+	// helper that ends the session (switched off on the Mac) says nothing, so
+	// this is also how long that takes to notice, 330 ms at most.
 	StatusTimeout time.Duration
 	// Handshake bounds the wait for the Mac's answer to a handshake.
 	Handshake time.Duration
@@ -71,10 +78,10 @@ type LinkTiming struct {
 
 func (t LinkTiming) withDefaults() LinkTiming {
 	if t.Keepalive <= 0 {
-		t.Keepalive = KeepaliveInterval
+		t.Keepalive = 50 * time.Millisecond
 	}
 	if t.StatusTimeout <= 0 {
-		t.StatusTimeout = 650 * time.Millisecond
+		t.StatusTimeout = 330 * time.Millisecond
 	}
 	if t.Handshake <= 0 {
 		t.Handshake = time.Second
@@ -201,9 +208,11 @@ func (l *Link) Send(p InputPacket) error {
 		l.mu.Unlock()
 		return ErrLinkNotReady
 	}
-	if l.status.State == LinkDown {
+	if l.status.State == LinkDown && !errors.Is(l.status.Reason, ErrSilent) {
 		// The read side already learned the helper is gone (a closed port
-		// reports once, to whichever call comes first).
+		// reports once, to whichever call comes first). A helper that is only
+		// quiet may still hear us: the caller's last packet, the one that
+		// lifts a held button, must go out.
 		reason := l.status.Reason
 		l.mu.Unlock()
 		return reason
