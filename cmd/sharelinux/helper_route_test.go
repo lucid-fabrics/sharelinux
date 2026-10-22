@@ -613,3 +613,15 @@ func TestRoutingLogsNoPositionsAtTheDefaultLevel(t *testing.T) {
 		t.Fatalf("debug keeps the detail:\n%s", out.String())
 	}
 }
+
+// The Mac swallows a press that is not preceded by a packet with every button up, so engaging
+// must send one before anything else.
+func TestEngagingAnnouncesEveryButtonUp(t *testing.T) {
+	r, log := engaged(t)
+	if err := r.announce(); err != nil {
+		t.Fatal(err)
+	}
+	if len(log.packets) != 1 || log.packets[0].Buttons != 0 || log.packets[0].DX != 0 || log.packets[0].DY != 0 {
+		t.Fatalf("packets = %+v, want one plain all-up packet", log.packets)
+	}
+}

@@ -174,6 +174,15 @@ func (r *helperRoute) decide(in routeInputs) routeChange {
 	return routeStays
 }
 
+// announce sends one packet with every button up when routing starts. The Mac
+// treats the buttons of a new session as up until it has seen such a packet
+// (so a held mask can never become a fresh press), and this is that packet: a
+// click right after engaging is then a real click, not a swallowed one.
+func (r *helperRoute) announce() error {
+	r.dirty = true
+	return r.flush()
+}
+
 func (r *helperRoute) reset() {
 	r.fracX, r.fracY, r.pendX, r.pendY = 0, 0, 0, 0
 	r.fracSX, r.fracSY, r.pendSX, r.pendSY = 0, 0, 0, 0

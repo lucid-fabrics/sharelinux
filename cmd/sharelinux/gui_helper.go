@@ -231,6 +231,7 @@ func (h *helperUse) engage() {
 	h.flushReport = v.h.cursorReports()
 	h.route.TotalX, h.route.TotalY, h.route.Packets = 0, 0, 0
 	h.link.SetPointerLocked(true)
+	_ = h.route.announce() // every button up first: the Mac's first press must follow it
 	width, _ := v.client.FramebufferSize()
 	logRouting(v.g.app.logger, "routing locked pointer to the helper", "mac_x", v.pointerX, "mac_y", v.pointerY,
 		"view_w", v.viewport().W, "frame_w", width, "scale", h.scale(), "rfb_pointer_sends", v.pointerSends)
