@@ -64,7 +64,11 @@ final class KeychainKeyStoreTests: XCTestCase {
     func testItemsAreNotSynchronisedAndTrustOnlyThisApplication() throws {
         _ = try store.loadOrCreateIdentity()
         try store.addPaired(PairedDevice(name: "Desk PC", key: Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation))
-        for service in [KeychainKeyStore.identityService, KeychainKeyStore.pairedService] {
+        try store.removePaired(key: Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation)
+        let gone = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
+        try store.addPaired(PairedDevice(name: "Gone", key: gone))
+        try store.removePaired(key: gone)  // writes the revocation set
+        for service in [KeychainKeyStore.identityService, KeychainKeyStore.pairedService, KeychainKeyStore.revokedService] {
             let q: [String: Any] = [
                 kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
                 kSecMatchSearchList as String: [kc.keychain], kSecAttrSynchronizable as String: kSecAttrSynchronizableAny,
@@ -103,8 +107,30 @@ final class KeychainKeyStoreTests: XCTestCase {
         XCTAssertEqual(SecItemAdd(q as CFDictionary, nil), errSecSuccess)
     }
 
+    private let nonceHex = String(repeating: "07", count: 16)
+
     private func hmac(_ macKey: SymmetricKey, key: Data, name: String, created: Int64) -> String {
-        Data(HMAC<SHA256>.authenticationCode(for: KeychainKeyStore.message(key: key, name: name, created: created), using: macKey)).hex
+        Data(HMAC<SHA256>.authenticationCode(
+            for: KeychainKeyStore.message(key: key, name: name, created: created, nonce: Data(repeating: 7, count: 16), gen: 0),
+            using: macKey)).hex
+    }
+
+    private func rawItem(service: String, account: String) -> Data? {
+        let q: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+            kSecAttrAccount as String: account, kSecMatchSearchList as String: [kc.keychain],
+            kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var out: CFTypeRef?
+        return SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess ? out as? Data : nil
+    }
+
+    private func dropItem(service: String, account: String) {
+        let q: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+            kSecAttrAccount as String: account, kSecMatchSearchList as String: [kc.keychain],
+        ]
+        XCTAssertEqual(SecItemDelete(q as CFDictionary), errSecSuccess)
     }
 
     func testAnItemWhoseAccountAndPayloadDisagreeIsIgnored() throws {
@@ -139,9 +165,9 @@ final class KeychainKeyStoreTests: XCTestCase {
         let attackerMacKey = SymmetricKey(data: Data(repeating: 9, count: 32))  // not derived from the identity
         let created: Int64 = 1_800_000_000
         let wrong = hmac(attackerMacKey, key: attacker, name: "Evil", created: created)
-        plant(account: attacker.hex, json: #"{"v":2,"name":"Evil","key":"\#(attacker.hex)","created":\#(created),"mac":"\#(wrong)"}"#)
+        plant(account: attacker.hex, json: #"{"v":3,"name":"Evil","key":"\#(attacker.hex)","created":\#(created),"nonce":"\#(nonceHex)","gen":0,"mac":"\#(wrong)"}"#)
         let other = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
-        plant(account: other.hex, json: #"{"v":2,"name":"Evil2","key":"\#(other.hex)","created":\#(created),"mac":"\#(String(repeating: "00", count: 32))"}"#)
+        plant(account: other.hex, json: #"{"v":3,"name":"Evil2","key":"\#(other.hex)","created":\#(created),"nonce":"\#(nonceHex)","gen":0,"mac":"\#(String(repeating: "00", count: 32))"}"#)
         XCTAssertEqual(try store.loadPaired(), [])
         XCTAssertEqual(store.ignoredRecords, 2)
     }
@@ -177,7 +203,7 @@ final class KeychainKeyStoreTests: XCTestCase {
     func testReplacingTheIdentityKeyUntrustsTheOldRecordsAndANewKeychainTrustsNothing() throws {
         let key = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
         // No identity yet: a planted record cannot be authentic, and reading does not create an identity.
-        plant(account: key.hex, json: #"{"v":2,"name":"X","key":"\#(key.hex)","created":1,"mac":"00"}"#)
+        plant(account: key.hex, json: #"{"v":3,"name":"X","key":"\#(key.hex)","created":1,"nonce":"\#(nonceHex)","gen":0,"mac":"00"}"#)
         XCTAssertEqual(try store.loadPaired(), [])
         XCTAssertEqual(store.ignoredRecords, 1)
         // A second install (another identity) does not accept the first one's genuine records.
@@ -196,6 +222,56 @@ final class KeychainKeyStoreTests: XCTestCase {
         let again = KeychainKeyStore(keychain: kc.keychain)  // a new process: nothing cached
         XCTAssertEqual(try again.loadPaired(), [PairedDevice(name: "Desk PC", key: k)])
         XCTAssertEqual(again.ignoredRecords, 0)
+    }
+
+    // MARK: revocation (follow-up audit, finding 7)
+
+    /// A removed record's exact bytes, put back, must not be trusted again.
+    func testTheExactBytesOfARemovedRecordAreRejectedWhenPutBack() throws {
+        let k = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
+        let other = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
+        try store.addPaired(PairedDevice(name: "Desk PC", key: k))
+        try store.addPaired(PairedDevice(name: "Laptop", key: other))
+        let copy = try XCTUnwrap(rawItem(service: KeychainKeyStore.pairedService, account: k.hex), "any same-user program may be able to copy this")
+        try store.removePaired(key: k)
+        XCTAssertEqual(try store.loadPaired().map(\.name), ["Laptop"])
+        plant(account: k.hex, json: String(decoding: copy, as: UTF8.self))
+        XCTAssertEqual(try store.loadPaired().map(\.name), ["Laptop"], "the removed record is not trusted again")
+        XCTAssertEqual(store.ignoredAccounts, [k.hex])
+        XCTAssertEqual(try KeychainKeyStore(keychain: kc.keychain).loadPaired().map(\.name), ["Laptop"], "also after a restart")
+    }
+
+    func testAPairedAgainDeviceIsTrustedAfterRemovalButTheOldCopyIsNot() throws {
+        let k = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
+        try store.addPaired(PairedDevice(name: "Desk PC", key: k))
+        let old = try XCTUnwrap(rawItem(service: KeychainKeyStore.pairedService, account: k.hex))
+        try store.removePaired(key: k)
+        try store.addPaired(PairedDevice(name: "Desk PC", key: k))  // the owner paired it again, same second
+        XCTAssertEqual(try store.loadPaired().map(\.key), [k])
+        dropItem(service: KeychainKeyStore.pairedService, account: k.hex)
+        plant(account: k.hex, json: String(decoding: old, as: UTF8.self))
+        XCTAssertEqual(try store.loadPaired(), [], "the first record stays revoked")
+    }
+
+    func testDeletingOrRollingBackTheRevocationSetDoesNotRestoreNewerRecords() throws {
+        let a = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
+        let b = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
+        let c = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
+        try store.addPaired(PairedDevice(name: "A", key: a))
+        try store.removePaired(key: a)
+        try store.addPaired(PairedDevice(name: "B", key: b))  // written after one removal: gen 1
+        XCTAssertEqual(try store.loadPaired().map(\.name), ["B"])
+        let set = try XCTUnwrap(rawItem(service: KeychainKeyStore.revokedService, account: "set"))
+        dropItem(service: KeychainKeyStore.revokedService, account: "set")
+        XCTAssertEqual(try store.loadPaired(), [], "the set is gone, so a record newer than it is not trusted")
+        // A foreign replacement fails its MAC: nothing is trusted either.
+        plant(account: "set", json: #"{"v":1,"count":0,"macs":[],"mac":"00"}"#, service: KeychainKeyStore.revokedService)
+        XCTAssertEqual(try store.loadPaired(), [])
+        XCTAssertThrowsError(try store.addPaired(PairedDevice(name: "C", key: c)), "no new trust while the set is damaged")
+        // The genuine set back in place restores B.
+        dropItem(service: KeychainKeyStore.revokedService, account: "set")
+        plant(account: "set", json: String(decoding: set, as: UTF8.self), service: KeychainKeyStore.revokedService)
+        XCTAssertEqual(try store.loadPaired().map(\.name), ["B"])
     }
 
     /// W3 follow-up audit, finding 1: the launch sequence imported a user-writable paired.json and gave

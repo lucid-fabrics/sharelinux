@@ -26,11 +26,24 @@ import os
 ///    plants the identity item before the first launch, or that the owner lets
 ///    read it ("Always Allow"), holds the HMAC key.
 ///
+///  * Revocation: removing a device writes the removed record's MAC into an
+///    authenticated revocation set (HMAC'd like a record) BEFORE the record is
+///    deleted, and every record carries the set's size at the time it was
+///    written (`gen`). A record whose MAC is in the set is never trusted, so
+///    putting the exact bytes of a removed record back grants nothing. A record
+///    newer than the set (`gen` above the set's count) means the set was
+///    deleted or rolled back, so it is not trusted either. A set that fails
+///    its own MAC is treated as unknown and nothing is trusted. Re-pairing a
+///    removed device writes a fresh record (new nonce), which is not revoked.
+///
 /// `keychain` is nil for the default (login) keychain; tests pass a throwaway
 /// keychain file so nothing touches the owner's.
 public final class KeychainKeyStore: KeyStore {
     public static let identityService = "io.github.sharelinux.mousehelper.identity"
     public static let pairedService = "io.github.sharelinux.mousehelper.paired"
+    /// One authenticated item holding the MACs of removed records (see "Revocation" below).
+    public static let revokedService = "io.github.sharelinux.mousehelper.revoked"
+    private static let revokedAccount = "set"
     private static let identityAccount = "static-key"
     private let keychain: SecKeychain?
     private let log = Logger(subsystem: "io.github.sharelinux.mousehelper", category: "keystore")
@@ -132,7 +145,20 @@ public final class KeychainKeyStore: KeyStore {
         var key: String
         /// Seconds since 1970 when the device was paired.
         var created: Int64
-        /// HMAC-SHA256 (hex) over `message(key:name:created:)`.
+        /// Random per record, so a re-pairing in the same second never repeats a revoked MAC.
+        var nonce: String
+        /// The size of the revocation set when this record was written.
+        var gen: Int
+        /// HMAC-SHA256 (hex) over `message(key:name:created:nonce:gen:)`.
+        var mac: String
+    }
+
+    private struct RevokedSet: Codable {
+        var v: Int
+        /// How many removals have happened.
+        var count: Int
+        /// MACs (hex) of removed records.
+        var macs: [String]
         var mac: String
     }
 
@@ -142,15 +168,30 @@ public final class KeychainKeyStore: KeyStore {
             info: Data("paired-record-mac-v1".utf8), outputByteCount: 32)
     }
 
-    /// Length-prefixed so no two different (key, name, created) triples share a message.
-    static func message(key: Data, name: String, created: Int64) -> Data {
-        var m = Data("oss-paired-record-v2".utf8)
+    private static func be(_ v: some FixedWidthInteger) -> [UInt8] {
+        withUnsafeBytes(of: v.bigEndian) { Array($0) }
+    }
+
+    /// Length-prefixed so no two different records share a message.
+    static func message(key: Data, name: String, created: Int64, nonce: Data, gen: Int) -> Data {
+        var m = Data("oss-paired-record-v3".utf8)
         m.append(0)
         m.append(key)
         let n = Data(name.utf8)
-        m.append(contentsOf: withUnsafeBytes(of: UInt16(n.count).bigEndian) { Array($0) })
+        m.append(contentsOf: be(UInt16(n.count)))
         m.append(n)
-        m.append(contentsOf: withUnsafeBytes(of: created.bigEndian) { Array($0) })
+        m.append(contentsOf: be(created))
+        m.append(nonce)  // 16 bytes
+        m.append(contentsOf: be(Int64(gen)))
+        return m
+    }
+
+    static func revokedMessage(count: Int, macs: [Data]) -> Data {
+        var m = Data("oss-revoked-set-v1".utf8)
+        m.append(0)
+        m.append(contentsOf: be(Int64(count)))
+        m.append(contentsOf: be(UInt32(macs.count)))
+        for x in macs { m.append(x) }
         return m
     }
 
@@ -165,13 +206,48 @@ public final class KeychainKeyStore: KeyStore {
         return k
     }
 
-    private func authentic(_ data: Data, account: String, macKey: SymmetricKey) -> PairedDevice? {
-        guard let rec = try? JSONDecoder().decode(Record.self, from: data), rec.v == 2,
+    /// The revocation set: nil when the item is absent (nothing revoked, count 0), `.damaged` when
+    /// something that is not authentic sits there.
+    private enum Revoked {
+        case set(count: Int, macs: Set<Data>)
+        case damaged
+    }
+
+    private func loadRevoked(macKey: SymmetricKey) throws -> Revoked {
+        guard let data = try read(service: Self.revokedService, account: Self.revokedAccount) else {
+            return .set(count: 0, macs: [])
+        }
+        guard let r = try? JSONDecoder().decode(RevokedSet.self, from: data), r.v == 1, r.count >= r.macs.count,
+            let mac = Data(hex: r.mac)
+        else { return .damaged }
+        let macs = r.macs.compactMap { Data(hex: $0) }
+        guard macs.count == r.macs.count, macs.allSatisfy({ $0.count == 32 }),
+            HMAC<SHA256>.isValidAuthenticationCode(
+                mac, authenticating: Self.revokedMessage(count: r.count, macs: macs), using: macKey)
+        else { return .damaged }
+        return .set(count: r.count, macs: Set(macs))
+    }
+
+    private func storeRevoked(count: Int, macs: [Data], macKey: SymmetricKey) throws {
+        let tag = Data(
+            HMAC<SHA256>.authenticationCode(for: Self.revokedMessage(count: count, macs: macs), using: macKey))
+        let payload = try JSONEncoder().encode(
+            RevokedSet(v: 1, count: count, macs: macs.map(\.hex), mac: tag.hex))
+        try delete(service: Self.revokedService, account: Self.revokedAccount)
+        try add(service: Self.revokedService, account: Self.revokedAccount, label: "OSS Mouse Helper removed devices", data: payload)
+    }
+
+    private func authentic(_ data: Data, account: String, macKey: SymmetricKey, revoked: Revoked) -> PairedDevice? {
+        guard case .set(let count, let revokedMacs) = revoked else { return nil }
+        guard let rec = try? JSONDecoder().decode(Record.self, from: data), rec.v == 3,
             let key = Data(hex: rec.key), key.count == 32, rec.key == account,
+            let nonce = Data(hex: rec.nonce), nonce.count == 16, rec.gen >= 0,
             AuthorizationName.isPlain(rec.name), let mac = Data(hex: rec.mac)
         else { return nil }
-        let msg = Self.message(key: key, name: rec.name, created: rec.created)
+        let msg = Self.message(key: key, name: rec.name, created: rec.created, nonce: nonce, gen: rec.gen)
         guard HMAC<SHA256>.isValidAuthenticationCode(mac, authenticating: msg, using: macKey) else { return nil }
+        // Removed once: its bytes are no longer welcome. Newer than the set: the set was deleted or rolled back.
+        guard !revokedMacs.contains(mac), rec.gen <= count else { return nil }
         return PairedDevice(name: rec.name, key: key)
     }
 
@@ -188,12 +264,13 @@ public final class KeychainKeyStore: KeyStore {
             throw KeyStoreError.failed("Keychain list failed (\(status))")
         }
         let macKey = try macKeyForReading()
+        let revoked: Revoked = try macKey.map { try loadRevoked(macKey: $0) } ?? .damaged
         var list: [PairedDevice] = []
         var ignored: [String] = []
         for item in items {
             let account = (item[kSecAttrAccount as String] as? String) ?? "?"
             if let macKey, let data = try read(service: Self.pairedService, account: account),
-                let device = authentic(data, account: account, macKey: macKey)
+                let device = authentic(data, account: account, macKey: macKey, revoked: revoked)
             {
                 list.append(device)
             } else {
@@ -211,18 +288,39 @@ public final class KeychainKeyStore: KeyStore {
         let account = device.key.hex
         _ = try loadOrCreateIdentity()  // makes sure the MAC key is there
         guard let macKey = macKeyCache else { throw KeyStoreError.failed("no identity key to authenticate the record") }
+        guard case .set(let count, _) = try loadRevoked(macKey: macKey) else {
+            throw KeyStoreError.corrupt("the list of removed devices is damaged")
+        }
         let created = Int64(Date().timeIntervalSince1970)
+        var nonce = Data(count: 16)
+        guard nonce.withUnsafeMutableBytes({ SecRandomCopyBytes(kSecRandomDefault, 16, $0.baseAddress!) }) == errSecSuccess else {
+            throw KeyStoreError.failed("no random bytes for the record")
+        }
         let mac = Data(
             HMAC<SHA256>.authenticationCode(
-                for: Self.message(key: device.key, name: device.name, created: created), using: macKey))
+                for: Self.message(key: device.key, name: device.name, created: created, nonce: nonce, gen: count),
+                using: macKey))
         let payload = try JSONEncoder().encode(
-            Record(v: 2, name: device.name, key: account, created: created, mac: mac.hex))
+            Record(v: 3, name: device.name, key: account, created: created, nonce: nonce.hex, gen: count, mac: mac.hex))
         try delete(service: Self.pairedService, account: account)  // re-pairing replaces the name
         try add(service: Self.pairedService, account: account, label: "OSS Mouse Helper: " + device.name, data: payload)
     }
 
+    /// Revokes the record's MAC first, then deletes the record. If the revocation cannot be written
+    /// the record stays (and stays trusted), and the caller is told.
     public func removePaired(key: Data) throws {
-        try delete(service: Self.pairedService, account: key.hex)
+        let account = key.hex
+        if let macKey = try macKeyForReading(), let data = try read(service: Self.pairedService, account: account),
+            let rec = try? JSONDecoder().decode(Record.self, from: data), let mac = Data(hex: rec.mac), mac.count == 32
+        {
+            guard case .set(let count, let macs) = try loadRevoked(macKey: macKey) else {
+                throw KeyStoreError.corrupt("the list of removed devices is damaged")
+            }
+            if !macs.contains(mac) {
+                try storeRevoked(count: count + 1, macs: macs.sorted { $0.hex < $1.hex } + [mac], macKey: macKey)
+            }
+        }
+        try delete(service: Self.pairedService, account: account)
     }
 }
 
