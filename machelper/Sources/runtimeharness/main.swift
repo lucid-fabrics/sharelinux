@@ -9,7 +9,8 @@ import HelperRuntime
 //
 // Arguments: --paired <hex public key> (repeatable), --key <hex private key>,
 // --pairing (the pairing flow with an in-memory key store; nobody paired at first),
-// --lan (bind all addresses instead of loopback only), --port <n>
+// --lan (bind all addresses instead of loopback only), --port <n>,
+// --peer <ipv4> (repeatable: count this address as a Screen Sharing peer, for a Linux client on the LAN)
 // stdout:
 //   PUB <hex>          static public key
 //   LISTEN <port>      UDP port on 127.0.0.1 / ::1
@@ -70,12 +71,23 @@ var keyHex: String?
 var paired: [Data] = []
 var withPairing = false, lan = false
 var requestedPort: UInt16 = 0
+var extraPeers: [PeerAddress] = []
 while !args.isEmpty {
     let a = args.removeFirst()
     switch a {
     case "--key": if let v = args.first { keyHex = v; args.removeFirst() }
     case "--pairing": withPairing = true
     case "--lan": lan = true
+    case "--peer":
+        if let v = args.first {
+            let octets = v.split(separator: ".").compactMap { UInt8($0) }
+            guard octets.count == 4, let peer = PeerAddress(bytes: octets) else {
+                FileHandle.standardError.write(Data("bad --peer \(v)\n".utf8))
+                exit(2)
+            }
+            extraPeers.append(peer)
+            args.removeFirst()
+        }
     case "--port": if let v = args.first, let p = UInt16(v) { requestedPort = p; args.removeFirst() }
     case "--paired": if let v = args.first, let d = Data(hex: v) { paired.append(d); args.removeFirst() }
     default:
@@ -88,6 +100,7 @@ let staticKey: Curve25519.KeyAgreement.PrivateKey =
     ?? Curve25519.KeyAgreement.PrivateKey()
 
 let sw = Switches()
+for peer in extraPeers { sw.sharingPeers.insert(peer) }
 var pairedList = paired
 var coordinator: PairingCoordinator?
 if withPairing {
