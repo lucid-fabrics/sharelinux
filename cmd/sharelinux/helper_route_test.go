@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"log/slog"
 	"math"
 	"math/rand"
 	"strings"
@@ -125,15 +127,18 @@ func TestRouteDropWhileAButtonIsHeldLiftsItOnTheMacAndSwallowsTheRelease(t *test
 	}
 }
 
-func TestRouteDropWithADeadLinkSendsNothing(t *testing.T) {
+func TestRouteDropWithADeadLinkStillSwallowsTheReleaseAndIgnoresTheSendError(t *testing.T) {
 	r, log := engaged(t)
 	r.button(machelper.ButtonLeft, true)
 	r.motion(3, 3)
+	log.err = machelper.ErrRefused // the port is closed: nothing can be delivered
 	in := allGood
 	in.linkActive = false
-	r.decide(in)
+	if r.decide(in) != routeDropped {
+		t.Fatal("no drop")
+	}
 	if len(log.packets) != 0 {
-		t.Fatalf("sent %d packets to a helper that is gone", len(log.packets))
+		t.Fatalf("delivered %d packets to a helper that is gone", len(log.packets))
 	}
 	if !r.swallowRelease(machelper.ButtonLeft) {
 		t.Fatal("release of a button the dead helper held must still be swallowed")
@@ -158,12 +163,13 @@ func TestRouteReengagesCleanAfterADrop(t *testing.T) {
 	r.motion(0.5, 0.5)
 	in := allGood
 	in.linkActive = false
-	r.decide(in)
+	r.decide(in) // the waiting motion goes out with the drop
+	sent := len(log.packets)
 	if r.decide(allGood) != routeEngaged {
 		t.Fatal("no re-engage")
 	}
-	if err := r.flush(); err != nil || len(log.packets) != 0 {
-		t.Fatalf("old motion leaked into the new stretch: %v %v", err, log.packets)
+	if err := r.flush(); err != nil || len(log.packets) != sent {
+		t.Fatalf("old motion leaked into the new stretch: %v %v", err, log.packets[sent:])
 	}
 }
 
@@ -347,7 +353,7 @@ func TestChipForEveryState(t *testing.T) {
 		if look.Tooltip == "" || look.Class == "" {
 			t.Errorf("%s: empty tooltip or class", c.name)
 		}
-		if strings.ContainsRune(look.Tooltip+look.Label, '—') {
+		if strings.ContainsRune(look.Tooltip+look.Label, '\u2014') {
 			t.Errorf("%s: em dash in the copy", c.name)
 		}
 		tooltips[c.name] = true
@@ -409,7 +415,7 @@ func TestHelperTargetIsOnlyTheMacTheSessionIsConnectedTo(t *testing.T) {
 		{Name: "Studio", Address: "192.168.1.218", Key: strings.Repeat("a", 64)},
 		{Name: "Other", Address: "10.0.0.9:6000", Key: strings.Repeat("b", 64)},
 	}
-	mac, addr, ok := helperTarget("192.168.1.218:5900", macs, nil)
+	mac, addr, ok := helperTarget("192.168.1.218", macs, nil)
 	if !ok || mac.Name != "Studio" || addr != "192.168.1.218:5961" {
 		t.Fatalf("%v %v %v", mac, addr, ok)
 	}
@@ -428,9 +434,9 @@ func TestHelperTargetIsOnlyTheMacTheSessionIsConnectedTo(t *testing.T) {
 	}
 }
 
-func TestHelperTargetUsesTheSessionHostNotTheStoredOne(t *testing.T) {
-	// Paired by name, connected by address: the datagrams go to the address
-	// the Screen Sharing connection uses, so they cannot reach another machine.
+// The datagrams go to the exact IP the Screen Sharing connection was made to. A name is never
+// looked up a second time for the send: it could answer with another machine.
+func TestHelperTargetSendsToThePeerIPNeverToAName(t *testing.T) {
 	lookup := func(name string) []string {
 		if name == "studio.local" {
 			return []string{"192.168.1.218"}
@@ -448,21 +454,44 @@ func TestHelperTargetUsesTheSessionHostNotTheStoredOne(t *testing.T) {
 	if _, _, ok = helperTarget("192.168.1.218", macs, nil); ok {
 		t.Fatal("matched a name without a lookup")
 	}
+	// A session host that is a name (no peer IP recorded) never becomes a target.
+	if _, addr, ok = helperTarget("studio.local", macs, lookup); ok {
+		t.Fatalf("a name was accepted as the peer and would be looked up again: %v", addr)
+	}
+	// A DNS that now answers differently cannot redirect the send: only the peer IP is used.
+	changed := func(string) []string { return []string{"192.168.1.99", "192.168.1.218"} }
+	if _, addr, _ = helperTarget("192.168.1.218", macs, changed); addr != "192.168.1.218:5961" {
+		t.Fatalf("sent to %v", addr)
+	}
 }
 
-func TestSameMacSpellings(t *testing.T) {
-	for _, c := range []struct {
-		a, b string
-		want bool
-	}{
-		{"[fe80::1]:5900", "fe80::1", true},
-		{"MAC.local:5900", "mac.local", true},
-		{"mac.local", "mac2.local", false},
-		{"", "mac.local", false},
-	} {
-		if got := sameMac(c.a, c.b, nil); got != c.want {
-			t.Errorf("sameMac(%q, %q) = %v", c.a, c.b, got)
+func TestHelperTargetSpellings(t *testing.T) {
+	macs := []pairedMac{{Name: "Studio", Address: "[fe80::1]:6001", Key: strings.Repeat("a", 64)}}
+	for _, peer := range []string{"fe80::1", "fe80::1%eth0", "[fe80::1]"} {
+		_, addr, ok := helperTarget(peer, macs, nil)
+		if !ok || !strings.HasSuffix(addr, ":6001") || !strings.Contains(addr, "fe80::1") {
+			t.Errorf("%q -> %v %v", peer, addr, ok)
 		}
+	}
+	mapped := []pairedMac{{Name: "S", Address: "192.168.1.5", Key: strings.Repeat("a", 64)}}
+	if _, _, ok := helperTarget("::ffff:192.168.1.5", mapped, nil); !ok {
+		t.Error("an IPv4-mapped peer is the same machine")
+	}
+}
+
+func TestDialCandidatesResolveOnceAndKeepLiterals(t *testing.T) {
+	ctx := context.Background()
+	if got := dialCandidates(ctx, "192.168.1.5"); len(got) != 1 || got[0] != "192.168.1.5" {
+		t.Fatalf("%v", got)
+	}
+	if got := dialCandidates(ctx, "[fe80::1]"); len(got) != 1 || got[0] != "fe80::1" {
+		t.Fatalf("%v", got)
+	}
+	if got := dialCandidates(ctx, "localhost"); len(got) == 0 {
+		t.Fatal("localhost did not resolve")
+	}
+	if got := dialCandidates(ctx, "no-such-host.invalid"); len(got) != 0 {
+		t.Fatalf("an unresolvable name gave %v", got)
 	}
 }
 
@@ -475,5 +504,112 @@ func TestDropPositionPrefersAFreshReportElseTheRunningTotal(t *testing.T) {
 	}
 	if x, y := dropPosition(0, 0, 0, 0, 3261, 2077); x != 3261 || y != 2077 {
 		t.Fatalf("a Mac that never reported must not pull the pointer to the corner: %d,%d", x, y)
+	}
+}
+
+// M2: the link is only quiet (the Mac still hears us, or will when it comes back). The drop must
+// send the all-up whatever the link looks like, so the Mac does not wait for its own timeout.
+func TestRouteDropOnAQuietLinkSendsTheAllUpTwice(t *testing.T) {
+	r, log := engaged(t)
+	r.button(machelper.ButtonLeft, true)
+	if err := r.flush(); err != nil {
+		t.Fatal(err)
+	}
+	log.packets = nil
+	in := allGood
+	in.linkActive = false // a link that went quiet is not "active", and not gone either
+	if r.decide(in) != routeDropped {
+		t.Fatal("no drop")
+	}
+	if len(log.packets) != 2 {
+		t.Fatalf("%d packets, want the all-up and its repeat", len(log.packets))
+	}
+	for _, p := range log.packets {
+		if p.Buttons != 0 {
+			t.Fatalf("packet %+v still holds a button", p)
+		}
+	}
+}
+
+// M1: a release that never reached the window (View mode, focus loss, a cancelled gesture) left a
+// mark that swallowed the release of the NEXT press of that button, so the helper kept it down.
+func TestRouteLostReleaseDoesNotSwallowTheNextClicksRelease(t *testing.T) {
+	r, log := engaged(t)
+	if !r.buttonEvent(machelper.ButtonLeft, true) {
+		t.Fatal("press not taken")
+	}
+	_ = r.flush()
+	if !r.lift() { // focus lost: the helper's button comes up now, the real release never arrives
+		t.Fatal("nothing to lift")
+	}
+	_ = r.flush()
+	last := log.packets[len(log.packets)-1]
+	if last.Buttons != 0 {
+		t.Fatalf("focus loss left %+v", last)
+	}
+	// The next click, with routing still on.
+	if !r.buttonEvent(machelper.ButtonLeft, true) {
+		t.Fatal("second press not taken")
+	}
+	_ = r.flush()
+	if log.packets[len(log.packets)-1].Buttons != machelper.ButtonLeft {
+		t.Fatal("second press did not reach the helper")
+	}
+	if !r.buttonEvent(machelper.ButtonLeft, false) {
+		t.Fatal("the release was swallowed or sent to Screen Sharing, which never saw the press")
+	}
+	_ = r.flush()
+	if got := log.packets[len(log.packets)-1].Buttons; got != 0 {
+		t.Fatalf("the helper still holds %d after the person let go", got)
+	}
+}
+
+func TestRouteLostReleaseAcrossADropAndANewClickOnScreenSharing(t *testing.T) {
+	r, _ := engaged(t)
+	r.buttonEvent(machelper.ButtonLeft, true)
+	in := allGood
+	in.lockHeld = false
+	r.decide(in) // routing ended with the button down: its release is owed to the helper
+	// View mode swallowed that release. Later the person clicks again, now on Screen Sharing.
+	if r.buttonEvent(machelper.ButtonLeft, true) {
+		t.Fatal("a press while not routed belongs to Screen Sharing")
+	}
+	if r.buttonEvent(machelper.ButtonLeft, false) {
+		t.Fatal("the release of a Screen Sharing click was swallowed: the Mac keeps the button down")
+	}
+}
+
+func TestRouteLateReleaseOfALiftedButtonIsStillSwallowedUntilThePersonPressesAgain(t *testing.T) {
+	r, _ := engaged(t)
+	r.buttonEvent(machelper.ButtonRight, true)
+	r.lift()
+	if !r.buttonEvent(machelper.ButtonRight, false) {
+		t.Fatal("the real release arrived late and must not reach Screen Sharing")
+	}
+	if r.buttonEvent(machelper.ButtonRight, false) {
+		t.Fatal("swallowed twice")
+	}
+}
+
+// LOW: pointer positions are never logged by default.
+func TestRoutingLogsNoPositionsAtTheDefaultLevel(t *testing.T) {
+	var out strings.Builder
+	info := slog.New(slog.NewTextHandler(&out, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logRouting(info, "routing locked pointer to the helper", "mac_x", 1234, "mac_y", 987, "sent_x16", 55)
+	logRouting(info, "routing back to Screen Sharing", "mac_x", 1234, "mac_y", 987)
+	text := out.String()
+	for _, secret := range []string{"1234", "987", "mac_x", "mac_y", "sent_x16"} {
+		if strings.Contains(text, secret) {
+			t.Fatalf("the default log carries %q:\n%s", secret, text)
+		}
+	}
+	if !strings.Contains(text, "routing locked pointer to the helper") || !strings.Contains(text, "routing back to Screen Sharing") {
+		t.Fatalf("the routing changes themselves are still logged:\n%s", text)
+	}
+	out.Reset()
+	debug := slog.New(slog.NewTextHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	logRouting(debug, "routing back to Screen Sharing", "mac_x", 1234)
+	if !strings.Contains(out.String(), "mac_x=1234") {
+		t.Fatalf("debug keeps the detail:\n%s", out.String())
 	}
 }

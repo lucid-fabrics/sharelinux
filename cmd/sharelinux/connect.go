@@ -2,7 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
+	"net"
+	"net/netip"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/nekohasekai/open-screen-sharing/internal/rfb"
 	E "github.com/sagernet/sing/common/exceptions"
@@ -14,10 +19,13 @@ type liveSession struct {
 	client  *rfb.Client
 	handler *handler
 	echo    *latency
-	ctx     context.Context
-	cancel  context.CancelFunc
-	done    chan struct{}
-	runErr  error
+	// peer is the IP address the Screen Sharing connection was made to. The mouse helper's
+	// datagrams go to this address and no other.
+	peer   string
+	ctx    context.Context
+	cancel context.CancelFunc
+	done   chan struct{}
+	runErr error
 }
 
 // sessionPrompt asks the person which session to share, while Dial waits.
@@ -29,6 +37,7 @@ type sessionPrompt struct {
 type dialResult struct {
 	client *rfb.Client
 	err    error
+	peer   string
 }
 
 // decoderPixelRate is what the decoder of a session can keep up with. It decides the frame rate
@@ -91,7 +100,60 @@ func (a *app) rfbOptions(req *request, h *handler) rfb.Options {
 // because that challenge can be cracked offline. A VNC password is used only
 // when the request says so (-vnc, or no user name).
 func (a *app) dial(ctx context.Context, req *request, h *handler) (*rfb.Client, error) {
-	return rfb.Dial(ctx, a.rfbOptions(req, h), h)
+	client, _, err := a.dialPeer(ctx, req, h)
+	return client, err
+}
+
+// dialPeer is dial that also says which IP address the connection went to. The host name is
+// looked up once here and the connection is made to that address, so the answer is the one
+// the mouse helper can be sent to as well: a name looked up a second time could answer with
+// another machine.
+func (a *app) dialPeer(ctx context.Context, req *request, h *handler) (*rfb.Client, string, error) {
+	options := a.rfbOptions(req, h)
+	candidates := dialCandidates(ctx, req.target.Host)
+	if len(candidates) == 0 { // not resolvable: the dialer reports why
+		client, err := rfb.Dial(ctx, options, h)
+		return client, "", err
+	}
+	var lastErr error
+	for _, ip := range candidates {
+		options.Address = net.JoinHostPort(ip, strconv.Itoa(req.target.Port))
+		client, err := rfb.Dial(ctx, options, h)
+		if err == nil {
+			return client, ip, nil
+		}
+		lastErr = err
+		// Only a connection that could not be made tries the next address; a refusal to log in
+		// or an unsupported server would be the same on any of them.
+		var opError *net.OpError
+		if ctx.Err() != nil || !errors.As(err, &opError) || opError.Op != "dial" {
+			break
+		}
+	}
+	return nil, "", lastErr
+}
+
+// dialCandidates returns the addresses to try for a host: an IP address is its own, a name is
+// looked up once (at most four answers).
+func dialCandidates(ctx context.Context, host string) []string {
+	host = strings.TrimSpace(host)
+	if _, err := netip.ParseAddr(strings.Trim(host, "[]")); err == nil {
+		return []string{strings.Trim(host, "[]")}
+	}
+	lookup, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	addresses, err := net.DefaultResolver.LookupNetIP(lookup, "ip", host)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, address := range addresses {
+		out = append(out, address.String())
+		if len(out) == 4 {
+			break
+		}
+	}
+	return out
 }
 
 // dialer is one connection attempt running in the background. The window shows
@@ -147,8 +209,8 @@ func (a *app) beginDial(req *request) *dialer {
 		}
 	}
 	go func() {
-		client, err := a.dial(ctx, req, h)
-		d.results <- dialResult{client, err}
+		client, peer, err := a.dialPeer(ctx, req, h)
+		d.results <- dialResult{client, err, peer}
 	}()
 	return d
 }
@@ -173,7 +235,7 @@ func (d *dialer) run(events dialEvents) {
 				events.Done(nil, E.Extend(context.Canceled, "cancelled"))
 				return
 			}
-			live := &liveSession{req: d.req, client: result.client, handler: d.handler, echo: d.echo, ctx: d.ctx, cancel: d.cancel, done: make(chan struct{})}
+			live := &liveSession{req: d.req, client: result.client, handler: d.handler, echo: d.echo, peer: result.peer, ctx: d.ctx, cancel: d.cancel, done: make(chan struct{})}
 			go func() {
 				live.runErr = live.client.Run()
 				close(live.done)

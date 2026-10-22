@@ -75,7 +75,7 @@ func (h *helperUse) routed() bool { return h.route.mode == routeHelper }
 func (h *helperUse) begin() {
 	v := h.v
 	keys := v.g.app.helperKeys()
-	host := v.live.req.target.Host
+	peer := v.live.peer
 	go func() {
 		macs, err := keys.Macs()
 		var mac pairedMac
@@ -83,7 +83,7 @@ func (h *helperUse) begin() {
 		var found bool
 		var static noise.DHKey
 		if err == nil {
-			mac, dial, found = helperTarget(host, macs, lookupHost)
+			mac, dial, found = helperTarget(peer, macs, lookupHost)
 		}
 		if found {
 			if static, err = keys.ClientKey(); err != nil {
@@ -167,7 +167,7 @@ func (h *helperUse) startLink() {
 // with the buttons up while the link can still send it.
 func (h *helperUse) stopLink() {
 	if h.routed() {
-		h.endRouting(true)
+		h.endRouting()
 	}
 	link := h.link
 	h.link, h.linked = nil, false
@@ -232,14 +232,14 @@ func (h *helperUse) engage() {
 	h.route.TotalX, h.route.TotalY, h.route.Packets = 0, 0, 0
 	h.link.SetPointerLocked(true)
 	width, _ := v.client.FramebufferSize()
-	v.g.app.logger.Info("mouse helper: routing locked pointer to the helper", "mac_x", v.pointerX, "mac_y", v.pointerY,
+	logRouting(v.g.app.logger, "routing locked pointer to the helper", "mac_x", v.pointerX, "mac_y", v.pointerY,
 		"view_w", v.viewport().W, "frame_w", width, "scale", h.scale(), "rfb_pointer_sends", v.pointerSends)
 }
 
 // endRouting drops routing by hand (the session is stopping) and does the
 // same follow-up as a drop the rules decided.
-func (h *helperUse) endRouting(linkAlive bool) {
-	h.route.drop(linkAlive)
+func (h *helperUse) endRouting() {
+	h.route.drop()
 	h.afterDrop()
 }
 
@@ -260,7 +260,7 @@ func (h *helperUse) afterDrop() {
 	v.rel.set(x, y)
 	v.pointerX, v.pointerY = x, y
 	v.sent, v.sentReports = true, reports
-	v.g.app.logger.Info("mouse helper: routing back to Screen Sharing",
+	logRouting(v.g.app.logger, "routing back to Screen Sharing",
 		"mac_x", v.pointerX, "mac_y", v.pointerY, "sent_x16", h.route.TotalX, "sent_y16", h.route.TotalY,
 		"packets", h.route.Packets, "held_ms", time.Since(h.engagedAt).Milliseconds(), "rfb_pointer_sends", v.pointerSends)
 }
@@ -307,28 +307,18 @@ func (h *helperUse) button(rfbBit uint8, down bool) bool {
 	if bit == 0 {
 		return false
 	}
-	if !down && h.route.swallowRelease(bit) {
-		return true
-	}
-	if !h.routed() {
+	if !h.route.buttonEvent(bit, down) {
 		return false
 	}
-	if !down && h.route.buttons&bit == 0 {
-		return false
-	}
-	h.route.button(bit, down)
 	h.flush()
 	return true
 }
 
-// releaseButtons lifts every button the helper holds (focus lost).
+// releaseButtons lifts every button the helper holds (focus lost, mode left).
 func (h *helperUse) releaseButtons() {
-	if !h.routed() || h.route.buttons == 0 {
-		return
+	if h.routed() && h.route.lift() {
+		h.flush()
 	}
-	h.route.orphan |= h.route.buttons
-	h.route.button(h.route.buttons, false)
-	h.flush()
 }
 
 // schedule sends waiting motion now, or soon if the last packet was too recent.

@@ -2,8 +2,10 @@ package main
 
 import (
 	"errors"
+	"log/slog"
 	"math"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 
@@ -165,7 +167,7 @@ func (r *helperRoute) decide(in routeInputs) routeChange {
 		}
 	case routeHelper:
 		if !usable {
-			r.drop(in.linkActive)
+			r.drop()
 			return routeDropped
 		}
 	}
@@ -178,12 +180,15 @@ func (r *helperRoute) reset() {
 	r.buttons, r.dirty = 0, false
 }
 
-// drop ends helper routing. When the link may still be alive the Mac is told
-// the buttons are up; if it is not, it lifts them itself (silence, refusal).
-func (r *helperRoute) drop(linkAlive bool) {
+// drop ends helper routing. The Mac is told the buttons are up whatever the
+// link looks like: a link that has only gone quiet may still hear this packet,
+// and one that is really gone refuses the send at once (the error is ignored,
+// the Mac lifts the buttons itself after a second without input). Waiting for
+// the link to look healthy first left a button held on a quiet link.
+func (r *helperRoute) drop() {
 	r.mode = routeRFB
 	r.orphan |= r.buttons
-	if linkAlive && (r.buttons != 0 || r.pendX != 0 || r.pendY != 0 || r.pendSX != 0 || r.pendSY != 0) {
+	if r.buttons != 0 || r.pendX != 0 || r.pendY != 0 || r.pendSX != 0 || r.pendSY != 0 {
 		held := r.buttons != 0
 		r.buttons = 0
 		r.dirty = true
@@ -196,6 +201,46 @@ func (r *helperRoute) drop(linkAlive bool) {
 		}
 	}
 	r.reset()
+}
+
+// pressed notes a button going down. A release that was waiting to be swallowed
+// belongs to an older press: the person pressed again, so that one is over and
+// its release was lost (the window never heard it, in another mode or after
+// focus left). Keeping the mark would swallow the new press's release.
+func (r *helperRoute) pressed(bit uint8) {
+	r.orphan &^= bit
+}
+
+// buttonEvent handles a press or release from the window and reports whether the
+// route took it (sent it to the helper, or swallowed the late release of a
+// button the helper held when routing ended). False: Screen Sharing gets it.
+func (r *helperRoute) buttonEvent(bit uint8, down bool) bool {
+	if down {
+		r.pressed(bit)
+	}
+	if !down && r.swallowRelease(bit) {
+		return true
+	}
+	if r.mode != routeHelper {
+		return false
+	}
+	if !down && r.buttons&bit == 0 {
+		return false
+	}
+	r.button(bit, down)
+	return true
+}
+
+// lift ends every button the helper holds without waiting for the person (focus
+// lost, mode left). The physical release may never arrive, or arrive later, so
+// the mark is kept for it. It reports whether a packet is due.
+func (r *helperRoute) lift() bool {
+	if r.buttons == 0 {
+		return false
+	}
+	r.orphan |= r.buttons
+	r.button(r.buttons, false)
+	return true
 }
 
 // swallowRelease reports whether the release of a button is the end of one the
@@ -290,6 +335,14 @@ func motionPoints(dx, dy float64, v viewport, frameWidth, frameHeight int, scale
 	return dx * float64(frameWidth) / float64(v.W) / scale, dy * float64(frameHeight) / float64(v.H) / scale
 }
 
+// logRouting records a routing change. The line at the default level says only that it
+// happened: where the pointer is, how far it moved and for how long say what the person is
+// doing, and stay in the debug detail.
+func logRouting(logger *slog.Logger, what string, detail ...any) {
+	logger.Info("mouse helper: " + what)
+	logger.Debug("mouse helper: "+what+" (detail)", detail...)
+}
+
 // helperButton maps a Screen Sharing button bit to the helper's bit.
 func helperButton(rfbBit uint8) uint8 {
 	switch rfbBit {
@@ -312,28 +365,30 @@ func addressHost(address string) string {
 	return strings.Trim(address, "[]")
 }
 
-// sameMac reports whether the paired Mac's helper address and the address this
-// session is connected to are one machine: the same name or address, or names
-// that resolve to a shared address.
-func sameMac(sessionHost, pairedAddress string, lookup func(string) []string) bool {
-	a, b := strings.ToLower(addressHost(sessionHost)), strings.ToLower(addressHost(pairedAddress))
-	if a == "" || b == "" {
+// normalIP returns the address in one spelling (no brackets, no zone), or "" when
+// the text is not an IP address.
+func normalIP(text string) string {
+	addr, err := netip.ParseAddr(strings.Trim(strings.TrimSpace(text), "[]"))
+	if err != nil {
+		return ""
+	}
+	return addr.WithZone("").Unmap().String()
+}
+
+// macIsAt reports whether a paired Mac's helper address is the machine at ip: the same address, or
+// a name that resolves to it.
+func macIsAt(pairedHost, ip string, lookup func(string) []string) bool {
+	if pairedHost == "" || ip == "" {
 		return false
 	}
-	if a == b {
-		return true
+	if own := normalIP(pairedHost); own != "" {
+		return own == ip
 	}
 	if lookup == nil {
 		return false
 	}
-	addresses := map[string]bool{}
-	for _, x := range append(lookup(a), a) {
-		if ip := net.ParseIP(x); ip != nil {
-			addresses[ip.String()] = true
-		}
-	}
-	for _, x := range append(lookup(b), b) {
-		if ip := net.ParseIP(x); ip != nil && addresses[ip.String()] {
+	for _, found := range lookup(strings.ToLower(pairedHost)) {
+		if normalIP(found) == ip {
 			return true
 		}
 	}
@@ -341,11 +396,17 @@ func sameMac(sessionHost, pairedAddress string, lookup func(string) []string) bo
 }
 
 // helperTarget picks the paired Mac that is the one this session is connected
-// to, and the address to send to: the session's own host with the helper port
-// the pairing used. Nothing is ever sent to any other address.
-func helperTarget(sessionHost string, macs []pairedMac, lookup func(string) []string) (pairedMac, string, bool) {
+// to, and the address to send to: the exact IP address of the live Screen
+// Sharing connection (never a name that would be looked up again, and might
+// answer differently the second time) with the helper port the pairing used.
+// Nothing is ever sent to any other address.
+func helperTarget(peer string, macs []pairedMac, lookup func(string) []string) (pairedMac, string, bool) {
+	ip := normalIP(peer)
+	if ip == "" {
+		return pairedMac{}, "", false
+	}
 	for _, mac := range macs {
-		if !sameMac(sessionHost, mac.Address, lookup) {
+		if !macIsAt(addressHost(mac.Address), ip, lookup) {
 			continue
 		}
 		port := machelper.DefaultPort
@@ -354,7 +415,7 @@ func helperTarget(sessionHost string, macs []pairedMac, lookup func(string) []st
 				port = n
 			}
 		}
-		return mac, net.JoinHostPort(addressHost(sessionHost), strconv.Itoa(port)), true
+		return mac, net.JoinHostPort(addressHost(peer), strconv.Itoa(port)), true
 	}
 	return pairedMac{}, "", false
 }
