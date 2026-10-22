@@ -170,9 +170,12 @@ final class KeyWatchTests: XCTestCase {
         let other = PrivKey()
         let replaced = try KeyWatch(store: MemoryKeyStore(identity: other), ownKey: other.publicKey.rawRepresentation, defaults: d)
         XCTAssertTrue(replaced.changedSinceLastLaunch)
-        // The alert is shown once: the new fingerprint is what is remembered now.
+        // The alert stays until the owner keeps the paired devices: a relaunch asks again.
         let again = try KeyWatch(store: MemoryKeyStore(identity: other), ownKey: other.publicKey.rawRepresentation, defaults: d)
-        XCTAssertFalse(again.changedSinceLastLaunch)
+        XCTAssertTrue(again.changedSinceLastLaunch)
+        again.acceptCurrent()
+        let after = try KeyWatch(store: MemoryKeyStore(identity: other), ownKey: other.publicKey.rawRepresentation, defaults: d)
+        XCTAssertFalse(after.changedSinceLastLaunch, "kept: the new fingerprint is what is remembered now")
     }
 
     func testRecordsChangedBetweenLaunchesAreReportedButTheAppsOwnPairingIsNot() throws {

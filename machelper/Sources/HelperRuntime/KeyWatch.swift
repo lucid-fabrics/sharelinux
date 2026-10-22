@@ -39,6 +39,7 @@ public final class KeyWatch {
     private var trustStamp: Data
     private var latched: Cause?
     private var retired = false
+    private var reviewPending = false
     /// The menu reads `trustFingerprint` on the main thread while the runtime queue rebases.
     private let lock = NSLock()
 
@@ -70,7 +71,23 @@ public final class KeyWatch {
         let prevID = defaults?.string(forKey: identityKey), prevTrust = defaults?.string(forKey: trustKey)
         previousIdentityFingerprint = prevID; previousTrustFingerprint = prevTrust
         changedSinceLastLaunch = (prevID != nil && prevID != id) || (prevTrust != nil && prevTrust != trustFingerprintValue)
-        defaults?.set(id, forKey: identityKey)
+        // A launch that found a change keeps the OLD fingerprints until the owner chooses to keep
+        // the paired devices (`acceptCurrent`): leaving the helper off and reopening the app must
+        // raise the same review again, not accept sessions because the new state was saved.
+        reviewPending = changedSinceLastLaunch
+        if !reviewPending {
+            defaults?.set(id, forKey: identityKey)
+            defaults?.set(trustFingerprintValue, forKey: trustKey)
+        }
+    }
+
+    /// The owner reviewed the change and keeps the paired devices: what is there now becomes the
+    /// remembered baseline for the next launch.
+    public func acceptCurrent() {
+        lock.lock(); defer { lock.unlock() }
+        guard reviewPending, !retired else { return }
+        reviewPending = false
+        defaults?.set(DeviceIdentity.fingerprint(ownKey), forKey: identityKey)
         defaults?.set(trustFingerprintValue, forKey: trustKey)
     }
 
@@ -80,7 +97,7 @@ public final class KeyWatch {
         guard !retired, latched == nil, let snap = try? store.snapshot() else { return }
         trustStamp = snap.trust
         trustFingerprintValue = DeviceIdentity.fingerprint(snap.trust)
-        defaults?.set(trustFingerprintValue, forKey: trustKey)
+        if !reviewPending { defaults?.set(trustFingerprintValue, forKey: trustKey) }
     }
 
     /// Compares the store with the baseline. Once something changed the verdict stays `changed`

@@ -510,6 +510,7 @@ public final class HelperRuntime {
     public func keepPairedDevices() {
         guard reviewHold else { return }
         reviewHold = false
+        keyWatch?.acceptCurrent()
         log.info("the owner kept the paired devices after a change of keys")
         publish()
     }

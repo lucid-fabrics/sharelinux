@@ -51,6 +51,30 @@ final class LaunchReviewTests: XCTestCase {
         XCTAssertEqual(rig.posted { rig.send(c, InputPacket(type: .input, dx: 160)) }, ["move 10 0 held=0"])
     }
 
+    /// "Leave the helper off", quit, reopen: the same review comes back, nothing is accepted.
+    func testLeavingTheHelperOffAndRelaunchingAsksAgain() throws {
+        let (d, cleanup) = defaults()
+        defer { cleanup() }
+        let first = changedRig(d)
+        XCTAssertTrue(first.runtime.state.keysReviewPending)
+        // The owner chose "Leave the helper off": nothing else happens, the app quits.
+        let second = RuntimeRig(watchKeys: true, defaults: d)
+        XCTAssertTrue(second.keyWatch!.changedSinceLastLaunch, "the old baseline is still what the review compares against")
+        XCTAssertEqual(second.keyWatch!.previousIdentityFingerprint, "0000 0000 0000 0000")
+        XCTAssertTrue(second.runtime.state.keysReviewPending)
+        XCTAssertNil(try second.connectIfAnswered(), "no session is accepted without the review")
+    }
+
+    func testKeepingThePairedDevicesIsRememberedForTheNextLaunch() throws {
+        let (d, cleanup) = defaults()
+        defer { cleanup() }
+        let first = changedRig(d)
+        first.runtime.queue.sync { first.runtime.keepPairedDevices() }
+        let second = try KeyWatch(
+            store: first.keyStore!, ownKey: first.macKey.publicKey.rawRepresentation, defaults: d)
+        XCTAssertFalse(second.changedSinceLastLaunch)
+    }
+
     func testAResetAfterTheLaunchChangeDoesNotLiftTheHoldBeforeTheAppRestarts() throws {
         let (d, cleanup) = defaults()
         defer { cleanup() }
