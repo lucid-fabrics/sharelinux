@@ -448,3 +448,45 @@ func TestRelativePointerMoveRejectsNonFiniteMotion(t *testing.T) {
 		})
 	}
 }
+
+// A lock begun before the window was placed stood on a stale box with the
+// pointer outside the picture, so the first click went to another window,
+// the focus left and the lock ended. The lock must bring the pointer onto the
+// picture and the barriers onto the window by itself.
+func TestSettleActionsKeepTheLockUnderTheClick(t *testing.T) {
+	// window box, picture (x y w h), pointer, barrier box
+	at := func(window [4]int, picture [4]int, px, py int, barriers [4]int) lockGeometry {
+		return lockGeometry{
+			window[0], window[1], window[2], window[3],
+			picture[0], picture[1], picture[2], picture[3],
+			px, py,
+			barriers[0], barriers[1], barriers[2], barriers[3],
+		}
+	}
+	window := [4]int{25, 2, 1305, 825}
+	picture := [4]int{25, 50, 1280, 775}
+	cases := []struct {
+		name     string
+		geometry lockGeometry
+		centre   bool
+		rebuild  bool
+		recenter bool
+	}{
+		{"pointer on the picture", at(window, picture, 640, 436, window), true, false, false},
+		{"click and drag stay on the picture", at(window, picture, 1304, 824, window), true, false, false},
+		{"pointer outside the window at start", at(window, picture, 0, 27, window), true, false, true},
+		{"pointer over the header", at(window, picture, 640, 20, window), true, false, true},
+		{"pointer left alone without raw motion", at(window, picture, 0, 27, window), false, false, false},
+		{"window moved after the lock", at(window, picture, 640, 436, [4]int{1, 1, 1281, 800}), true, true, false},
+		{"picture not laid out yet", at(window, [4]int{0, 0, 0, 0}, 0, 27, window), true, false, false},
+		{"right and bottom edges are outside", at(window, picture, 1305, 825, window), true, false, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rebuild, recenter := settleActions(c.geometry, c.centre)
+			if rebuild != c.rebuild || recenter != c.recenter {
+				t.Fatalf("settleActions = (%v, %v), want (%v, %v)", rebuild, recenter, c.rebuild, c.recenter)
+			}
+		})
+	}
+}

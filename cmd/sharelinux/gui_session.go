@@ -560,6 +560,9 @@ func (v *sessionView) poll() {
 		// The picture can move without changing size; the lock follows it.
 		v.screen.refreshLock(v.lockBackend)
 	}
+	if v.lock.held && v.focused {
+		v.screen.settleLock(v.lockBackend)
+	}
 	if cursor, changed := v.h.takeCursor(); changed {
 		v.screen.setCursor(cursor)
 		v.updateSystemCursor()

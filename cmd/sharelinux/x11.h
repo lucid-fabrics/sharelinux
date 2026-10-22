@@ -30,6 +30,17 @@ int oss_x11_lock(GtkWidget *widget, int *major, int *minor);
 // widget's units.
 void oss_x11_unlock(GtkWidget *widget, gboolean has_hint, double x, double y);
 
+// oss_x11_geometry reads what the lock needs to judge itself, in root pixels:
+// [0..3] the window box (left, top, right, bottom) as it is now, [4..7] the
+// picture widget (x, y, width, height), [8..9] the pointer, [10..13] the box the
+// barriers stand on. It returns FALSE when no barriers are up or anything
+// could not be read.
+#define OSS_GEOMETRY_LEN 14
+gboolean oss_x11_geometry(GtkWidget *widget, int geometry[OSS_GEOMETRY_LEN]);
+
+// oss_x11_center warps the pointer to the middle of the widget.
+void oss_x11_center(GtkWidget *widget);
+
 // oss_x11_confined reports whether barriers are up.
 gboolean oss_x11_confined(void);
 

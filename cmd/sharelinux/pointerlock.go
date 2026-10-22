@@ -252,3 +252,22 @@ func xinputUsable(major, minor int) bool {
 func finiteMotion(dx, dy float64) bool {
 	return !math.IsNaN(dx) && !math.IsInf(dx, 0) && !math.IsNaN(dy) && !math.IsInf(dy, 0)
 }
+
+// lockGeometry is what the X11 lock reads of the screen, in root pixels: the
+// window box now [0..3] (left, top, right, bottom), the picture [4..7] (x, y,
+// width, height), the pointer [8..9] and the box the barriers stand on [10..13].
+type lockGeometry [14]int
+
+// settleActions judges a lock that is up. The barriers are rebuilt when the
+// window is not where they stand, and, when raw motion holds the pointer
+// (centre), the pointer is warped to the middle of the picture when it is not
+// over it: a click outside the picture goes to another window, which takes the
+// focus and ends the lock. A picture without size is not laid out yet and has
+// no middle to go to.
+func settleActions(g lockGeometry, centre bool) (rebuild, recenter bool) {
+	rebuild = g[0] != g[10] || g[1] != g[11] || g[2] != g[12] || g[3] != g[13]
+	if centre && g[6] > 0 && g[7] > 0 {
+		recenter = g[8] < g[4] || g[8] >= g[4]+g[6] || g[9] < g[5] || g[9] >= g[5]+g[7]
+	}
+	return rebuild, recenter
+}

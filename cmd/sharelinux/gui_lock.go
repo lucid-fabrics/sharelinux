@@ -76,6 +76,33 @@ func (s *screenView) refreshLock(backend lockBackend) {
 	}
 }
 
+// settleLock keeps an X11 lock true to the window after it was made. A lock
+// begun before the window was placed and laid out stands on a stale box and
+// leaves the pointer outside the picture, so the first click would land on
+// whatever is under it, the window would lose the focus and the lock would
+// end. It rebuilds the barriers when the window moved and brings the pointer
+// back to the picture when raw motion holds it (otherwise it moves freely).
+func (s *screenView) settleLock(backend lockBackend) {
+	if backend != lockX11 && backend != lockConfine {
+		return
+	}
+	var raw [C.OSS_GEOMETRY_LEN]C.int
+	if C.oss_x11_geometry(s.c, &raw[0]) == 0 {
+		return
+	}
+	var geometry lockGeometry
+	for index := range raw {
+		geometry[index] = int(raw[index])
+	}
+	rebuild, recenter := settleActions(geometry, backend == lockX11)
+	if rebuild {
+		C.oss_x11_confine(s.c, 1)
+	}
+	if recenter {
+		C.oss_x11_center(s.c)
+	}
+}
+
 // unlockPointer lets the pointer go and puts it at (x, y) in window units, where
 // the Mac's cursor is drawn, when hint is set. It is safe to call without a lock.
 func (s *screenView) unlockPointer(backend lockBackend, hint bool, x, y float64) {

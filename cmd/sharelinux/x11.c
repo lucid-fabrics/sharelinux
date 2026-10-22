@@ -18,7 +18,10 @@
 #include "wayland.h"
 
 static PointerBarrier barriers[4];
+static void warp_to_middle(GtkWidget *widget);
 static int barrier_count = 0;
+// barrier_box is the window box (left, top, right, bottom) the barriers stand on.
+static int barrier_box[4];
 static Display *barrier_display = NULL;
 static GdkDisplay *barrier_gdk_display = NULL;
 
@@ -86,7 +89,57 @@ gboolean oss_x11_confine(GtkWidget *widget, gboolean on) {
 	barrier_display = display;
 	barrier_gdk_display = gdk_display;
 	barrier_count = 4;
+	barrier_box[0] = x;
+	barrier_box[1] = y;
+	barrier_box[2] = right;
+	barrier_box[3] = bottom;
 	return TRUE;
+}
+
+// window_box is the box oss_x11_confine builds its barriers on, in root coordinates.
+static gboolean window_box(GtkWidget *widget, GdkSurface *surface, Display *display, int box[4]) {
+	Window window = gdk_x11_surface_get_xid(surface), root = DefaultRootWindow(display), child;
+	XWindowAttributes attributes;
+	int x, y;
+	if (!XGetWindowAttributes(display, window, &attributes) || !XTranslateCoordinates(display, window, root, 0, 0, &x, &y, &child)) {
+		return FALSE;
+	}
+	box[0] = MAX(x, 1);
+	box[1] = MAX(y, 1);
+	box[2] = MAX(x + attributes.width, 1);
+	box[3] = MAX(y + attributes.height, 1);
+	return TRUE;
+}
+
+gboolean oss_x11_geometry(GtkWidget *widget, int geometry[OSS_GEOMETRY_LEN]) {
+	GtkNative *native = gtk_widget_get_native(widget);
+	GdkSurface *surface = native != NULL ? gtk_native_get_surface(native) : NULL;
+	graphene_rect_t bounds;
+	if (barrier_count == 0 || surface == NULL || !GDK_IS_X11_SURFACE(surface) || !gtk_widget_compute_bounds(widget, GTK_WIDGET(native), &bounds)) {
+		return FALSE;
+	}
+	Display *display = gdk_x11_display_get_xdisplay(gdk_surface_get_display(surface));
+	Window root = DefaultRootWindow(display), window = gdk_x11_surface_get_xid(surface), child, root_return, child_return;
+	int origin_x, origin_y, pointer_x, pointer_y, win_x, win_y;
+	unsigned int mask;
+	if (!window_box(widget, surface, display, geometry) || !XTranslateCoordinates(display, window, root, 0, 0, &origin_x, &origin_y, &child) || !XQueryPointer(display, root, &root_return, &child_return, &pointer_x, &pointer_y, &win_x, &win_y, &mask)) {
+		return FALSE;
+	}
+	double offset_x = 0, offset_y = 0;
+	gtk_native_get_surface_transform(native, &offset_x, &offset_y);
+	double scale = gdk_surface_get_scale_factor(surface);
+	geometry[4] = origin_x + (int)((bounds.origin.x + offset_x) * scale);
+	geometry[5] = origin_y + (int)((bounds.origin.y + offset_y) * scale);
+	geometry[6] = (int)(bounds.size.width * scale);
+	geometry[7] = (int)(bounds.size.height * scale);
+	geometry[8] = pointer_x;
+	geometry[9] = pointer_y;
+	memcpy(geometry + 10, barrier_box, sizeof(barrier_box));
+	return TRUE;
+}
+
+void oss_x11_center(GtkWidget *widget) {
+	warp_to_middle(widget);
 }
 
 int oss_x11_caps(void) {
@@ -225,7 +278,8 @@ static void warp_to(GtkWidget *widget, double x, double y) {
 static void warp_to_middle(GtkWidget *widget) {
 	graphene_rect_t bounds;
 	GtkNative *native = gtk_widget_get_native(widget);
-	if (native != NULL && gtk_widget_compute_bounds(widget, GTK_WIDGET(native), &bounds)) {
+	// A widget not yet laid out has no middle; the lock's settle step centres it later.
+	if (native != NULL && gtk_widget_compute_bounds(widget, GTK_WIDGET(native), &bounds) && bounds.size.width > 0 && bounds.size.height > 0) {
 		warp_to(widget, bounds.origin.x + bounds.size.width / 2, bounds.origin.y + bounds.size.height / 2);
 	}
 }
