@@ -182,7 +182,7 @@ public final class PairingWindowController: NSWindowController, NSWindowDelegate
         deviceName.alignment = .center
         deviceName.lineBreakMode = .byTruncatingTail
         deviceFingerprint.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        deviceFingerprint.textColor = .tertiaryLabelColor
+        deviceFingerprint.textColor = .secondaryLabelColor
         deviceFingerprint.alignment = .center
         deviceBlock.setViews([deviceName, deviceFingerprint], in: .center)
         deviceBlock.orientation = .vertical
@@ -453,7 +453,7 @@ public final class PairingWindowController: NSWindowController, NSWindowDelegate
     // MARK: actions
 
     /// The mouse went down on Confirm: note whether the window was fully in view right then.
-    func confirmMouseDown() {
+    public func confirmMouseDown() {
         visibleAtMouseDown = window.map { isFullyVisible($0) } ?? false
     }
 
