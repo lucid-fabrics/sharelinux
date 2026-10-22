@@ -24,6 +24,21 @@ public enum HelperDialogs {
         alert(title: PairingText.keysChangedTitle, text: PairingText.keysChangedAlert, style: .critical)
     }
 
+    /// Launch found the keys changed since the last run. "Leave the helper off" is the default button
+    /// (Return); keeping the paired devices or resetting has to be chosen.
+    public static func keysReview(
+        identityBefore: String?, identityNow: String, pairedListBefore: String?, pairedListNow: String
+    ) -> NSAlert {
+        alert(
+            title: PairingText.launchChangeTitle,
+            text: PairingText.launchChangeText(
+                identityBefore: identityBefore, identityNow: identityNow, pairedListBefore: pairedListBefore,
+                pairedListNow: pairedListNow),
+            style: .critical,
+            buttons: [PairingText.leaveOffButton, PairingText.keepPairedButton, PairingText.resetMenuItem],
+            destructive: PairingText.resetMenuItem)
+    }
+
     /// "Reset helper keys...": Cancel is the default button (Return), the reset has to be chosen.
     public static func resetConfirm() -> NSAlert {
         alert(

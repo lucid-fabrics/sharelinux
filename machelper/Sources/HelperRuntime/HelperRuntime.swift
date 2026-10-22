@@ -15,6 +15,15 @@ public struct RuntimeState: Equatable, Sendable {
     /// The helper's keys changed outside the app (`KeyWatch`): everything was switched off and
     /// stays off until the helper is restarted.
     public var keysChanged = false
+    /// At launch the keys were not as the last run left them: no session is accepted until the
+    /// owner reviews the fingerprints and chooses "Keep paired devices" or resets the keys.
+    public var keysReviewPending = false
+
+    /// A live session with "Allow raw mouse" on: input can arrive at any moment, so its clicks may
+    /// be the ones landing on the pairing window or the reset question. With the switch off nothing
+    /// can be injected (every packet is refused), so pairing and reset are open even though a
+    /// Linux client keeps its session in Exclusive mode.
+    public var pairingBlocked: Bool { device != nil && allowRawMouse }
 
     /// The text of the always-on-top badge: shown exactly while events are being
     /// posted, whatever the menu bar does (the notch or "hide menu bar icon"
@@ -24,10 +33,12 @@ public struct RuntimeState: Equatable, Sendable {
     }
 
     public init(
-        allowRawMouse: Bool, device: String?, injecting: Bool, lastDeny: HelperState?, keysChanged: Bool = false
+        allowRawMouse: Bool, device: String?, injecting: Bool, lastDeny: HelperState?, keysChanged: Bool = false,
+        keysReviewPending: Bool = false
     ) {
         self.allowRawMouse = allowRawMouse; self.device = device
         self.injecting = injecting; self.lastDeny = lastDeny; self.keysChanged = keysChanged
+        self.keysReviewPending = keysReviewPending
     }
 }
 
@@ -81,6 +92,12 @@ public final class HelperRuntime {
     /// The tripwire on the Keychain items (nil: not watched, tests and the harness).
     public let keyWatch: KeyWatch?
     private var keysChangedLatch = false
+    /// Launch found the keys changed since the last run: handshakes are ignored and the switch
+    /// stays off until `keepPairedDevices()` (the owner reviewed the fingerprints) or a reset.
+    private var reviewHold = false
+    /// The key whose session was announced to the owner. Kept across a rekey (a new session of
+    /// the same device), cleared when the session really ends.
+    private var announcedKey: Data?
     private var lastKeyCheck: Double?
     /// Handshake initiations trigger a check at most this often (seconds), so a flood of them cannot
     /// turn into a flood of Keychain reads. A session start always checks.
@@ -113,8 +130,13 @@ public final class HelperRuntime {
         return c
     }
 
-    /// Called on `queue` when a session starts (the app posts a notification).
+    /// Called on `queue` when a paired device's session first becomes one the helper acts on (the
+    /// app posts a notification). Not for a rekey, and not while the switch is off.
     public var onSessionStart: ((String) -> Void)?
+
+    /// Called on `queue` with a sealed status the helper volunteers (it stopped on purpose) and
+    /// the address to send it to. The UDP server sends it from its socket.
+    public var onNotice: ((Data, PeerAddress) -> Void)?
 
     public init(
         staticKey: Curve25519.KeyAgreement.PrivateKey, pairedKeys: @escaping () -> [Data], poster: EventPoster,
@@ -145,9 +167,12 @@ public final class HelperRuntime {
             clock: clock, timestamps: timestamps)
         controller.onInjectingChange = { [weak self] _ in self?.publish() }
         pairing?.onPairedChanged = { [weak self] in self?.pairedKeysChanged() }
-        // Called on `queue`, where `device` lives. A live session means the person's own
+        // Called on `queue`, where `device` lives. A session that can inject means the person's own
         // clicks may be landing on the pairing window: no new pairing meanwhile.
-        pairing?.isSessionActive = { [weak self] in self?.device != nil }
+        pairing?.isSessionActive = { [weak self] in self?.state.pairingBlocked ?? false }
+        // The app's own write, whether it finished or stopped half way, is the new baseline.
+        pairing?.onStoreWritten = { [weak self] in self?.keyWatch?.rebase(); self?.publish() }
+        reviewHold = keyWatch?.changedSinceLastLaunch ?? false
         // Before the store is written: if the keys already changed outside the app, write nothing.
         pairing?.writeAllowed = { [weak self] in self?.checkKeys() ?? true }
         mon.refresh()
@@ -161,7 +186,7 @@ public final class HelperRuntime {
     public var state: RuntimeState {
         RuntimeState(
             allowRawMouse: localSwitch.isOn, device: device, injecting: controller.injecting, lastDeny: lastDeny,
-            keysChanged: keysChangedLatch)
+            keysChanged: keysChangedLatch || reviewHold, keysReviewPending: reviewHold)
     }
 
     // MARK: datagrams and time
@@ -175,12 +200,13 @@ public final class HelperRuntime {
         }
         // A handshake is where a session begins: look at the keys first (rate limited).
         if datagram.first == DatagramKind.ikInitiation.rawValue {
-            if keysChangedLatch { return nil }
+            if keysChangedLatch || reviewHold { return nil }
             if keyCheckDue(), !checkKeys() { return nil }
         }
         let r = channel.receive(datagram, from: source)
         process(r.events, source: source)
-        return r.reply
+        // The keys turned out changed while this datagram was processed: it gets no answer.
+        return keysChangedLatch ? nil : r.reply
     }
 
     static let pairingKinds: Set<UInt8> = [
@@ -244,25 +270,28 @@ public final class HelperRuntime {
         for e in events {
             switch e {
             case .sessionStarted(let key):
-                // Always checked at a session start, before anything is accepted or shown.
-                if !checkKeys() { continue }
+                // Always checked at a session start, before anything is accepted or shown. When the
+                // keys changed, nothing else in this datagram's events is acted on either (the
+                // same datagram can carry the first input packet of the session).
+                if !checkKeys() { return }
                 activeKey = key; activeSource = source; sharingSeen = false
                 acceptedInputs = 0; deniedInputs = 0; droppedDatagrams = 0
                 lastDeny = nil; lastLoggedDeny = nil
                 device = deviceName(key)
                 log.info("session started with \(key.prefix(4).hex, privacy: .public)")
-                onSessionStart?(device ?? "")
                 changed = true
             case .input(let p):
                 activeSource = source ?? activeSource
                 sharingSeen = true
                 acceptedInputs += 1
                 if lastDeny != nil { lastDeny = nil; lastLoggedDeny = nil; changed = true }
+                announceIfNew()
                 controller.apply(p)
             case .keepalive:
                 activeSource = source ?? activeSource
                 sharingSeen = true
                 if lastDeny != nil { lastDeny = nil; lastLoggedDeny = nil; changed = true }
+                announceIfNew()
                 controller.touch()
             case .denied(let s):
                 activeSource = source ?? activeSource
@@ -279,6 +308,7 @@ public final class HelperRuntime {
                     "session ended (\(String(describing: reason), privacy: .public)): \(self.acceptedInputs) accepted, \(self.deniedInputs) refused, \(self.droppedDatagrams) dropped"
                 )
                 activeKey = nil; activeSource = nil; device = nil; lastDeny = nil
+                if reason != .replaced { announcedKey = nil }  // a rekey is the same device carrying on
                 changed = true
             case .dropped:
                 droppedDatagrams += 1
@@ -289,6 +319,14 @@ public final class HelperRuntime {
         if changed { publish() }
     }
 
+    /// The owner hears about a session once: when the helper first acts on it. A session the
+    /// switch keeps off (every packet refused) says nothing, and neither does a rekey.
+    private func announceIfNew() {
+        guard let key = activeKey, announcedKey != key else { return }
+        announcedKey = key
+        onSessionStart?(device ?? "")
+    }
+
     private func release(_ reason: ReleaseReason) {
         controller.releaseAll(reason)
     }
@@ -296,6 +334,15 @@ public final class HelperRuntime {
     private func end(_ reason: EndReason) {
         controller.releaseAll(.ended)
         if let e = channel.endSession(reason: reason) { process([e], source: nil) }
+    }
+
+    /// The helper stopped on purpose: tell the Linux side now, twice (a datagram can be lost), so it
+    /// does not have to wait for silence. Nothing is sent without a live, authenticated session.
+    private func announceStop() {
+        guard let source = activeSource else { return }
+        for _ in 0..<2 {
+            if let notice = channel.unsolicitedStatus(.disabled) { onNotice?(notice, source) }
+        }
     }
 
     private func publish() { onState?(state) }
@@ -316,7 +363,7 @@ public final class HelperRuntime {
     /// ended up as asked.
     @discardableResult
     public func setAllowRawMouse(_ on: Bool) -> Bool {
-        if on, keysChangedLatch || !checkKeys() {
+        if on, keysChangedLatch || reviewHold || !checkKeys() {
             localSwitch.isOn = false
             publish()
             return false
@@ -328,6 +375,8 @@ public final class HelperRuntime {
         }
         localSwitch.isOn = on
         if !on { stopEverything(.toggleOff) }
+        // With the switch on, a session's clicks may land on the pairing window: close it.
+        if on { pairing?.close() }
         publish()
         return true
     }
@@ -455,7 +504,17 @@ public final class HelperRuntime {
         return .done
     }
 
+    /// The owner reviewed the fingerprints shown after a launch that found the keys changed, and
+    /// keeps the paired devices. Sessions are accepted again; the switch is still off. Call on `queue`.
+    public func keepPairedDevices() {
+        guard reviewHold else { return }
+        reviewHold = false
+        log.info("the owner kept the paired devices after a change of keys")
+        publish()
+    }
+
     private func stopEverything(_ reason: ReleaseReason) {
+        if reason == .toggleOff || reason == .killSwitch { announceStop() }
         controller.releaseAll(reason)
         if let e = channel.endSession(reason: .local) { process([e], source: nil) }
     }

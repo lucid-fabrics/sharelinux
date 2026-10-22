@@ -115,6 +115,10 @@ public final class PairingCoordinator {
 
     /// Called on the runtime queue whenever the status changes.
     public var onChange: ((PairingStatus) -> Void)?
+    /// Called on the runtime queue after any write to the key store, finished or not: a write
+    /// that stopped half way (the removed-devices list updated, the record still there) has changed
+    /// the store all the same, and that is the app's own doing, not a change from outside.
+    public var onStoreWritten: (() -> Void)?
     /// Called on the runtime queue after the paired list changed (a device was
     /// added or removed); the runtime ends a session whose key is gone.
     public var onPairedChanged: (() -> Void)?
@@ -223,6 +227,7 @@ public final class PairingCoordinator {
             publish()
             return nil
         }
+        defer { onStoreWritten?() }
         do {
             try store.addPaired(PairedDevice(name: paired.name, key: paired.key))
             devices = try store.loadPaired()
@@ -301,6 +306,7 @@ public final class PairingCoordinator {
         }
         window?.close()
         window = nil
+        defer { onStoreWritten?() }
         do { try store.resetAll() } catch {
             notice = .storeFailed("The Keychain did not let go of the keys.")
             publish()
@@ -320,6 +326,7 @@ public final class PairingCoordinator {
             publish()
             return
         }
+        defer { onStoreWritten?() }
         do {
             try store.removePaired(key: key)
             devices = try store.loadPaired()

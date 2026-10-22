@@ -23,6 +23,9 @@ public final class UDPServer {
     /// Tests: called at the end of every read pass with the number of datagrams
     /// that pass read. Set before `start()`; it runs on the runtime queue.
     var onPass: ((Int) -> Void)?
+    /// Where the last reply went (touched only on the runtime queue). The helper's own volunteered
+    /// status ("stopped") goes only to an address that was just answered as an authenticated peer.
+    private var lastReply: (peer: PeerAddress, to: sockaddr_storage, length: socklen_t)?
     private var readSource: DispatchSourceRead?
     private var timer: DispatchSourceTimer?
     private let log = Logger(subsystem: "io.github.sharelinux.mousehelper", category: "udp")
@@ -80,6 +83,7 @@ public final class UDPServer {
             UInt16(bigEndian: raw.load(fromByteOffset: 2, as: UInt16.self))
         }
         fd = s
+        runtime.onNotice = { [weak self] datagram, peer in self?.sendNotice(datagram, to: peer) }
 
         let src = DispatchSource.makeReadSource(fileDescriptor: s, queue: runtime.queue)
         src.setEventHandler { [weak self] in self?.drain() }
@@ -106,6 +110,18 @@ public final class UDPServer {
     public func stop() {
         timer?.cancel(); timer = nil
         readSource?.cancel(); readSource = nil
+    }
+
+    /// Sends a volunteered status to the peer that was last answered, if it is that peer.
+    private func sendNotice(_ datagram: Data, to peer: PeerAddress) {
+        guard var target = lastReply, target.peer == peer, fd >= 0 else { return }
+        datagram.withUnsafeBytes { r in
+            withUnsafePointer(to: &target.to) { p in
+                p.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    _ = sendto(fd, r.baseAddress, r.count, 0, $0, target.length)
+                }
+            }
+        }
     }
 
     /// Datagrams read per pass. The socket is read on the same serial queue as
@@ -150,6 +166,7 @@ public final class UDPServer {
             }
             guard let bytes, let source = PeerAddress(bytes: bytes) else { continue }
             if let reply = runtime.handle(datagram: Data(buf[0..<n]), from: source) {
+                lastReply = (source, from, fromLen)
                 reply.withUnsafeBytes { r in
                     withUnsafePointer(to: &from) { p in
                         p.withMemoryRebound(to: sockaddr.self, capacity: 1) {

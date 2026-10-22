@@ -243,6 +243,14 @@ public final class HelperChannel {
         return .ended(reason)
     }
 
+    /// A sealed status for the live session, sent without being asked: the helper stopped on
+    /// purpose (switch off, Stop now) and says so before the session ends, so the Linux side
+    /// falls back at once instead of waiting for silence. nil without a live session.
+    public func unsolicitedStatus(_ state: HelperState) -> Data? {
+        guard let a = active else { return nil }
+        return try? a.session.seal(StatusPacket(state: state).encode(), now: clock.monotonic())
+    }
+
     /// Call at least every 100 ms. Ends a session that has been silent too long.
     public func tick() -> ChannelEvent? {
         let now = clock.monotonic()

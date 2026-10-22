@@ -104,10 +104,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             standingProblem = "Cannot open UDP port \(UDPServer.defaultPort)"
         }
         apply(runtime.state)
-        if keyWatch.changedSinceLastLaunch {
-            // The fingerprints differ from what the last run left behind. A same-user program can
-            // edit that note too: a tripwire, not a guarantee (design 3.7).
-            DispatchQueue.main.async { [self] in showKeysChanged() }
+        if runtime.state.keysReviewPending {
+            // The fingerprints differ from what the last run left behind. The runtime already holds
+            // everything off; the owner reviews them and decides. A same-user program can edit that
+            // note too: a tripwire, not a guarantee (design 3.7).
+            DispatchQueue.main.async { [self] in reviewKeys() }
         }
     }
 
@@ -115,6 +116,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func showKeysChanged() {
         NSApp.activate(ignoringOtherApps: true)
         HelperDialogs.keysChanged().runModal()
+    }
+
+    /// Shows the fingerprints from the last run next to the ones now, and what each choice does.
+    /// Nothing is accepted from any device until "Keep paired devices" or a reset.
+    @objc private func reviewKeys() {
+        guard runtime.state.keysReviewPending else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = HelperDialogs.keysReview(
+            identityBefore: keyWatch.previousIdentityFingerprint, identityNow: keyWatch.identityFingerprint,
+            pairedListBefore: keyWatch.previousTrustFingerprint, pairedListNow: keyWatch.trustFingerprint)
+        switch alert.runModal() {
+        case .alertSecondButtonReturn:
+            runtime.queue.async { self.runtime.keepPairedDevices() }
+        case .alertThirdButtonReturn:
+            resetKeys()
+        default:
+            break  // stays held; the menu has "Review changed keys..."
+        }
     }
 
     /// The Keychain items are damaged so badly that the helper cannot start: offer the reset here,
@@ -144,7 +163,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         helperMenu = HelperMenu(
             target: self,
             actions: [
-                .toggle: #selector(toggle), .stop: #selector(stopNow), .grant: #selector(requestAccess),
+                .toggle: #selector(toggle), .stop: #selector(stopNow), .review: #selector(reviewKeys),
+                .grant: #selector(requestAccess),
                 .pair: #selector(openPairing), .reset: #selector(resetKeys), .quit: #selector(quit),
             ],
             keyEquivalents: [.quit: "q"], entries: menuEntries(for: state))
@@ -179,8 +199,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func stopNow() { runtime.emergencyStop(.kill) }
 
     @objc private func openPairing() {
-        // Not while a helper session is live: that session's clicks could be the ones landing here.
-        guard state.device == nil else { return }
+        // Not while a session could inject: its clicks could be the ones landing here.
+        guard !state.pairingBlocked else { return }
         pairingWindow.presentFromOwnerClick()
         runtime.queue.async { self.pairing.open() }
     }
@@ -189,7 +209,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// be the ones landing on the confirmation). The key in memory is the old one, so the helper quits
     /// afterwards; the next launch makes a fresh identity.
     @objc private func resetKeys() {
-        guard state.device == nil else {
+        guard !state.pairingBlocked else {
             NSApp.activate(ignoringOtherApps: true)
             HelperDialogs.resetRefused().runModal()
             return

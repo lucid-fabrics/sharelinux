@@ -51,6 +51,10 @@ public final class KeyWatch {
     public var identityFingerprint: String { DeviceIdentity.fingerprint(ownKey) }
     /// At launch the fingerprints were not what the last run left behind.
     public let changedSinceLastLaunch: Bool
+    /// What the last run left behind, for the owner to compare with the fingerprints now (nil on
+    /// the first run).
+    public let previousIdentityFingerprint: String?
+    public let previousTrustFingerprint: String?
 
     /// - Parameter defaults: where the last-seen fingerprints are kept (nil: not kept).
     public init(
@@ -64,6 +68,7 @@ public final class KeyWatch {
         trustFingerprintValue = DeviceIdentity.fingerprint(snap.trust)
         let id = DeviceIdentity.fingerprint(ownKey)
         let prevID = defaults?.string(forKey: identityKey), prevTrust = defaults?.string(forKey: trustKey)
+        previousIdentityFingerprint = prevID; previousTrustFingerprint = prevTrust
         changedSinceLastLaunch = (prevID != nil && prevID != id) || (prevTrust != nil && prevTrust != trustFingerprintValue)
         defaults?.set(id, forKey: identityKey)
         defaults?.set(trustFingerprintValue, forKey: trustKey)
@@ -71,6 +76,7 @@ public final class KeyWatch {
 
     /// The app wrote to the store itself (pair, remove): the new state is the baseline.
     public func rebase() {
+        lock.lock(); defer { lock.unlock() }
         guard !retired, latched == nil, let snap = try? store.snapshot() else { return }
         trustStamp = snap.trust
         trustFingerprintValue = DeviceIdentity.fingerprint(snap.trust)

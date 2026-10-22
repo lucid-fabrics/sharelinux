@@ -344,12 +344,18 @@ final class PairingCoordinatorTests: XCTestCase {
         let second = PrivKey()
         try pair(rig, try LinuxPairer(key: second, name: "Second PC"), from: other)
         advance(rig, 1.1)  // the code has been up long enough, so only the session can refuse
+        let shown = rig.coordinator!.status
+        let code = try XCTUnwrap(shown.phaseCode), key = try XCTUnwrap(shown.pendingKey)
+        // Turning the switch on closes the pairing window: from then on a session can inject, and its
+        // clicks could be the ones landing on Confirm.
         rig.runtime.setAllowRawMouse(true)
         rig.run(0.2)
         _ = try rig.connect()
-        let shown = rig.coordinator!.status
-        XCTAssertEqual(rig.coordinator?.confirm(code: try XCTUnwrap(shown.phaseCode), peerKey: try XCTUnwrap(shown.pendingKey)), .sessionActive)
+        XCTAssertEqual(rig.coordinator!.status.phase, .closed)
+        XCTAssertNotNil(rig.coordinator?.confirm(code: code, peerKey: key), "a Confirm for the old window pairs nothing")
         XCTAssertEqual(rig.coordinator?.status.devices.count, 1, "the second device was not paired")
+        XCTAssertFalse(rig.coordinator!.open(), "no new window while a session can inject")
+        XCTAssertEqual(rig.coordinator?.status.notice, .refused(.sessionActive))
     }
 
     // MARK: look-alike names (finding 5)

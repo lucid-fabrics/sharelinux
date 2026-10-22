@@ -14,7 +14,7 @@ public enum PairingText {
     public static let waitingLine = "Waiting for a Linux device..."
     public static let cancelButton = "Cancel"
     public static let pairMenuItem = "Pair a Linux device..."
-    public static let pairMenuItemBusy = "Pair a Linux device... (a session is active)"
+    public static let pairMenuItemBusy = "Pair a Linux device... (turn off Allow raw mouse first)"
 
     /// "1a2b 3c4d 5e6f 7a8b": the same string the Linux side shows for the key.
     public static func fingerprint(_ key: Data) -> String { DeviceIdentity.fingerprint(key) }
@@ -32,14 +32,39 @@ public enum PairingText {
     public static let keysChangedAlert =
         "The helper's keys changed outside the app. Paired devices were turned off. Pair again only if you did this yourself."
     public static let resetMenuItem = "Reset helper keys..."
-    public static let resetMenuItemBusy = "Reset helper keys... (a session is active)"
+
+    // MARK: keys that changed while the helper was not running (checked at launch)
+
+    public static let launchChangeTitle = "The helper's keys changed since it last ran"
+    public static let keepPairedButton = "Keep paired devices"
+    public static let leaveOffButton = "Leave the helper off"
+    public static let reviewMenuItem = "Review changed keys..."
+    public static let keysReviewState = "Keys changed since the last run: review needed"
+    public static let unknownFingerprint = "not known"
+
+    /// The review dialog's text. It lists what the last run left behind next to what is there now,
+    /// and says what each choice does. Until a choice is made, no Linux device can use the helper.
+    public static func launchChangeText(
+        identityBefore: String?, identityNow: String, pairedListBefore: String?, pairedListNow: String
+    ) -> String {
+        let a = identityBefore ?? unknownFingerprint, b = pairedListBefore ?? unknownFingerprint
+        return """
+            While the helper was not running, its keys were not left as the last run saw them. No Linux device can use the helper until you decide.
+
+            This Mac's key: was \(a), now \(identityNow)
+            Paired list: was \(b), now \(pairedListNow)
+
+            If you paired, removed or reset devices yourself, choose Keep paired devices. If you did not, choose Reset helper keys... and pair your devices again. Leave the helper off keeps everything stopped for now.
+            """
+    }
+    public static let resetMenuItemBusy = "Reset helper keys... (turn off Allow raw mouse first)"
     public static let resetQuestion = "Reset the helper's keys?"
     public static let resetExplanation =
         "This deletes the helper's key and the list of paired devices, and starts fresh. All Linux devices must pair again. Do this if the helper says its keys are damaged, or if you did not expect them to change."
     public static let resetConfirmButton = "Reset keys"
     public static let resetRefusedTitle = "Keys not reset"
     public static let resetRefused =
-        "A Linux device is using the mouse helper right now, so the keys cannot be reset. Try again after that session ends."
+        "A Linux device could move the mouse right now, so the keys cannot be reset. Turn off Allow raw mouse in the menu bar menu, then try again."
     public static let resetDoneTitle = "Helper keys reset"
     public static let resetDone =
         "The helper's keys were deleted. All Linux devices must pair again. The helper will now quit. Open it again to start fresh."
@@ -70,7 +95,7 @@ public enum PairingText {
         case .tooSoon:
             return "That click came too soon after the code appeared, so it was ignored. Check the code, then click Confirm."
         case .sessionActive:
-            return "A Linux device is using the mouse helper right now. Pair another device after that session ends."
+            return "A Linux device could move the mouse right now. Turn off Allow raw mouse in the menu bar menu, then pair."
         case .nameCollision(let other):
             return "A device called \(other) is already paired and this name looks the same. Reject, rename this computer on the Linux side and pair again."
         case .windowCovered:
@@ -107,7 +132,7 @@ public enum PairingText {
         switch s.notice {
         case .refused: return nil
         case .unlockRefusedSessionActive:
-            return "A Linux device is using the mouse helper right now, so pairing cannot be unlocked. Try again after that session ends."
+            return "A Linux device could move the mouse right now, so pairing cannot be unlocked. Turn off Allow raw mouse in the menu bar menu, then try again."
         case .paired(let name): return "Paired with \(name)."
         case .rejected: return "Rejected. Nothing was saved. You can start again from the Linux device."
         case .expired: return "The pairing window closed. Open it again to pair."

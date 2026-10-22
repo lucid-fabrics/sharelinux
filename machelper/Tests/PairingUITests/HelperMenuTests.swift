@@ -31,7 +31,25 @@ final class HelperMenuTests: XCTestCase {
         let live = entries(RuntimeState(allowRawMouse: true, device: "Desk PC", injecting: false, lastDeny: nil))
         XCTAssertFalse(entry(.reset, in: live).enabled)
         XCTAssertFalse(entry(.pair, in: live).enabled)
-        XCTAssertTrue(entry(.reset, in: live).title.contains("a session is active"))
+        XCTAssertTrue(entry(.reset, in: live).title.contains("turn off Allow raw mouse first"))
+    }
+
+    /// A Linux client sits in Exclusive mode for as long as it likes. With the switch off nothing it
+    /// sends is acted on, so pairing and reset must stay open: the owner's way out is the switch.
+    func testPairingAndResetAreOpenWhileASessionIsLiveButTheSwitchIsOff() {
+        let idle = entries(RuntimeState(allowRawMouse: false, device: "Desk PC", injecting: false, lastDeny: .disabled))
+        XCTAssertTrue(entry(.pair, in: idle).enabled)
+        XCTAssertTrue(entry(.reset, in: idle).enabled)
+        XCTAssertEqual(entry(.pair, in: idle).title, PairingText.pairMenuItem)
+    }
+
+    func testTheReviewItemShowsOnlyWhileTheLaunchReviewIsPending() {
+        let pending = entries(RuntimeState(
+            allowRawMouse: false, device: nil, injecting: false, lastDeny: nil, keysChanged: true, keysReviewPending: true))
+        XCTAssertFalse(entry(.review, in: pending).hidden)
+        XCTAssertEqual(entry(.state, in: pending).title, PairingText.keysReviewState)
+        XCTAssertFalse(entry(.toggle, in: pending).enabled)
+        XCTAssertTrue(entry(.review, in: entries()).hidden)
     }
 
     func testAfterKeysChangedTheStateSaysSoAndTheSwitchCannotBeTurnedOn() {

@@ -58,6 +58,10 @@ public final class MemoryKeyStore: KeyStore {
     private var paired: [PairedDevice] = []
     /// Tests: make the next writes fail.
     public var failWrites = false
+    /// Tests: a failing write first changes the store (as a Keychain write that stops half way
+    /// does: the removed-devices list updated, the record still there), then throws.
+    public var failHalfWay = false
+    private var halfWaySalt = 0
     public var ignoredRecords = 0
     public var revocationDamaged = false
     /// Tests: what a program outside the app could do to the store.
@@ -86,19 +90,23 @@ public final class MemoryKeyStore: KeyStore {
         var h = SHA256()
         for d in paired.sorted(by: { $0.key.hex < $1.key.hex }) { h.update(data: d.key); h.update(data: Data(d.name.utf8)) }
         h.update(data: outsideTrustSalt)
+        h.update(data: Data("\(halfWaySalt)".utf8))
         return KeySnapshot(identity: pub, trust: Data(h.finalize()))
     }
     public func resetAll() throws {
+        if failWrites, failHalfWay { halfWaySalt += 1 }
         if failWrites { throw KeyStoreError.failed("memory store set to fail") }
         identity = nil; paired = []; revocationDamaged = false
         outsideIdentity = nil; outsideDeleteIdentity = false; outsideTrustSalt = Data()
     }
     public func addPaired(_ device: PairedDevice) throws {
+        if failWrites, failHalfWay { halfWaySalt += 1 }
         if failWrites { throw KeyStoreError.failed("memory store set to fail") }
         paired.removeAll { constantTimeEqual($0.key, device.key) }
         paired.append(device)
     }
     public func removePaired(key: Data) throws {
+        if failWrites, failHalfWay { halfWaySalt += 1 }
         if failWrites { throw KeyStoreError.failed("memory store set to fail") }
         paired.removeAll { constantTimeEqual($0.key, key) }
     }

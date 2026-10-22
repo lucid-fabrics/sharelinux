@@ -63,6 +63,10 @@ final class RuntimeRig {
     var statuses: [PairingStatus] = []
     var keyWatch: KeyWatch?
     var keysChangedAlerts = 0
+    /// Volunteered statuses (sealed datagrams) and the addresses they were meant for.
+    var notices: [(Data, PeerAddress)] = []
+    /// Devices the owner was told about ("Raw mouse active").
+    var announced: [String] = []
 
     init(pairing: Bool = false, watchKeys: Bool = false, defaults: UserDefaults? = nil,
          prepairedName: String? = nil) {
@@ -87,12 +91,14 @@ final class RuntimeRig {
             staticKey: macKey,
             pairedKeys: { [unowned self] in coordinator?.pairedKeys ?? self.paired }, poster: poster,
             session: session, sharing: sharing, access: access, ownUID: 501,
-            clock: ChannelClock(monotonic: { [unowned self] in self.mono }, wall: { [unowned self] in self.wall }),
+            clock: ChannelClock(monotonic: { [weak self] in self?.mono ?? 0 }, wall: { [weak self] in self?.wall ?? Date() }),
             timestamps: MemoryTimestampStore(),
             deviceName: { coordinator?.name(for: $0) ?? HelperRuntime.fingerprintName($0) }, pairing: coordinator,
             keyWatch: keyWatch)
         runtime.onKeysChanged = { [unowned self] in self.keysChangedAlerts += 1 }
         runtime.onState = { [unowned self] in self.states.append($0) }
+        runtime.onNotice = { [weak self] in self?.notices.append(($0, $1)) }
+        runtime.onSessionStart = { [weak self] in self?.announced.append($0) }
     }
 
     /// Advances time in 50 ms steps, sampling the environment and running the watchdogs like the timer does.
@@ -128,7 +134,9 @@ final class RuntimeRig {
 
     /// Like `connect` but nil when the Mac does not answer the handshake (an
     /// unpaired key), without recording a failure.
-    func connectIfAnswered(key: PrivKey? = nil, from source: PeerAddress = RuntimeRig.addr) throws -> Client? {
+    func connectIfAnswered(
+        key: PrivKey? = nil, from source: PeerAddress = RuntimeRig.addr, first: InputPacket = InputPacket(type: .keepalive)
+    ) throws -> Client? {
         wall = wall.addingTimeInterval(1)
         let hs = try HandshakeState(
             pattern: .ik, initiator: true, staticKey: key ?? linuxKey,
@@ -139,7 +147,7 @@ final class RuntimeRig {
         guard let reply = runtime.handle(datagram: dg, from: source) else { return nil }
         _ = try hs.readMessage(reply.dropFirst())
         let client = Client(session: TransportSession(keys: try hs.split(), now: mono))
-        _ = send(client, InputPacket(type: .keepalive), from: source)
+        _ = send(client, first, from: source)
         return client
     }
 

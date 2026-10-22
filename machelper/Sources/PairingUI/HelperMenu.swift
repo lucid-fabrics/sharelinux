@@ -5,7 +5,7 @@ import HelperRuntime
 /// What the menu bar menu shows, decided apart from AppKit so it can be tested and drawn offscreen.
 public struct HelperMenuEntry: Equatable {
     public enum ID: Hashable {
-        case state, toggle, stop, grant, pair, reset, keyMine, keyList, quit
+        case state, toggle, stop, review, grant, pair, reset, keyMine, keyList, quit
         case separator(Int)
     }
     public var id: ID
@@ -27,6 +27,8 @@ public enum HelperMenuModel {
         let stateTitle: String
         if let problem {
             stateTitle = problem
+        } else if state.keysReviewPending {
+            stateTitle = PairingText.keysReviewState
         } else if state.keysChanged {
             stateTitle = PairingText.keysChangedState
         } else if let why = cannotEnable {
@@ -37,7 +39,7 @@ public enum HelperMenuModel {
         } else {
             stateTitle = state.allowRawMouse ? "Raw mouse is on, waiting for a device" : "Raw mouse is off"
         }
-        let busy = state.device != nil
+        let busy = state.pairingBlocked
         let lines = PairingText.keyMenuLines(identity: identity, pairedList: pairedList)
         return [
             HelperMenuEntry(id: .state, title: stateTitle, enabled: false),
@@ -46,6 +48,7 @@ public enum HelperMenuModel {
                 id: .toggle, title: "Allow raw mouse", enabled: cannotEnable == nil && !state.keysChanged,
                 checked: state.allowRawMouse),
             HelperMenuEntry(id: .stop, title: "Stop now"),
+            HelperMenuEntry(id: .review, title: PairingText.reviewMenuItem, hidden: !state.keysReviewPending),
             HelperMenuEntry(id: .separator(1), title: ""),
             HelperMenuEntry(id: .grant, title: "Request Accessibility access...", hidden: accessGranted),
             HelperMenuEntry(
