@@ -175,10 +175,7 @@ final class StuckButtonTests: XCTestCase {
         rig.mono += ChannelLimits.silenceTimeout - 0.1
         rig.runtime.controller.tick()
         XCTAssertEqual(rig.runtime.controller.held, [.left], "still inside the timeout")
-        rig.runtime.controller.touch()  // a keepalive keeps buttons as they are
-        rig.mono += ChannelLimits.silenceTimeout - 0.1
-        rig.runtime.controller.tick()
-        XCTAssertEqual(rig.runtime.controller.held, [.left])
+        rig.runtime.controller.touch()  // a keepalive does NOT keep a held button down
         rig.mono += 0.2
         rig.runtime.controller.tick()
         XCTAssertEqual(rig.runtime.controller.held, [])

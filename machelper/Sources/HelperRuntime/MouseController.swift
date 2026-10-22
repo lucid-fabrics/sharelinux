@@ -29,7 +29,12 @@ public final class MouseController {
     private var remX = 0, remY = 0  // sub-pixel remainder, in 1/16 point
     public private(set) var held: ButtonMask = []
     public private(set) var injecting = false
+    /// Any accepted packet, keepalives included: how long the session has been alive.
     private var lastActivity = -Double.infinity
+    /// The last accepted INPUT packet. A held button lives on this alone: a keepalive says the
+    /// link is up, not that the person still holds the button, and a lost "all up" must not be
+    /// kept alive by the keepalives that keep flowing on a link that dropped its input.
+    private var lastInput = -Double.infinity
     private var lastDown: (button: MouseButton, at: Double, count: Int)?
     private var movedSinceDown = 0
     /// Called when `injecting` changes (menu bar icon).
@@ -51,6 +56,7 @@ public final class MouseController {
     public func apply(_ p: InputPacket) {
         let now = clock()
         lastActivity = now
+        lastInput = now
         setInjecting(true)
 
         // Motion, carrying the remainder.
@@ -86,7 +92,8 @@ public final class MouseController {
         return last.count + 1
     }
 
-    /// A keepalive was accepted: the channel is alive, buttons stay as they are.
+    /// A keepalive was accepted: the channel is alive. It keeps the session (and the
+    /// indicator) going but never a held button: only input packets do that.
     public func touch() {
         lastActivity = clock()
     }
@@ -106,11 +113,14 @@ public final class MouseController {
     }
 
     /// Watchdog, call at least every 100 ms: no accepted traffic for
-    /// `ChannelLimits.silenceTimeout` means the buttons come up.
+    /// `ChannelLimits.silenceTimeout` means the buttons come up, and so does no accepted
+    /// INPUT for that long while a button is held (keepalives do not count for buttons).
     public func tick() {
         let now = clock()
         guard injecting || !held.isEmpty else { return }
         if now < lastActivity || now - lastActivity >= ChannelLimits.silenceTimeout {
+            releaseAll(.timeout)
+        } else if !held.isEmpty, now < lastInput || now - lastInput >= ChannelLimits.silenceTimeout {
             releaseAll(.timeout)
         }
     }

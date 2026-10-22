@@ -115,20 +115,36 @@ final class MouseControllerTests: XCTestCase {
         XCTAssertEqual(changes, [true, false])
     }
 
-    func testWatchdogReleasesAfterSilenceButTouchKeepsTheButtons() {
+    /// M2: a link that dropped its input (the "all up" was lost) still carries keepalives. They keep
+    /// the session alive but must never keep a button down: only input packets do.
+    func testKeepalivesDoNotKeepAHeldButtonDown() {
         controller.apply(input([.left]))
-        now += ChannelLimits.silenceTimeout - 0.01
-        controller.tick()
-        XCTAssertEqual(controller.held, [.left])
-        controller.touch()
-        now += ChannelLimits.silenceTimeout - 0.01
-        controller.tick()
-        XCTAssertEqual(controller.held, [.left])
-        now += 0.02
-        controller.tick()
-        XCTAssertEqual(controller.held, [])
-        XCTAssertFalse(controller.injecting)
+        for _ in 0..<12 {  // a keepalive every 100 ms for 1.2 s
+            now += 0.1
+            controller.touch()
+            controller.tick()
+        }
+        XCTAssertEqual(controller.held, [], "released within the silence timeout despite the keepalives")
         XCTAssertEqual(poster.log.last, "up 0")
+        XCTAssertEqual(controller.releaseCount, 1)
+    }
+
+    func testRepeatedInputPacketsKeepAHeldButtonDownForAsLongAsTheyComeAndKeepalivesKeepTheIndicator() {
+        controller.apply(input([.left]))
+        for _ in 0..<20 {  // the Linux side repeats the held state every 250 ms
+            now += 0.25
+            controller.apply(input([.left]))
+            controller.touch()
+            controller.tick()
+        }
+        XCTAssertEqual(controller.held, [.left])
+        // A keepalive alone still keeps an idle session's indicator for the silence timeout.
+        controller.releaseAll(.ended)
+        controller.apply(input([]))
+        now += ChannelLimits.silenceTimeout - 0.1
+        controller.touch()
+        controller.tick()
+        XCTAssertTrue(controller.injecting)
     }
 
     func testWatchdogTreatsAClockThatWentBackwardsAsSilence() {
