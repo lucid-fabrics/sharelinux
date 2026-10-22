@@ -147,6 +147,48 @@ final class PairingWindowTests: XCTestCase {
         XCTAssertEqual(confirmed.count, 1, "once it is uncovered, Confirm works")
     }
 
+    /// Follow-up audit, finding 9: the check ran only at mouse-up and passed when the window list was unavailable.
+    func testAnUnavailableWindowListIsNotAPass() {
+        let frame = CGRect(x: 0, y: 0, width: 400, height: 300)
+        XCTAssertFalse(WindowCoverage.verdict(onScreen: true, others: nil, topLeftFrame: frame), "fail closed")
+        XCTAssertFalse(WindowCoverage.verdict(onScreen: false, others: [], topLeftFrame: frame))
+        XCTAssertTrue(WindowCoverage.verdict(onScreen: true, others: [], topLeftFrame: frame))
+        XCTAssertFalse(
+            WindowCoverage.verdict(onScreen: true, others: [.init(frame: CGRect(x: 100, y: 100, width: 50, height: 50), alpha: 1)], topLeftFrame: frame))
+    }
+
+    func testAWindowThatCoveredConfirmAtMouseDownBlocksTheClickEvenIfItMovedAwayBeforeMouseUp() {
+        controller.update(confirmStatus())
+        clock += 5
+        controller.isFullyVisible = { _ in false }
+        controller.confirmMouseDown()
+        controller.isFullyVisible = { _ in true }  // uncovered by mouse-up
+        controller.confirmClicked()
+        XCTAssertTrue(confirmed.isEmpty, "covered at mouse-down")
+        XCTAssertEqual(controller.noticeText, PairingText.refusal(.windowCovered))
+    }
+
+    func testAWindowThatCoversConfirmAtMouseUpBlocksTheClickEvenIfClearAtMouseDown() {
+        controller.update(confirmStatus())
+        clock += 5
+        controller.confirmMouseDown()  // clear
+        controller.isFullyVisible = { _ in false }
+        controller.confirmClicked()
+        XCTAssertTrue(confirmed.isEmpty, "covered at mouse-up")
+    }
+
+    func testAClearPressConfirmsOnceAndAStalePressIsForgotten() {
+        controller.update(confirmStatus())
+        clock += 5
+        controller.isFullyVisible = { _ in false }
+        controller.confirmMouseDown()
+        controller.confirmClicked()  // refused, press consumed
+        controller.isFullyVisible = { _ in true }
+        controller.confirmMouseDown()
+        controller.confirmClicked()
+        XCTAssertEqual(confirmed.count, 1)
+    }
+
     func testCoverageGeometry() {
         let me = CGRect(x: 100, y: 100, width: 420, height: 300)
         typealias O = WindowCoverage.Other

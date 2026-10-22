@@ -35,16 +35,34 @@ public enum WindowCoverage {
         }
     }
 
+    /// The verdict from what is known: the window is up on this space and not hidden, and the
+    /// window server's list of windows in front is available and none of them overlaps. An
+    /// unavailable list is NOT a pass: with nothing to check against, Confirm stays off.
+    static func verdict(onScreen: Bool, others: [Other]?, topLeftFrame: CGRect) -> Bool {
+        guard onScreen, let others else { return false }
+        return !isCovered(topLeftFrame, by: others)
+    }
+
     /// The window on screen, on this space, not minimised, not even partly hidden.
     public static func isFullyVisible(_ window: NSWindow) -> Bool {
-        guard window.isVisible, !window.isMiniaturized, window.occlusionState.contains(.visible),
-            window.isOnActiveSpace
-        else { return false }
-        guard let others = windowsInFront(of: window) else { return true }  // geometry unavailable: occlusion state decided
+        let onScreen =
+            window.isVisible && !window.isMiniaturized && window.occlusionState.contains(.visible)
+            && window.isOnActiveSpace
+        guard onScreen else { return false }
         let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
         let f = window.frame
         let topLeft = CGRect(x: f.minX, y: primaryHeight - f.maxY, width: f.width, height: f.height)
-        return !isCovered(topLeft, by: others)
+        return verdict(onScreen: true, others: windowsInFront(of: window), topLeftFrame: topLeft)
+    }
+}
+
+/// A push button that tells the window when the mouse goes down on it, before the click
+/// completes: what covers the window at that moment is what the person was aiming at.
+final class PressReportingButton: NSButton {
+    var onMouseDown: () -> Void = {}
+    override func mouseDown(with event: NSEvent) {
+        onMouseDown()
+        super.mouseDown(with: event)  // tracks until the mouse goes up, then sends the action
     }
 }
 
@@ -110,7 +128,7 @@ public final class PairingWindowController: NSWindowController, NSWindowDelegate
     private let waitingRow = NSStackView()
     private let noticeBox = NSBox()
     private let notice = NSTextField(wrappingLabelWithString: "")
-    let confirm = NSButton(title: PairingText.confirmButton, target: nil, action: nil)
+    let confirm = PressReportingButton(title: PairingText.confirmButton, target: nil, action: nil)
     let reject = NSButton(title: PairingText.rejectButton, target: nil, action: nil)
     private let cancel = NSButton(title: PairingText.cancelButton, target: nil, action: nil)
     private let unlock = NSButton(title: PairingText.unlockButton, target: nil, action: nil)
@@ -123,6 +141,8 @@ public final class PairingWindowController: NSWindowController, NSWindowDelegate
     /// When the code now on screen appeared or last changed.
     private(set) var shownSince: Double?
     private var shownTuple: (String, Data)?
+    /// Whether the window was fully in view when the mouse went down on Confirm (nil: no press is pending).
+    private var visibleAtMouseDown: Bool?
 
     public init() {
         let window = NSWindow(
@@ -211,6 +231,7 @@ public final class PairingWindowController: NSWindowController, NSWindowDelegate
         confirm.keyEquivalent = ""
         confirm.refusesFirstResponder = true
         confirm.target = self; confirm.action = #selector(confirmClicked)
+        confirm.onMouseDown = { [weak self] in self?.confirmMouseDown() }
         reject.target = self; reject.action = #selector(rejectClicked)
         cancel.target = self; cancel.action = #selector(cancelClicked)
         unlock.target = self; unlock.action = #selector(unlockClicked)
@@ -424,12 +445,20 @@ public final class PairingWindowController: NSWindowController, NSWindowDelegate
 
     // MARK: actions
 
-    /// The click handler, callable by tests.
+    /// The mouse went down on Confirm: note whether the window was fully in view right then.
+    func confirmMouseDown() {
+        visibleAtMouseDown = window.map { isFullyVisible($0) } ?? false
+    }
+
+    /// The click handler (mouse up), callable by tests. The window must have been fully in view at
+    /// mouse-down (when there was one) and must still be at mouse-up.
     @objc public func confirmClicked() {
+        let downVisible = visibleAtMouseDown
+        visibleAtMouseDown = nil
         guard case .confirm(let c, _) = current.phase, let key = current.pendingKey else { return }
         // A click within a second of the code appearing was aimed at something else.
         if let since = shownSince, now() - since < PairingCoordinator.minConfirmDelay { return }
-        if let w = window, !isFullyVisible(w) {
+        if downVisible == false || window.map({ !isFullyVisible($0) }) ?? true {
             localRefusal = .windowCovered
             render()
             return
