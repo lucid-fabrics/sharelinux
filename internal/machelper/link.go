@@ -145,6 +145,12 @@ type Link struct {
 	started   time.Time // when sess began
 	seq       uint32
 	buttons   uint8
+	// seen is the mask the caller last reported, whether or not it went out;
+	// held is the part of it whose press went out in the current session. Only
+	// held is ever repeated, so a press that did not reach this session, or an
+	// old session, can never come back after a reconnect.
+	seen      uint8
+	held      uint8
 	locked    bool
 	status    LinkStatus
 	lastHeard time.Time // last status, or the session start before the first
@@ -236,7 +242,13 @@ func (l *Link) Send(p InputPacket) error {
 		l.mu.Unlock()
 		return ErrLinkNotReady
 	}
+	// Record what the caller holds before any early return, so a release that
+	// the dead link cannot carry still clears the repeat.
+	rising := p.Buttons &^ l.seen
+	l.seen = p.Buttons
+	l.held &= p.Buttons
 	if l.status.State == LinkDown && !errors.Is(l.status.Reason, ErrSilent) {
+		l.buttons = l.held
 		// The read side already learned the helper is gone (a closed port
 		// reports once, to whichever call comes first). A helper that is only
 		// quiet may still hear us: the caller's last packet, the one that
@@ -249,7 +261,8 @@ func (l *Link) Send(p InputPacket) error {
 	p.Seq = l.seq
 	l.seq++
 	p.Flags = l.flags()
-	l.buttons = p.Buttons
+	l.held |= rising
+	l.buttons = l.held
 	l.lastInput = time.Now()
 	sess := l.sess
 	l.sentPkts++
@@ -310,6 +323,9 @@ func (l *Link) setStatus(s LinkStatus) {
 }
 
 func (l *Link) markDown(reason error) {
+	l.mu.Lock()
+	l.buttons, l.held = 0, 0
+	l.mu.Unlock()
 	l.setStatus(LinkStatus{State: LinkDown, Reason: reason})
 }
 
@@ -444,6 +460,7 @@ func (l *Link) install(sess *Session) {
 	l.mu.Lock()
 	l.prev, l.prevUntil = l.sess, l.cfg.Now().Add(time.Second)
 	l.sess = sess
+	l.buttons, l.held = 0, 0 // a new session repeats only presses made after it began
 	l.started = l.cfg.Now()
 	l.lastHeard = time.Now()
 	l.mu.Unlock()
