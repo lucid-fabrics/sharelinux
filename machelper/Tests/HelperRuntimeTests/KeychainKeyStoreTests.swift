@@ -294,4 +294,109 @@ final class KeychainKeyStoreTests: XCTestCase {
         let c = try PairingCoordinator(staticKey: identity, store: store, ledger: PairingFailureLedger(store: MemoryPairingFailureStore()))
         XCTAssertEqual(c.pairedKeys, [])
     }
+
+    // MARK: W3 closing: re-pair revokes, snapshot tripwire, reset
+
+    /// Re-pairing a device replaces its record. The replaced bytes must not stay as good as the new
+    /// record: put back, they are refused.
+    func testRePairingRevokesTheReplacedRecord() throws {
+        let k = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
+        try store.addPaired(PairedDevice(name: "Desk PC", key: k))
+        let old = try XCTUnwrap(rawItem(service: KeychainKeyStore.pairedService, account: k.hex))
+        try store.addPaired(PairedDevice(name: "Desk PC renamed", key: k))  // re-pair, no removal in between
+        XCTAssertEqual(try store.loadPaired().map(\.name), ["Desk PC renamed"])
+        dropItem(service: KeychainKeyStore.pairedService, account: k.hex)
+        plant(account: k.hex, json: String(decoding: old, as: UTF8.self))
+        XCTAssertEqual(try store.loadPaired(), [], "the replaced record was revoked when it was replaced")
+        XCTAssertEqual(store.ignoredAccounts, [k.hex])
+        // And the fresh pair after that still works.
+        try store.addPaired(PairedDevice(name: "Desk PC again", key: k))
+        XCTAssertEqual(try store.loadPaired().map(\.name), ["Desk PC again"])
+    }
+
+    func testTheSnapshotIsStableAndSeesAnIdentitySwapADeletionAndForeignOrEditedRecords() throws {
+        _ = try store.loadOrCreateIdentity()
+        let k = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
+        try store.addPaired(PairedDevice(name: "Desk PC", key: k))
+        let base = try store.snapshot()
+        XCTAssertNotNil(base.identity)
+        XCTAssertEqual(try KeychainKeyStore(keychain: kc.keychain).snapshot(), base, "stable across reads and restarts")
+        // An own write moves the trust digest but not the identity stamp.
+        let k2 = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
+        try store.addPaired(PairedDevice(name: "Laptop", key: k2))
+        let afterOwn = try store.snapshot()
+        XCTAssertEqual(afterOwn.identity, base.identity)
+        XCTAssertNotEqual(afterOwn.trust, base.trust)
+        // A foreign record planted next to ours.
+        plant(account: String(repeating: "ab", count: 32), json: "{}")
+        let planted = try store.snapshot()
+        XCTAssertNotEqual(planted.trust, afterOwn.trust)
+        // A record deleted and put back byte for byte is a different item.
+        let copy = try XCTUnwrap(rawItem(service: KeychainKeyStore.pairedService, account: k.hex))
+        dropItem(service: KeychainKeyStore.pairedService, account: k.hex)
+        plant(account: k.hex, json: String(decoding: copy, as: UTF8.self))
+        let reput = try store.snapshot()
+        XCTAssertNotEqual(reput.trust, planted.trust)
+        // The identity item replaced by another program: same service and account, other key.
+        dropItem(service: KeychainKeyStore.identityService, account: "static-key")
+        XCTAssertNil(try store.snapshot().identity, "a missing identity item is reported as missing")
+        let q: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: KeychainKeyStore.identityService,
+            kSecAttrAccount as String: "static-key", kSecValueData as String: Data(repeating: 9, count: 32),
+            kSecUseKeychain as String: kc.keychain,
+        ]
+        XCTAssertEqual(SecItemAdd(q as CFDictionary, nil), errSecSuccess)
+        let replaced = try XCTUnwrap(try store.snapshot().identity)
+        XCTAssertNotEqual(replaced, base.identity, "a replaced identity item is a different item")
+    }
+
+    func testAnEditedRecordInPlaceChangesTheSnapshot() throws {
+        let k = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
+        try store.addPaired(PairedDevice(name: "Desk PC", key: k))
+        let before = try store.snapshot()
+        Thread.sleep(forTimeInterval: 1.1)  // the Keychain's date attributes are one second grained
+        let q: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: KeychainKeyStore.pairedService,
+            kSecAttrAccount as String: k.hex, kSecMatchSearchList as String: [kc.keychain],
+        ]
+        XCTAssertEqual(SecItemUpdate(q as CFDictionary, [kSecValueData as String: Data("edited".utf8)] as CFDictionary), errSecSuccess)
+        XCTAssertNotEqual(try store.snapshot().trust, before.trust)
+    }
+
+    /// MEDIUM: a damaged revocation set used to need Keychain Access. `resetAll` recovers.
+    func testResetAllRecoversFromADamagedRevocationSetWithoutKeychainAccess() throws {
+        let a = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
+        let b = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
+        let oldIdentity = try store.loadOrCreateIdentity().publicKey.rawRepresentation
+        try store.addPaired(PairedDevice(name: "A", key: a))
+        plant(account: "set", json: "garbage", service: KeychainKeyStore.revokedService)
+        plant(account: b.hex, json: "{}")  // a foreign record is swept too
+        XCTAssertEqual(try store.loadPaired(), [])
+        XCTAssertTrue(store.revocationDamaged)
+        XCTAssertThrowsError(try store.addPaired(PairedDevice(name: "B", key: b))) {
+            XCTAssertEqual($0 as? KeyStoreError, .corrupt("the list of removed devices is damaged"))
+        }
+        try store.resetAll()
+        XCTAssertFalse(store.revocationDamaged)
+        for service in [KeychainKeyStore.identityService, KeychainKeyStore.pairedService, KeychainKeyStore.revokedService] {
+            XCTAssertNil(rawItem(service: service, account: service == KeychainKeyStore.identityService ? "static-key" : service == KeychainKeyStore.revokedService ? "set" : a.hex), service)
+        }
+        XCTAssertNil(rawItem(service: KeychainKeyStore.pairedService, account: b.hex))
+        XCTAssertNil(try store.snapshot().identity)
+        // Fresh start: a new identity, nothing paired, pairing works again.
+        let fresh = try store.loadOrCreateIdentity().publicKey.rawRepresentation
+        XCTAssertNotEqual(fresh, oldIdentity)
+        XCTAssertEqual(try store.loadPaired(), [])
+        XCTAssertFalse(store.revocationDamaged)
+        try store.addPaired(PairedDevice(name: "B", key: b))
+        XCTAssertEqual(try store.loadPaired().map(\.name), ["B"])
+    }
+
+    func testAnEmptyStoreCanBeResetAndAnAlreadyDamagedSetWithNoRecordsIsFlagged() throws {
+        try store.resetAll()  // nothing there: fine
+        _ = try store.loadOrCreateIdentity()
+        plant(account: "set", json: "garbage", service: KeychainKeyStore.revokedService)
+        XCTAssertEqual(try store.loadPaired(), [])
+        XCTAssertTrue(store.revocationDamaged, "damaged even with no record to ignore")
+    }
 }

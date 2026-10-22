@@ -8,33 +8,41 @@ import os
 /// password items in the login Keychain, not files.
 ///
 ///  * Not synchronised: `kSecAttrSynchronizable` is false, so nothing goes to iCloud Keychain.
-///  * Secret access limited to this app: every item is created with an access
-///    object whose trusted-application list holds only the calling application,
-///    so another program asking for the identity key gets a prompt (or a
-///    refusal), and the private key is never readable from a plain file.
-///  * What the Keychain does NOT do: it does not stop another program of the
-///    same user from adding a generic-password item under our service name, or
-///    from listing the attributes of ours. Adding a trusted key is what lets a
-///    remote device move the mouse, so the access list is not enough.
+///  * Reading the secret is limited to this app: every item is created with an access
+///    object whose trusted-application list holds only the calling application, so another
+///    program asking for the identity key gets a prompt (or a refusal), and the private key
+///    is never readable from a plain file.
+///  * What the Keychain does NOT do (design 2.10, 3.7): the access list governs who may READ a
+///    secret. It does not stop another program running as the same user from deleting our
+///    items, from adding items under our service name, or from deleting the identity item and
+///    putting its own in its place. macOS only prevents that for apps signed with a real
+///    Apple developer team, and this helper is ad-hoc signed. So a same-user program can
+///    replace the identity, the paired records and the revocation set and forge trust. The
+///    owner accepted this: it is the trust model of `~/.ssh` keys (same-user malware is out of
+///    scope). The helper does not try to prevent it. It tries to notice (`KeyWatch`): any
+///    change to these items that the app did not make ends all sessions and switches the
+///    toggle off, with an alert. That is a tripwire, not a guarantee.
 ///  * Authenticity of the paired list: each paired record carries an HMAC-SHA256
-///    over (device key, name, created-at). The HMAC key is derived (HKDF) from
-///    the helper's identity private key, which only this app can read without
-///    a prompt. A record without a valid HMAC (written by anything else, or
-///    altered) is never trusted; it is counted in `ignoredRecords` and logged by
-///    account prefix. Seeing the paired items, even reading all of them, gives
-///    no way to forge one. The residual risk (design 3.7): a program that
-///    plants the identity item before the first launch, or that the owner lets
-///    read it ("Always Allow"), holds the HMAC key.
+///    over (device key, name, created-at, nonce, gen). The HMAC key is derived (HKDF) from
+///    the helper's identity private key. A record without a valid HMAC (planted by a
+///    program that does not know that key, or altered) is never trusted; it is counted in
+///    `ignoredRecords` and logged by account prefix. Reading all the paired items gives no way
+///    to forge one. It does NOT help against a program that replaces the identity item too:
+///    it then holds the key the records are checked with (see above).
 ///
-///  * Revocation: removing a device writes the removed record's MAC into an
-///    authenticated revocation set (HMAC'd like a record) BEFORE the record is
-///    deleted, and every record carries the set's size at the time it was
-///    written (`gen`). A record whose MAC is in the set is never trusted, so
-///    putting the exact bytes of a removed record back grants nothing. A record
-///    newer than the set (`gen` above the set's count) means the set was
-///    deleted or rolled back, so it is not trusted either. A set that fails
-///    its own MAC is treated as unknown and nothing is trusted. Re-pairing a
-///    removed device writes a fresh record (new nonce), which is not revoked.
+///  * Revocation: removing a device (or re-pairing it, which replaces its record) writes the old
+///    record's MAC into an authenticated revocation set (HMAC'd like a record) BEFORE the record
+///    is deleted, and every record carries the set's size at the time it was written (`gen`). A
+///    record whose MAC is in the set is never trusted, so putting the exact bytes of a removed
+///    record back grants nothing. A record newer than the set (`gen` above the set's count)
+///    means the set was deleted or rolled back, so it is not trusted either. A set that fails
+///    its own MAC is treated as unknown and nothing is trusted (`revocationDamaged`); the owner
+///    recovers with "Reset helper keys..." (`resetAll`), no Keychain Access needed. Re-pairing
+///    a removed device writes a fresh record (new nonce), which is not revoked.
+///  * Restoring an OLD copy of the whole keychain (a backup) restores the old identity, the old
+///    records and the old revocation set together, so devices removed since then are trusted
+///    again. Nothing inside the keychain can detect that; after a restore, review the paired
+///    list or reset the helper keys.
 ///
 /// `keychain` is nil for the default (login) keychain; tests pass a throwaway
 /// keychain file so nothing touches the owner's.
@@ -52,6 +60,8 @@ public final class KeychainKeyStore: KeyStore {
     public private(set) var ignoredRecords = 0
     /// Accounts (hex device keys, or whatever a foreign item used) skipped by the last `loadPaired`.
     public private(set) var ignoredAccounts: [String] = []
+    /// The last `loadPaired` found the removed-devices item present but not authentic.
+    public private(set) var revocationDamaged = false
 
     public init(keychain: SecKeychain? = nil) { self.keychain = keychain }
 
@@ -86,6 +96,15 @@ public final class KeychainKeyStore: KeyStore {
         q[kSecAttrLabel as String] = label
         q[kSecValueData as String] = data
         q[kSecAttrAccess as String] = try ownAccess(label: label)
+        // A random per-write tag in a plain attribute. Dates only have one-second grain and the
+        // persistent reference repeats for the same service and account, so without this an item
+        // deleted and added again within a second would look unchanged to `snapshot()`. The tag is
+        // visible to other programs, so a careful same-user program can copy it: the tripwire stays
+        // best effort.
+        var tag = Data(count: 16)
+        guard tag.withUnsafeMutableBytes({ SecRandomCopyBytes(kSecRandomDefault, 16, $0.baseAddress!) }) == errSecSuccess
+        else { throw KeyStoreError.failed("no random bytes for the item tag") }
+        q[kSecAttrGeneric as String] = tag
         if let keychain { q[kSecUseKeychain as String] = keychain }
         q[kSecMatchSearchList as String] = nil  // not valid for SecItemAdd
         let status = SecItemAdd(q as CFDictionary, nil)
@@ -259,12 +278,13 @@ public final class KeychainKeyStore: KeyStore {
         q[kSecMatchLimit as String] = kSecMatchLimitAll
         var out: CFTypeRef?
         let status = SecItemCopyMatching(q as CFDictionary, &out)
-        if status == errSecItemNotFound { return [] }
-        guard status == errSecSuccess, let items = out as? [[String: Any]] else {
+        guard status == errSecSuccess || status == errSecItemNotFound else {
             throw KeyStoreError.failed("Keychain list failed (\(status))")
         }
+        let items = (out as? [[String: Any]]) ?? []
         let macKey = try macKeyForReading()
         let revoked: Revoked = try macKey.map { try loadRevoked(macKey: $0) } ?? .damaged
+        if case .damaged = revoked, macKey != nil { revocationDamaged = true } else { revocationDamaged = false }
         var list: [PairedDevice] = []
         var ignored: [String] = []
         for item in items {
@@ -288,8 +308,17 @@ public final class KeychainKeyStore: KeyStore {
         let account = device.key.hex
         _ = try loadOrCreateIdentity()  // makes sure the MAC key is there
         guard let macKey = macKeyCache else { throw KeyStoreError.failed("no identity key to authenticate the record") }
-        guard case .set(let count, _) = try loadRevoked(macKey: macKey) else {
+        guard case .set(var count, let macs) = try loadRevoked(macKey: macKey) else {
             throw KeyStoreError.corrupt("the list of removed devices is damaged")
+        }
+        // Re-pairing replaces the record, and the replaced one must not stay valid: its bytes
+        // (copied before) would otherwise be as good as the new record. Revoke it first.
+        if let oldData = try read(service: Self.pairedService, account: account),
+            let oldRec = try? JSONDecoder().decode(Record.self, from: oldData), let oldMac = Data(hex: oldRec.mac),
+            oldMac.count == 32, !macs.contains(oldMac)
+        {
+            try storeRevoked(count: count + 1, macs: macs.sorted { $0.hex < $1.hex } + [oldMac], macKey: macKey)
+            count += 1
         }
         let created = Int64(Date().timeIntervalSince1970)
         var nonce = Data(count: 16)
@@ -322,10 +351,72 @@ public final class KeychainKeyStore: KeyStore {
         }
         try delete(service: Self.pairedService, account: account)
     }
+
+    // MARK: tripwire support and reset
+
+    /// Attributes only (no secret is read, so no Keychain prompt): service, account, creation and
+    /// modification dates, the persistent reference and the per-write tag of each item. An item deleted and added
+    /// again, or edited in place, shows up as a different stamp.
+    private func stamps(service: String) throws -> [Data] {
+        var q = base(service: service)
+        q[kSecReturnAttributes as String] = true
+        q[kSecReturnPersistentRef as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitAll
+        var out: CFTypeRef?
+        let status = SecItemCopyMatching(q as CFDictionary, &out)
+        if status == errSecItemNotFound { return [] }
+        guard status == errSecSuccess, let items = out as? [[String: Any]] else {
+            throw KeyStoreError.failed("Keychain list failed (\(status))")
+        }
+        return items.map { item in
+            var h = SHA256()
+            h.update(data: Data(service.utf8)); h.update(data: Data([0]))
+            h.update(data: Data(((item[kSecAttrAccount as String] as? String) ?? "").utf8)); h.update(data: Data([0]))
+            for k in [kSecAttrCreationDate, kSecAttrModificationDate] {
+                let t = (item[k as String] as? Date)?.timeIntervalSince1970 ?? 0
+                h.update(data: Data(Self.be(t.bitPattern)))
+            }
+            if let ref = item[kSecValuePersistentRef as String] as? Data { h.update(data: ref) }
+            if let tag = item[kSecAttrGeneric as String] as? Data { h.update(data: tag) }
+            return Data(h.finalize())
+        }
+    }
+
+    public func snapshot() throws -> KeySnapshot {
+        let identity = try stamps(service: Self.identityService).sorted { $0.hex < $1.hex }
+        var trust = SHA256()
+        for s in try stamps(service: Self.pairedService).sorted(by: { $0.hex < $1.hex }) { trust.update(data: s) }
+        trust.update(data: Data([0xFF]))
+        for s in try stamps(service: Self.revokedService).sorted(by: { $0.hex < $1.hex }) { trust.update(data: s) }
+        var idDigest = SHA256()
+        for s in identity { idDigest.update(data: s) }
+        return KeySnapshot(identity: identity.isEmpty ? nil : Data(idDigest.finalize()), trust: Data(trust.finalize()))
+    }
+
+    /// Deletes everything this app keeps in the Keychain: the identity key, every paired item
+    /// under our service (ours or planted) and the removed-devices list.
+    public func resetAll() throws {
+        var q = base(service: Self.pairedService)
+        q[kSecReturnAttributes as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitAll
+        var out: CFTypeRef?
+        let status = SecItemCopyMatching(q as CFDictionary, &out)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw KeyStoreError.failed("Keychain list failed (\(status))")
+        }
+        for item in (out as? [[String: Any]]) ?? [] {
+            try delete(service: Self.pairedService, account: (item[kSecAttrAccount as String] as? String) ?? "")
+        }
+        try delete(service: Self.revokedService, account: Self.revokedAccount)
+        try delete(service: Self.identityService, account: Self.identityAccount)
+        macKeyCache = nil
+        revocationDamaged = false
+        ignoredAccounts = []
+        ignoredRecords = 0
+    }
 }
 
-enum AuthorizationName {
-    /// Names read back from the Keychain go through the same rules as names off the wire.
+enum AuthorizationName {    /// Names read back from the Keychain go through the same rules as names off the wire.
     static func isPlain(_ s: String) -> Bool {
         PairingResponder.validateDeviceName(Data(s.utf8)) == s
     }
