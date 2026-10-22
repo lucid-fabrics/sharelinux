@@ -2,12 +2,12 @@ import CryptoKit
 import Foundation
 import HelperCore
 
-/// The Mac's long-term identity and the paired list, as 0600 files in the
-/// helper's support directory. W2 only reads them (an empty paired list means
-/// nobody can connect yet); the pairing flow (W3) writes the list and may move
-/// the private key to the Keychain.
-///
-/// The static private key is never logged and never leaves this file.
+/// The helper's support directory: the handshake timestamps and the pairing
+/// failure ledger live here as 0600 files. They hold no secret and grant no
+/// trust. The identity key and the paired list are NOT here: they are in the
+/// Keychain (`KeychainKeyStore`), and nothing in this directory is ever read
+/// as a key or as a paired device (W3 audit: a user-writable paired file
+/// imported on launch gave a foreign key a valid record MAC).
 public final class IdentityStore {
     private let dir: URL
     private let ownerUID: uid_t
@@ -27,19 +27,6 @@ public final class IdentityStore {
 
     private var keyURL: URL { dir.appendingPathComponent("identity.key") }
     private var pairedURL: URL { dir.appendingPathComponent("paired.json") }
-
-    /// Loads the key, creating a fresh one (and the 0700 directory) on first run.
-    public func loadOrCreateKey() throws -> Curve25519.KeyAgreement.PrivateKey {
-        try prepareDirectory()
-        if FileManager.default.fileExists(atPath: keyURL.path) {
-            try checkPrivateFile(keyURL)
-            let raw = try Data(contentsOf: keyURL)
-            return try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: raw)
-        }
-        let key = Curve25519.KeyAgreement.PrivateKey()
-        try AtomicFile.write(key.rawRepresentation, to: keyURL)
-        return key
-    }
 
     /// Makes sure the support directory is a real directory owned by us and
     /// closed to everyone else. A directory that already exists is not trusted
@@ -61,55 +48,22 @@ public final class IdentityStore {
         }
     }
 
-    /// The key must be a regular file of ours, not a symlink; loose modes are tightened to 0600.
-    private func checkPrivateFile(_ url: URL) throws {
-        var st = stat()
-        guard lstat(url.path, &st) == 0, st.st_mode & S_IFMT == S_IFREG else {
-            throw StoreError.unsafe("\(url.lastPathComponent) is not a regular file")
+    /// Deletes the files an earlier build kept here (`identity.key`, `paired.json`) WITHOUT reading
+    /// them: neither becomes the identity, and neither adds a trusted device. `unlink` removes a
+    /// symlink itself and never follows it.
+    public func removeStaleLegacyFiles() throws {
+        try prepareDirectory()
+        for url in [keyURL, pairedURL] {
+            if unlink(url.path) != 0 && errno != ENOENT { throw StoreError.unsafe("cannot remove \(url.lastPathComponent)") }
         }
-        guard st.st_uid == ownerUID else { throw StoreError.unsafe("\(url.lastPathComponent) is owned by another user") }
-        if st.st_mode & 0o7777 != 0o600 { _ = chmod(url.path, 0o600) }
     }
 
-    public struct Paired: Codable, Equatable {
-        public var name: String
-        public var key: String  // hex
+    /// The launch sequence for the keys: stale files are dropped unread, then the identity
+    /// comes from the Keychain (created there on first run). Nothing from disk is imported.
+    public func openIdentity(keys: KeyStore) throws -> Curve25519.KeyAgreement.PrivateKey {
+        try removeStaleLegacyFiles()
+        return try keys.loadOrCreateIdentity()
     }
-
-    /// The paired devices. A missing file is empty; an unreadable one throws
-    /// (the app then runs with nobody paired rather than guessing).
-    public func loadPaired() throws -> [Paired] {
-        try prepareDirectory()
-        guard FileManager.default.fileExists(atPath: pairedURL.path) else { return [] }
-        let list = try JSONDecoder().decode([Paired].self, from: Data(contentsOf: pairedURL))
-        return list.filter { Data(hex: $0.key)?.count == 32 }
-    }
-
-    public func savePaired(_ list: [Paired]) throws {
-        try prepareDirectory()
-        try AtomicFile.write(try JSONEncoder().encode(list), to: pairedURL)
-    }
-
-    /// The key of the W2 file layout, or nil when there is none. Used once, to
-    /// move it into the Keychain (`KeychainKeyStore.importLegacyFiles`).
-    func legacyKey() throws -> Curve25519.KeyAgreement.PrivateKey? {
-        try prepareDirectory()
-        guard FileManager.default.fileExists(atPath: keyURL.path) else { return nil }
-        try checkPrivateFile(keyURL)
-        return try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: Data(contentsOf: keyURL))
-    }
-
-    /// Overwrites and deletes the old key file once the Keychain holds the key.
-    func removeLegacyKey() {
-        if let h = FileHandle(forWritingAtPath: keyURL.path) {
-            try? h.write(contentsOf: Data(count: 32))
-            try? h.synchronize()
-            try? h.close()
-        }
-        try? FileManager.default.removeItem(at: keyURL)
-    }
-
-    func removeLegacyPaired() { try? FileManager.default.removeItem(at: pairedURL) }
 
     /// The timestamp store and the pairing failure ledger live next to the key.
     public var timestampsURL: URL { dir.appendingPathComponent("handshake-timestamps.json") }

@@ -394,26 +394,6 @@ final class SourcesTests: XCTestCase {
             XCTAssertNotEqual(Gate.evaluate(i, now: now), .accept, name)
         }
     }
-
-    // MARK: identity files
-
-    func testIdentityKeyIsPrivateStableAndNeverAccepted_WhenTruncated() throws {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: dir) }
-        let store = IdentityStore(directory: dir)
-        let key = try store.loadOrCreateKey()
-        let attrs = { (u: URL) in (try? FileManager.default.attributesOfItem(atPath: u.path))?[.posixPermissions] as? Int }
-        XCTAssertEqual(attrs(dir), 0o700)
-        XCTAssertEqual(attrs(dir.appendingPathComponent("identity.key")), 0o600)
-        XCTAssertEqual(try store.loadOrCreateKey().rawRepresentation, key.rawRepresentation)
-        XCTAssertEqual(try store.loadPaired(), [])
-        // A damaged key file is an error, never a silently new identity.
-        try Data(count: 5).write(to: dir.appendingPathComponent("identity.key"))
-        XCTAssertThrowsError(try store.loadOrCreateKey())
-        // Paired entries with a bad key are ignored.
-        try store.savePaired([.init(name: "ok", key: String(repeating: "ab", count: 32)), .init(name: "bad", key: "zz")])
-        XCTAssertEqual(try store.loadPaired().map(\.name), ["ok"])
-    }
 }
 
 extension Data {

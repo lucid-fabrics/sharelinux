@@ -39,14 +39,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ note: Notification) {
         // The identity key and the paired devices live in the login Keychain. Files in the
-        // support directory (timestamps, the failure cooldown) hold no secrets; an older
-        // build's key file is moved into the Keychain and deleted.
+        // support directory (timestamps, the failure cooldown) hold no secrets and no trust; an older
+        // build's key and paired files are deleted unread, never imported.
         let store = IdentityStore(directory: IdentityStore.defaultDirectory())
         let keys = KeychainKeyStore()
         let key: Curve25519.KeyAgreement.PrivateKey
         do {
-            try keys.importLegacyFiles(from: store)
-            key = try keys.loadOrCreateIdentity()
+            key = try store.openIdentity(keys: keys)
             pairing = try PairingCoordinator(
                 staticKey: key, store: keys,
                 ledger: PairingFailureLedger(store: FilePairingFailureStore(url: store.pairingFailuresURL)))

@@ -52,6 +52,25 @@ final class ResourcesTests: XCTestCase {
         }
     }
 
+    /// W3 audit: a local self-signed identity (key readable by /usr/bin/codesign, certificate trusted)
+    /// let any same-user process sign a binary that meets the designated requirement.
+    func testThereIsNoLocalSigningIdentityPathAnywhere() throws {
+        let fm = FileManager.default
+        for gone in ["make-local-signing-identity.sh", "check-signing-identity.sh", "test-signing-guards.sh"] {
+            XCTAssertFalse(fm.fileExists(atPath: root.appendingPathComponent("scripts/\(gone)").path), gone)
+        }
+        let script = try String(contentsOf: root.appendingPathComponent("scripts/bundle.sh"), encoding: .utf8)
+        for forbidden in ["OSS_LOCAL_SIGNING_IDENTITY", "certificate leaf", "check-signing-identity", "security find-"] {
+            XCTAssertFalse(script.contains(forbidden), forbidden)
+        }
+        let scripts = try fm.contentsOfDirectory(atPath: root.appendingPathComponent("scripts").path)
+        for name in scripts {
+            let text = try String(contentsOf: root.appendingPathComponent("scripts/\(name)"), encoding: .utf8)
+            XCTAssertFalse(text.contains("create-keychain") || text.contains("add-trusted-cert") || text.contains("set-key-partition-list"), name)
+            XCTAssertFalse(text.contains("-T /usr/bin/codesign"), name)
+        }
+    }
+
     // MARK: LaunchAgent filling
 
     func fill(_ exe: String) throws -> (status: Int32, out: Data, err: String) {

@@ -198,16 +198,24 @@ final class KeychainKeyStoreTests: XCTestCase {
         XCTAssertEqual(again.ignoredRecords, 0)
     }
 
-    func testTheOldFilesMoveIntoTheKeychainAndAreDeleted() throws {
+    /// W3 follow-up audit, finding 1: the launch sequence imported a user-writable paired.json and gave
+    /// every entry a valid record MAC. Neither old file may create trust or an identity now.
+    func testDroppedLegacyFilesNeverCreateTrustOrIdentityAndAreRemovedUnread() throws {
         let dir = kc.dir.appendingPathComponent("support")
-        let legacy = IdentityStore(directory: dir)
-        let oldKey = try legacy.loadOrCreateKey()
-        let peer = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
-        try legacy.savePaired([.init(name: "Old PC", key: peer.hex)])
-        try store.importLegacyFiles(from: legacy)
-        XCTAssertEqual(try store.loadOrCreateIdentity().rawRepresentation, oldKey.rawRepresentation, "same identity, so existing pairings keep working")
-        XCTAssertEqual(try store.loadPaired(), [PairedDevice(name: "Old PC", key: peer)])
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: dir.path), [], "no secret left on disk")
-        try store.importLegacyFiles(from: legacy)  // nothing to do the second time
+        let support = IdentityStore(directory: dir)
+        try support.prepareDirectory()
+        let attacker = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
+        let planted = Curve25519.KeyAgreement.PrivateKey()
+        try Data(#"[{"name":"Evil PC","key":"\#(attacker.hex)"}]"#.utf8).write(to: dir.appendingPathComponent("paired.json"))
+        try planted.rawRepresentation.write(to: dir.appendingPathComponent("identity.key"))
+
+        let identity = try support.openIdentity(keys: store)
+        XCTAssertNotEqual(identity.rawRepresentation, planted.rawRepresentation, "a dropped key file is not the identity")
+        XCTAssertEqual(try store.loadPaired(), [], "a dropped paired file is never trusted")
+        XCTAssertEqual(store.ignoredRecords, 0)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: dir.path), [], "both files were removed")
+        // And a coordinator over that store trusts nobody.
+        let c = try PairingCoordinator(staticKey: identity, store: store, ledger: PairingFailureLedger(store: MemoryPairingFailureStore()))
+        XCTAssertEqual(c.pairedKeys, [])
     }
 }

@@ -224,28 +224,6 @@ public final class KeychainKeyStore: KeyStore {
     public func removePaired(key: Data) throws {
         try delete(service: Self.pairedService, account: key.hex)
     }
-
-    /// Moves the W2 file identity and paired list (0600 files) into this store
-    /// and deletes the files. Nothing happens when there are none. A key already
-    /// in the Keychain wins; the old file is still removed so no secret stays on disk.
-    public func importLegacyFiles(from legacy: IdentityStore) throws {
-        if let old = try legacy.legacyKey() {
-            if try read(service: Self.identityService, account: Self.identityAccount) == nil {
-                var raw = Data(Array(old.rawRepresentation))
-                defer { raw.wipe() }
-                try add(
-                    service: Self.identityService, account: Self.identityAccount,
-                    label: "OSS Mouse Helper identity key", data: raw)
-            }
-            legacy.removeLegacyKey()
-        }
-        for d in (try? legacy.loadPaired()) ?? [] {
-            if let key = Data(hex: d.key), key.count == 32 {
-                try addPaired(PairedDevice(name: d.name, key: key))
-            }
-        }
-        legacy.removeLegacyPaired()
-    }
 }
 
 enum AuthorizationName {
