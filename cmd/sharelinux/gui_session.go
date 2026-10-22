@@ -91,6 +91,8 @@ type sessionView struct {
 	lockBackend lockBackend
 	lock        pointerLock
 	rel         relativePointer
+	// helper is this session's use of the Mac mouse helper.
+	helper *helperUse
 	// sent is set once a pointer position went to the Mac; sentReports is how many
 	// cursor reports the Mac had made by then.
 	sent        bool
@@ -145,6 +147,7 @@ func (g *gui) startSession(live *liveSession) {
 		focused:     true,
 		lockBackend: detectLockBackend(),
 	}
+	v.helper = newHelperUse(v)
 	v.showStats = live.req.opts.HUD
 	g.session = v
 	g.setListActions(false)
@@ -208,6 +211,7 @@ func (v *sessionView) buildHeader(name string) *adw.HeaderBar {
 	v.modes.ToggleByName("exclusive").SetTooltip(exclusiveTooltip(v.lockBackend))
 	v.modes.SetActiveName(modeID(allowedMode(v.mode, v.client.Info().Flags)))
 	header.PackStart(v.modes)
+	header.PackStart(v.helper.chip)
 
 	title := gtk.NewLabel(name)
 	title.AddCSSClass("oss-title-line")
@@ -460,6 +464,7 @@ func (v *sessionView) start() {
 		return !v.ended
 	})
 	v.applyMode(v.mode, false)
+	v.helper.begin()
 	v.setStats(v.showStats)
 	v.screen.GrabFocus()
 	prefs := v.g.app.preferences()
@@ -489,6 +494,7 @@ func (v *sessionView) end() {
 	}
 	v.screen.inhibitShortcuts(false)
 	v.setPointerLock(false)
+	v.helper.end()
 	coreglib.SourceRemove(v.pollTimer)
 	// The decoder presents into the widget: it stops before the widget can go.
 	v.stopVideo()
@@ -538,6 +544,7 @@ func (v *sessionView) poll() {
 		v.pointerHeld = false
 		v.sendPointer(v.pointerX, v.pointerY)
 	}
+	v.helper.reroute()
 	v.pollVideo()
 	v.syncPicture()
 	if width, height := v.screen.Width(), v.screen.Height(); width != v.lastWidth || height != v.lastHeight {
@@ -871,6 +878,7 @@ func (v *sessionView) applyGrabs() {
 	}
 	exclusive := v.focused && v.mode == rfb.ModeExclusiveControl && !v.g.app.opts.NoGrab
 	v.setPointerLock(exclusive)
+	v.helper.sync()
 }
 
 // setPointerLock holds the pointer in the window (on) or lets it go. Every way
@@ -885,6 +893,7 @@ func (v *sessionView) setPointerLock(on bool) {
 	if !on {
 		v.lock.release()
 		lockSink.motion, lockSink.state = nil, nil
+		v.helper.reroute()
 		hint, x, y := v.unlockHint()
 		v.g.app.logger.Debug("pointer lock released", "backend", int(v.lockBackend), "hint", hint, "x", x, "y", y, "mac_x", v.pointerX, "mac_y", v.pointerY)
 		v.screen.unlockPointer(v.lockBackend, hint, x, y)
@@ -954,6 +963,7 @@ func (v *sessionView) unlockHint() (bool, float64, float64) {
 // onLockState is the compositor's answer to the lock request.
 func (v *sessionView) onLockState(locked bool) {
 	notice := v.lock.state(locked)
+	v.helper.reroute()
 	v.g.app.logger.Debug("pointer lock", "locked", locked, "notice", int(notice))
 	switch notice {
 	case lockNoticeLocked:
@@ -972,6 +982,10 @@ func (v *sessionView) onLockState(locked bool) {
 // of the window to stop them; the total stays on the Mac's screen.
 func (v *sessionView) onLockedMotion(dx, dy float64) {
 	if !v.lock.held || !v.controlling() || !finiteMotion(dx, dy) {
+		return
+	}
+	if v.helper.routed() {
+		v.helper.motion(dx, dy)
 		return
 	}
 	width, height := v.client.FramebufferSize()
@@ -994,6 +1008,7 @@ func (v *sessionView) updateSystemCursor() {
 
 // releaseInput lifts every key and button the Mac thinks is down.
 func (v *sessionView) releaseInput() {
+	v.helper.releaseButtons()
 	for scancode, key := range v.held {
 		_ = v.client.SendKeyCode(key.Code, v.keyboard.Type(), key.Keysym, false)
 		delete(v.held, scancode)
@@ -1234,6 +1249,9 @@ func (v *sessionView) onButton(gesture *gtk.GestureSingle, x, y float64, down bo
 	if down {
 		v.screen.GrabFocus()
 		v.requestIfIdle()
+		if v.helper.button(bit, true) {
+			return
+		}
 		fx, fy, inside := v.toFramebuffer(x, y)
 		if v.mode == rfb.ModeExclusiveControl {
 			fx, fy, inside = v.pointerX, v.pointerY, true
@@ -1253,6 +1271,9 @@ func (v *sessionView) onButton(gesture *gtk.GestureSingle, x, y float64, down bo
 
 func (v *sessionView) releaseButton(button uint8, _ uint32) {
 	bit := buttonBit(uint(button))
+	if bit != 0 && v.helper.button(bit, false) {
+		return
+	}
 	if bit == 0 || v.buttons&bit == 0 {
 		return
 	}
@@ -1265,6 +1286,10 @@ func (v *sessionView) onScroll(dx, dy float64) bool {
 		return false
 	}
 	px, py := gtkScrollPoints(v.client.Info(), dx, dy, v.g.app.preferences().NaturalScrolling)
+	if v.helper.routed() {
+		v.helper.scroll(px, py)
+		return true
+	}
 	err := v.client.SendScroll(v.pointerX, v.pointerY, px, py)
 	if err != nil {
 		v.g.app.logger.Debug("scroll", "error", err)

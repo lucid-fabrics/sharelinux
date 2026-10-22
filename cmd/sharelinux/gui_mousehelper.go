@@ -26,6 +26,17 @@ func (g *gui) mouseHelperGroup() *adw.PreferencesGroup {
 	h := &helperGroup{g: g, group: adw.NewPreferencesGroup()}
 	h.group.SetTitle("Mouse helper")
 	h.group.SetDescription("A small app on the Mac that gives games and 3D tools smooth, unlimited mouse movement. Pair this computer with it once.")
+	prefs := g.app.preferences()
+	h.group.Add(switchRow("Use the mouse helper when available",
+		"While the pointer is locked in Exclusive mode and the helper runs on that Mac. Otherwise the mouse works as it always did",
+		prefs.MouseHelper, func(on bool) {
+			if err := g.app.updatePreferences(func(s *settings) { s.MouseHelper = on }); err != nil {
+				g.toast("Preferences were not saved: " + err.Error())
+			}
+			if g.session != nil {
+				g.session.helper.sync()
+			}
+		}))
 	h.status = adw.NewActionRow()
 	h.status.SetTitle("Status")
 	h.status.SetSubtitle("Checking")
@@ -53,6 +64,9 @@ func (h *helperGroup) refresh() {
 }
 
 func (h *helperGroup) apply(macs []pairedMac, err error) {
+	if h.g.session != nil {
+		h.g.session.helper.reload()
+	}
 	h.status.SetSubtitle(glib.MarkupEscapeText(helperStatus(macs, err)))
 	for _, row := range h.macs {
 		h.group.Remove(row)

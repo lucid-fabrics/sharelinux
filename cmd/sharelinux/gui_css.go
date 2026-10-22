@@ -59,6 +59,24 @@ const stylesheet = `
 }
 
 .oss-connected { color: @success_color; font-size: 12px; }
+.oss-chip {
+	padding: 2px 10px;
+	border-radius: 9999px;
+	border: 1px solid alpha(currentColor, 0.25);
+	background: alpha(currentColor, 0.08);
+	font-size: 12px;
+	font-weight: 500;
+}
+.oss-chip.success {
+	color: @success_color;
+	border-color: alpha(@success_color, 0.5);
+	background: alpha(@success_color, 0.12);
+}
+.oss-chip.warning {
+	color: @warning_color;
+	border-color: alpha(@warning_color, 0.5);
+	background: alpha(@warning_color, 0.12);
+}
 .oss-title-line { font-weight: bold; font-size: 14px; }
 
 .oss-keycap {
