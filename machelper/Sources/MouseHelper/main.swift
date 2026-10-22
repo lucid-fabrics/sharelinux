@@ -27,10 +27,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var sessionSource: SystemSessionSource!
     private var hotKeyRef: EventHotKeyRef?
     private let badge = InjectingBadge()
-    private var stateItem: NSMenuItem!
-    private var toggleItem: NSMenuItem!
-    private var grantItem: NSMenuItem!
-    private var pairItem: NSMenuItem!
+    private var helperMenu: HelperMenu!
+    private var keyWatch: KeyWatch!
+    private var standingProblem: String?
     private var state = RuntimeState(allowRawMouse: false, device: nil, injecting: false, lastDeny: nil)
     private var notificationsAsked = false
     private var pairing: PairingCoordinator!
@@ -49,8 +48,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             pairing = try PairingCoordinator(
                 staticKey: key, store: keys,
                 ledger: PairingFailureLedger(store: FilePairingFailureStore(url: store.pairingFailuresURL)))
+            keyWatch = try KeyWatch(store: keys, ownKey: key.publicKey.rawRepresentation, defaults: .standard)
         } catch {
             log.error("cannot open the key store: \(String(describing: error), privacy: .public)")
+            offerResetAtLaunch(keys: keys, error: error)
             NSApp.terminate(nil)
             return
         }
@@ -64,10 +65,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             clock: ChannelClock(monotonic: { ProcessInfo.processInfo.systemUptime }, wall: { Date() }),
             timestamps: FileTimestampStore(url: store.timestampsURL),
             deviceName: { [pairing] k in pairing?.name(for: k) ?? HelperRuntime.fingerprintName(k) },
-            doubleClickInterval: { NSEvent.doubleClickInterval }, pairing: pairing)
+            doubleClickInterval: { NSEvent.doubleClickInterval }, pairing: pairing, keyWatch: keyWatch)
         // Coalesced: a peer flipping allowed/denied per packet must not flood the main thread,
         // where the hotkey and "Stop now" run.
         runtime.observeState(on: .main) { [weak self] s in self?.apply(s) }
+        runtime.onKeysChanged = { [weak self] in DispatchQueue.main.async { self?.showKeysChanged() } }
         runtime.onSessionStart = { [weak self] device in DispatchQueue.main.async { self?.notifySessionStart(device) } }
 
         pairingWindow = PairingWindowController()
@@ -83,6 +85,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         pairingUpdates = StateCoalescer<PairingStatus>(target: .main, minInterval: 0.05) { [weak self] s in
             self?.pairingWindow.update(s)
+            // The paired-list fingerprint moves when a device is paired or removed.
+            if let self { self.helperMenu?.update(self.menuEntries(for: self.state)) }
         }
         pairing.onChange = { [pairingUpdates] s in pairingUpdates?.push(s) }
         pairingWindow.update(pairing.status)
@@ -97,40 +101,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         server = UDPServer(runtime: runtime)
         do { try server.start() } catch {
             log.error("cannot open the UDP port: \(String(describing: error), privacy: .public)")
-            stateItem.title = "Cannot open UDP port \(UDPServer.defaultPort)"
+            standingProblem = "Cannot open UDP port \(UDPServer.defaultPort)"
         }
         apply(runtime.state)
+        if keyWatch.changedSinceLastLaunch {
+            // The fingerprints differ from what the last run left behind. A same-user program can
+            // edit that note too: a tripwire, not a guarantee (design 3.7).
+            DispatchQueue.main.async { [self] in showKeysChanged() }
+        }
+    }
+
+    /// The keys changed outside the app. Everything is already off; this tells the owner.
+    private func showKeysChanged() {
+        NSApp.activate(ignoringOtherApps: true)
+        HelperDialogs.keysChanged().runModal()
+    }
+
+    /// The Keychain items are damaged so badly that the helper cannot start: offer the reset here,
+    /// so nobody has to open Keychain Access.
+    private func offerResetAtLaunch(keys: KeychainKeyStore, error: Error) {
+        NSApp.activate(ignoringOtherApps: true)
+        guard HelperDialogs.resetConfirm().runModal() == .alertSecondButtonReturn else { return }
+        do {
+            try keys.resetAll()
+            keyWatchRetireDefaults()
+            HelperDialogs.resetDone().runModal()
+        } catch {
+            HelperDialogs.resetFailed().runModal()
+        }
+    }
+
+    private func keyWatchRetireDefaults() {
+        UserDefaults.standard.removeObject(forKey: "keys.lastSeen.identity")
+        UserDefaults.standard.removeObject(forKey: "keys.lastSeen.trust")
     }
 
     // MARK: menu
 
     private func buildMenu() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        let menu = NSMenu()
-        stateItem = NSMenuItem(title: "Raw mouse is off", action: nil, keyEquivalent: "")
-        stateItem.isEnabled = false
-        menu.addItem(stateItem)
-        menu.addItem(.separator())
-        toggleItem = NSMenuItem(title: "Allow raw mouse", action: #selector(toggle), keyEquivalent: "")
-        toggleItem.target = self
-        menu.addItem(toggleItem)
-        let stop = NSMenuItem(title: "Stop now", action: #selector(stopNow), keyEquivalent: "")
-        stop.target = self
-        menu.addItem(stop)
-        menu.addItem(.separator())
-        grantItem = NSMenuItem(
-            title: "Request Accessibility access...", action: #selector(requestAccess), keyEquivalent: "")
-        grantItem.target = self
-        menu.addItem(grantItem)
-        // The only way to open a pairing window: the owner's click, here.
-        pairItem = NSMenuItem(title: PairingText.pairMenuItem, action: #selector(openPairing), keyEquivalent: "")
-        pairItem.target = self
-        menu.addItem(pairItem)
-        menu.addItem(.separator())
-        let quit = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
-        quit.target = self
-        menu.addItem(quit)
-        statusItem.menu = menu
+        // The only way to open a pairing window is the owner's click on its menu item.
+        helperMenu = HelperMenu(
+            target: self,
+            actions: [
+                .toggle: #selector(toggle), .stop: #selector(stopNow), .grant: #selector(requestAccess),
+                .pair: #selector(openPairing), .reset: #selector(resetKeys), .quit: #selector(quit),
+            ],
+            keyEquivalents: [.quit: "q"], entries: menuEntries(for: state))
+        statusItem.menu = helperMenu.menu
+    }
+
+    private func menuEntries(for s: RuntimeState) -> [HelperMenuEntry] {
+        HelperMenuModel.entries(
+            state: s, cannotEnable: runtime?.cannotEnableReason, accessGranted: SystemAccessSource().granted(),
+            identity: keyWatch?.identityFingerprint ?? "", pairedList: keyWatch?.trustFingerprint ?? "",
+            problem: standingProblem)
     }
 
     /// Updates the menu bar icon and menu text. The filled pointer with click
@@ -138,36 +163,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// means the switch is off.
     private func apply(_ s: RuntimeState) {
         state = s
-        toggleItem.state = s.allowRawMouse ? .on : .off
         let name = s.injecting ? "cursorarrow.click.2" : "cursorarrow"
         statusItem.button?.image = NSImage(systemSymbolName: name, accessibilityDescription: "OSS Mouse Helper")
         statusItem.button?.alphaValue = s.allowRawMouse ? 1.0 : 0.5
         badge.update(text: s.badgeText)
-        if let why = runtime.cannotEnableReason {
-            toggleItem.isEnabled = false
-            stateItem.title = "Cannot switch on: " + why
-        } else if let device = s.device {
-            let why = s.lastDeny.map { " (\(Self.describe($0)))" } ?? ""
-            stateItem.title = s.injecting ? "Raw mouse active: \(device)" : "Connected: \(device)\(why)"
-        } else {
-            stateItem.title = s.allowRawMouse ? "Raw mouse is on, waiting for a device" : "Raw mouse is off"
-        }
-        grantItem.isHidden = SystemAccessSource().granted()
-        // While any session is live, no new pairing can be started from the menu.
-        pairItem.isEnabled = s.device == nil
-        pairItem.title = s.device == nil ? PairingText.pairMenuItem : PairingText.pairMenuItemBusy
-    }
-
-    private static func describe(_ s: HelperState) -> String {
-        switch s {
-        case .active: return "active"
-        case .disabled: return "switched off"
-        case .locked: return "screen locked"
-        case .noSession: return "no Screen Sharing session from this device"
-        case .notConsole: return "not the console session"
-        case .rateLimited: return "too fast"
-        case .needsGrant: return "waiting for Accessibility access"
-        }
+        helperMenu.update(menuEntries(for: s))
     }
 
     @objc private func toggle() {
@@ -183,6 +183,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard state.device == nil else { return }
         pairingWindow.presentFromOwnerClick()
         runtime.queue.async { self.pairing.open() }
+    }
+
+    /// "Reset helper keys...": a confirmation first, refused while a session is live (its clicks could
+    /// be the ones landing on the confirmation). The key in memory is the old one, so the helper quits
+    /// afterwards; the next launch makes a fresh identity.
+    @objc private func resetKeys() {
+        guard state.device == nil else {
+            NSApp.activate(ignoringOtherApps: true)
+            HelperDialogs.resetRefused().runModal()
+            return
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        guard HelperDialogs.resetConfirm().runModal() == .alertSecondButtonReturn else { return }
+        runtime.queue.async { [self] in
+            let outcome = runtime.resetHelperKeys()
+            DispatchQueue.main.async { [self] in
+                switch outcome {
+                case .done:
+                    HelperDialogs.resetDone().runModal()
+                    server.stop()
+                    NSApp.terminate(nil)
+                case .refusedSessionActive: HelperDialogs.resetRefused().runModal()
+                case .failed: HelperDialogs.resetFailed().runModal()
+                }
+            }
+        }
     }
 
     @objc private func requestAccess() {
@@ -244,6 +270,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: nil) { [weak self] _ in
             guard let self else { return }
             self.runtime.emergencyStop(.sleep, wait: 1.0)  // bounded: sleep never waits on a stuck queue
+        }
+        center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: nil) { [weak self] _ in
+            guard let self else { return }
+            self.runtime.queue.async { self.runtime.didWake() }  // looks at the keys again
         }
         center.addObserver(forName: NSWorkspace.sessionDidResignActiveNotification, object: nil, queue: nil) {
             [weak self] _ in

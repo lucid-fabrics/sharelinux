@@ -26,6 +26,42 @@ public enum PairingText {
         "This Mac: \(fingerprint(mac))\nThis computer: \(fingerprint(computer))"
     }
 
+    // MARK: keys changed outside the app, fingerprints, reset (design 2.10, 3.7)
+
+    public static let keysChangedTitle = "The helper's keys changed"
+    public static let keysChangedAlert =
+        "The helper's keys changed outside the app. Paired devices were turned off. Pair again only if you did this yourself."
+    public static let resetMenuItem = "Reset helper keys..."
+    public static let resetMenuItemBusy = "Reset helper keys... (a session is active)"
+    public static let resetQuestion = "Reset the helper's keys?"
+    public static let resetExplanation =
+        "This deletes the helper's key and the list of paired devices, and starts fresh. All Linux devices must pair again. Do this if the helper says its keys are damaged, or if you did not expect them to change."
+    public static let resetConfirmButton = "Reset keys"
+    public static let resetRefusedTitle = "Keys not reset"
+    public static let resetRefused =
+        "A Linux device is using the mouse helper right now, so the keys cannot be reset. Try again after that session ends."
+    public static let resetDoneTitle = "Helper keys reset"
+    public static let resetDone =
+        "The helper's keys were deleted. All Linux devices must pair again. The helper will now quit. Open it again to start fresh."
+    public static let resetFailed = "The Keychain did not let go of the keys, so nothing was reset."
+    public static let resetBlocksSwitch = "the keys were reset, quit and open the helper again"
+    /// The pairing window and the menu, when the list of removed devices cannot be trusted.
+    public static let damagedNotice =
+        "The helper's list of removed devices is damaged, so no paired device is trusted and no new one can be added. Choose Reset helper keys... in the menu bar menu to start fresh. All Linux devices must pair again."
+    public static let damagedShort =
+        "The list of removed devices is damaged. Choose Reset helper keys... in the menu bar menu."
+    public static let keysChangedNotice =
+        "Nothing was saved: the helper's keys changed outside the app. Restart the helper. Pair again only if you did this yourself."
+    public static let keysChangedState = "Keys changed outside the app"
+
+    /// The two lines in the menu, so a change shows from one launch to the next. The first is this
+    /// Mac's key (the same string the Linux side shows for it); the second changes whenever the
+    /// paired list or the removed-devices list changes, which the app itself does when you pair or
+    /// remove a device.
+    public static func keyMenuLines(identity: String, pairedList: String) -> (String, String) {
+        ("This Mac's key: \(identity)", "Paired list: \(pairedList)")
+    }
+
     /// One sentence for a refused Confirm.
     public static func refusal(_ r: ConfirmRefusal) -> String {
         switch r {
@@ -77,7 +113,11 @@ public enum PairingText {
         case .expired: return "The pairing window closed. Open it again to pair."
         case .closedAfterFailures: return "Too many attempts. The pairing window closed."
         case .storeFailed(let why): return "Could not save the pairing. " + why
+        case .resetRefusedSessionActive: return resetRefused
+        case .keysReset: return resetDone
+        case .keysChangedOutside: return keysChangedNotice
         case nil:
+            if s.keyStoreDamaged { return damagedNotice }
             if s.ignoredRecords > 0 {
                 let n = s.ignoredRecords
                 return "\(n) unrecognised Keychain \(n == 1 ? "entry was" : "entries were") ignored. \(n == 1 ? "It does" : "They do") not give anyone access."
@@ -90,9 +130,10 @@ public enum PairingText {
     public static func isWarning(_ s: PairingStatus) -> Bool {
         if s.anotherDeviceTrying || s.nameCollision != nil && s.notice == nil { return true }
         switch s.notice {
-        case .refused, .storeFailed, .unlockRefusedSessionActive: return true
-        case .paired, .rejected, .expired, .closedAfterFailures: return false
-        case nil: return s.ignoredRecords > 0
+        case .refused, .storeFailed, .unlockRefusedSessionActive, .resetRefusedSessionActive, .keysChangedOutside:
+            return true
+        case .paired, .rejected, .expired, .closedAfterFailures, .keysReset: return false
+        case nil: return s.keyStoreDamaged || s.ignoredRecords > 0
         }
     }
 

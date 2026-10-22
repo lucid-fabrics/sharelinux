@@ -27,6 +27,12 @@ public struct PairingStatus: Equatable, Sendable {
         case refused(ConfirmRefusal)
         /// "Unlock pairing" was refused because a helper session is live.
         case unlockRefusedSessionActive
+        /// "Reset helper keys..." was refused because a helper session is live.
+        case resetRefusedSessionActive
+        /// The keys were reset; all devices must pair again.
+        case keysReset
+        /// Nothing was written: the keys changed outside the app (see `KeyWatch`).
+        case keysChangedOutside
     }
     public var phase: Phase = .closed
     /// Another address tried to start or finish a pairing while one was in progress.
@@ -42,7 +48,17 @@ public struct PairingStatus: Equatable, Sendable {
     public var nameCollision: String?
     /// Items in the key store that this app did not write (they grant nothing).
     public var ignoredRecords = 0
+    /// The removed-devices list is damaged: nothing is trusted and nothing can be added until the
+    /// owner chooses "Reset helper keys...".
+    public var keyStoreDamaged = false
     public init() {}
+}
+
+/// How "Reset helper keys..." ended.
+public enum KeyResetOutcome: Equatable, Sendable {
+    case done
+    case refusedSessionActive
+    case failed
 }
 
 /// Why a Confirm did nothing. Each is a plain sentence in `PairingText`.
@@ -93,6 +109,10 @@ public final class PairingCoordinator {
     /// may be what lands on the window, so pairing is refused meanwhile.
     public var isSessionActive: () -> Bool = { false }
 
+    /// Asked before the key store is written (pair, remove). False: the keys changed outside the
+    /// app, nothing is written. The runtime sets this to its `KeyWatch` check.
+    public var writeAllowed: () -> Bool = { true }
+
     /// Called on the runtime queue whenever the status changes.
     public var onChange: ((PairingStatus) -> Void)?
     /// Called on the runtime queue after the paired list changed (a device was
@@ -121,6 +141,7 @@ public final class PairingCoordinator {
         s.anotherDeviceTrying = anotherDeviceTrying
         s.notice = notice
         s.ignoredRecords = store.ignoredRecords
+        s.keyStoreDamaged = store.revocationDamaged
         if let remaining = ledger.lockoutRemaining {
             s.phase = .lockedOut(seconds: remaining.rounded(.up))
         } else if let w = window, w.isOpen {
@@ -197,6 +218,11 @@ public final class PairingCoordinator {
         window = nil
         anotherDeviceTrying = false
         displayed = nil
+        guard writeAllowed() else {
+            notice = .keysChangedOutside
+            publish()
+            return nil
+        }
         do {
             try store.addPaired(PairedDevice(name: paired.name, key: paired.key))
             devices = try store.loadPaired()
@@ -204,6 +230,10 @@ public final class PairingCoordinator {
             log.info("paired with \(paired.key.prefix(4).hex, privacy: .public)")
             publish()
             onPairedChanged?()
+        } catch KeyStoreError.corrupt {
+            notice = .storeFailed(PairingText.damagedShort)
+            log.error("could not store a paired key: the removed-devices list is damaged")
+            publish()
         } catch {
             notice = .storeFailed("The Keychain did not accept the key.")
             log.error("could not store a paired key")
@@ -260,8 +290,36 @@ public final class PairingCoordinator {
         return true
     }
 
+    /// "Reset helper keys...": the owner confirmed. Deletes the identity, every record and the
+    /// removed-devices list. Refused while a helper session is live (its clicks could be the ones
+    /// landing on the confirmation). Afterwards nothing is paired.
+    public func resetAllKeys() -> KeyResetOutcome {
+        if isSessionActive() {
+            notice = .resetRefusedSessionActive
+            publish()
+            return .refusedSessionActive
+        }
+        window?.close()
+        window = nil
+        do { try store.resetAll() } catch {
+            notice = .storeFailed("The Keychain did not let go of the keys.")
+            publish()
+            return .failed
+        }
+        devices = []
+        notice = .keysReset
+        log.info("helper keys reset")
+        publish()
+        return .done
+    }
+
     /// Removes a paired device. The runtime then drops its live session.
     public func remove(key: Data) {
+        guard writeAllowed() else {
+            notice = .keysChangedOutside
+            publish()
+            return
+        }
         do {
             try store.removePaired(key: key)
             devices = try store.loadPaired()

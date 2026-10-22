@@ -64,12 +64,14 @@ final class Scene {
     var mono: Double { get { clock.mono } set { clock.mono = newValue } }
     var sessionActive: Bool { get { clock.sessionActive } set { clock.sessionActive = newValue } }
     let coordinator: PairingCoordinator
+    let store: MemoryKeyStore
     let controller = PairingWindowController()
     let addr = PeerAddress(bytes: [192, 0, 2, 7])!
     init(paired: [PairedDevice] = []) throws {
         let mac = privKey(100)
+        store = MemoryKeyStore(identity: mac, paired: paired)
         coordinator = try PairingCoordinator(
-            staticKey: mac, store: MemoryKeyStore(identity: mac, paired: paired),
+            staticKey: mac, store: store,
             ledger: PairingFailureLedger(store: MemoryPairingFailureStore()),
             monotonic: { [clock] in clock.mono })
         coordinator.isSessionActive = { [clock] in clock.sessionActive }
@@ -190,5 +192,68 @@ do {
     guard let png = s.controller.renderPNG() else { throw PreviewError.refused("render mac-10") }
     try png.write(to: dir.appendingPathComponent("mac-10-covered.png"))
     print("mac-10-covered")
+}
+// MARK: keys changed, menu, reset (design 2.10, 3.7). The alerts are the app's own NSAlerts; the menu
+// is drawn from the same entries the real menu is built from (a real NSMenu cannot be drawn without
+// showing it); the states come from a real HelperRuntime over an in-memory store.
+
+final class NullPoster: EventPoster {
+    func postMove(dx: Int, dy: Int, held: ButtonMask) {}
+    func postButton(_ button: MouseButton, down: Bool, clickState: Int) {}
+    func postScroll(dx: Int, dy: Int) {}
+}
+final class QuietSession: SessionStateSource {
+    func consoleUID() -> UInt32? { 501 }
+    func screenLocked() -> Bool? { false }
+}
+final class QuietSharing: ScreenSharingPeerSource { func peers() -> Set<PeerAddress>? { [] } }
+final class QuietAccess: AccessSource { func granted() -> Bool { true } }
+
+func writePNG(_ name: String, _ png: Data?) throws {
+    guard let png else { FileHandle.standardError.write(Data("could not render \(name)\n".utf8)); failed = true; return }
+    try png.write(to: dir.appendingPathComponent(name + ".png"))
+    print(name)
+}
+
+func makeRuntime(store: MemoryKeyStore, key: PrivKey) throws -> (HelperRuntime, KeyWatch) {
+    let watch = try KeyWatch(store: store, ownKey: key.publicKey.rawRepresentation)
+    let coordinator = try PairingCoordinator(
+        staticKey: key, store: store, ledger: PairingFailureLedger(store: MemoryPairingFailureStore()))
+    let runtime = HelperRuntime(
+        staticKey: key, pairedKeys: { coordinator.pairedKeys }, poster: NullPoster(), session: QuietSession(),
+        sharing: QuietSharing(), access: QuietAccess(), ownUID: 501,
+        clock: ChannelClock(monotonic: { 1000 }, wall: { Date() }), timestamps: MemoryTimestampStore(),
+        pairing: coordinator, keyWatch: watch)
+    return (runtime, watch)
+}
+
+for dark in [false, true] {
+    let suffix = dark ? "-dark" : ""
+    let key = privKey(100)
+    let store = MemoryKeyStore(identity: key, paired: [desk, laptop])
+    let (runtime, watch) = try makeRuntime(store: store, key: key)
+    func entries(_ state: RuntimeState, cannotEnable: String? = nil) -> [HelperMenuEntry] {
+        HelperMenuModel.entries(
+            state: state, cannotEnable: cannotEnable, accessGranted: true, identity: watch.identityFingerprint,
+            pairedList: watch.trustFingerprint)
+    }
+    // 11: the menu at rest, with both fingerprints and the Reset item
+    try writePNG("mac-12-menu" + suffix, HelperMenu.renderPNG(entries(runtime.state), dark: dark))
+    // 12: something outside the app replaced the records: the runtime's own state after the trip
+    store.outsideTrustSalt = Data([1])
+    runtime.queue.sync { runtime.didWake() }
+    try writePNG("mac-13-menu-keys-changed" + suffix, HelperMenu.renderPNG(entries(runtime.state), dark: dark))
+}
+try writePNG("mac-11-keys-changed-alert", HelperDialogs.renderPNG(HelperDialogs.keysChanged()))
+try writePNG("mac-11-keys-changed-alert-dark", HelperDialogs.renderPNG(HelperDialogs.keysChanged(), dark: true))
+try writePNG("mac-14-reset-sheet", HelperDialogs.renderPNG(HelperDialogs.resetConfirm()))
+try writePNG("mac-14-reset-sheet-dark", HelperDialogs.renderPNG(HelperDialogs.resetConfirm(), dark: true))
+try writePNG("mac-15-reset-refused", HelperDialogs.renderPNG(HelperDialogs.resetRefused()))
+try writePNG("mac-16-reset-done", HelperDialogs.renderPNG(HelperDialogs.resetDone()))
+// 17: the pairing window when the removed-devices list is damaged (a real coordinator status)
+do {
+    let s = try Scene()  // a damaged list trusts nobody, so nothing is listed
+    s.store.revocationDamaged = true
+    try emit("mac-17-damaged", s)
 }
 exit(failed ? 1 : 0)

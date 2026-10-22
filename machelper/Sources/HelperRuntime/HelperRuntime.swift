@@ -12,6 +12,9 @@ public struct RuntimeState: Equatable, Sendable {
     public var injecting: Bool
     /// Last reason input was refused, nil while accepted or without a session.
     public var lastDeny: HelperState?
+    /// The helper's keys changed outside the app (`KeyWatch`): everything was switched off and
+    /// stays off until the helper is restarted.
+    public var keysChanged = false
 
     /// The text of the always-on-top badge: shown exactly while events are being
     /// posted, whatever the menu bar does (the notch or "hide menu bar icon"
@@ -20,9 +23,11 @@ public struct RuntimeState: Equatable, Sendable {
         injecting ? "Raw mouse active: \(device ?? "a device")" : nil
     }
 
-    public init(allowRawMouse: Bool, device: String?, injecting: Bool, lastDeny: HelperState?) {
+    public init(
+        allowRawMouse: Bool, device: String?, injecting: Bool, lastDeny: HelperState?, keysChanged: Bool = false
+    ) {
         self.allowRawMouse = allowRawMouse; self.device = device
-        self.injecting = injecting; self.lastDeny = lastDeny
+        self.injecting = injecting; self.lastDeny = lastDeny; self.keysChanged = keysChanged
     }
 }
 
@@ -73,6 +78,15 @@ public final class HelperRuntime {
     /// The pairing flow, or nil (tests and the harness that do not pair).
     public let pairing: PairingCoordinator?
     private let log = Logger(subsystem: "io.github.sharelinux.mousehelper", category: "runtime")
+    /// The tripwire on the Keychain items (nil: not watched, tests and the harness).
+    public let keyWatch: KeyWatch?
+    private var keysChangedLatch = false
+    private var lastKeyCheck: Double?
+    /// Handshake initiations trigger a check at most this often (seconds), so a flood of them cannot
+    /// turn into a flood of Keychain reads. A session start always checks.
+    static let keyCheckInterval = 1.0
+    /// Called on `queue` once, when the keys changed outside the app. The app shows the alert.
+    public var onKeysChanged: (() -> Void)?
 
     private var activeKey: Data?
     private var activeSource: PeerAddress?
@@ -109,10 +123,12 @@ public final class HelperRuntime {
         deviceName: @escaping (Data) -> String = HelperRuntime.fingerprintName,
         doubleClickInterval: @escaping () -> Double = { 0.5 },
         pairing: PairingCoordinator? = nil,
+        keyWatch: KeyWatch? = nil,
         queue: DispatchQueue = DispatchQueue(label: "io.github.sharelinux.mousehelper.runtime")
     ) {
         self.queue = queue
         self.pairing = pairing
+        self.keyWatch = keyWatch
         staticPublicKey = staticKey.publicKey.rawRepresentation
         self.monotonic = clock.monotonic
         self.deviceName = deviceName
@@ -132,6 +148,8 @@ public final class HelperRuntime {
         // Called on `queue`, where `device` lives. A live session means the person's own
         // clicks may be landing on the pairing window: no new pairing meanwhile.
         pairing?.isSessionActive = { [weak self] in self?.device != nil }
+        // Before the store is written: if the keys already changed outside the app, write nothing.
+        pairing?.writeAllowed = { [weak self] in self?.checkKeys() ?? true }
         mon.refresh()
     }
 
@@ -142,7 +160,8 @@ public final class HelperRuntime {
     public var allowRawMouse: Bool { localSwitch.isOn }
     public var state: RuntimeState {
         RuntimeState(
-            allowRawMouse: localSwitch.isOn, device: device, injecting: controller.injecting, lastDeny: lastDeny)
+            allowRawMouse: localSwitch.isOn, device: device, injecting: controller.injecting, lastDeny: lastDeny,
+            keysChanged: keysChangedLatch)
     }
 
     // MARK: datagrams and time
@@ -153,6 +172,11 @@ public final class HelperRuntime {
         // owner's local click). A runtime without pairing ignores them.
         if let kind = datagram.first, Self.pairingKinds.contains(kind) {
             return pairing?.receive(datagram, from: source)
+        }
+        // A handshake is where a session begins: look at the keys first (rate limited).
+        if datagram.first == DatagramKind.ikInitiation.rawValue {
+            if keysChangedLatch { return nil }
+            if keyCheckDue(), !checkKeys() { return nil }
         }
         let r = channel.receive(datagram, from: source)
         process(r.events, source: source)
@@ -220,6 +244,8 @@ public final class HelperRuntime {
         for e in events {
             switch e {
             case .sessionStarted(let key):
+                // Always checked at a session start, before anything is accepted or shown.
+                if !checkKeys() { continue }
                 activeKey = key; activeSource = source; sharingSeen = false
                 acceptedInputs = 0; deniedInputs = 0; droppedDatagrams = 0
                 lastDeny = nil; lastLoggedDeny = nil
@@ -290,6 +316,11 @@ public final class HelperRuntime {
     /// ended up as asked.
     @discardableResult
     public func setAllowRawMouse(_ on: Bool) -> Bool {
+        if on, keysChangedLatch || !checkKeys() {
+            localSwitch.isOn = false
+            publish()
+            return false
+        }
         if on, cannotEnableReason != nil {
             localSwitch.isOn = false
             publish()
@@ -371,8 +402,57 @@ public final class HelperRuntime {
 
     /// The paired list changed (a device was removed): drop a session whose key is gone.
     public func pairedKeysChanged() {
+        if let keyWatch {
+            keyWatch.rebase()  // the app's own write is the new baseline
+            publish()  // the menu shows the new paired-list fingerprint
+        }
         guard let key = activeKey, !pairedKeys().contains(where: { constantTimeEqual($0, key) }) else { return }
         end(.unpaired)
+    }
+
+    // MARK: the keys changed outside the app
+
+    private func keyCheckDue() -> Bool {
+        let now = monotonic()
+        if let last = lastKeyCheck, now - last < Self.keyCheckInterval { return false }
+        return true
+    }
+
+    /// Asks the tripwire. False (and everything off) when the keys changed outside the app: all
+    /// sessions end, the toggle goes off, the state says so and `onKeysChanged` fires once.
+    /// Call on `queue`. An unreadable store concludes nothing (a locked Keychain is not an attack).
+    @discardableResult
+    public func checkKeys() -> Bool {
+        guard let keyWatch else { return true }
+        lastKeyCheck = monotonic()
+        if keysChangedLatch { return false }
+        guard case .changed(let cause) = keyWatch.check() else { return true }
+        keysChangedLatch = true
+        localSwitch.isOn = false
+        log.error("helper keys changed outside the app (\(String(describing: cause), privacy: .public))")
+        stopEverything(.killSwitch)
+        publish()
+        onKeysChanged?()
+        return false
+    }
+
+    /// Wake from sleep: look at the keys again. Call on `queue`.
+    public func didWake() { checkKeys() }
+
+    /// "Reset helper keys...": deletes the identity, the records and the removed-devices list, after
+    /// the person confirmed. Refused while a session is live. The key in memory is the old one, so
+    /// the helper stays off until it is started again (the app quits).
+    /// Call on `queue`.
+    @discardableResult
+    public func resetHelperKeys() -> KeyResetOutcome {
+        guard let pairing else { return .failed }
+        let outcome = pairing.resetAllKeys()
+        guard outcome == .done else { return outcome }
+        localSwitch.isOn = false
+        keyWatch?.retire()
+        cannotEnableReason = PairingText.resetBlocksSwitch
+        publish()
+        return .done
     }
 
     private func stopEverything(_ reason: ReleaseReason) {

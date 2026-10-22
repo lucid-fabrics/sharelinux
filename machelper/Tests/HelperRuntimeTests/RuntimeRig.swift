@@ -61,16 +61,26 @@ final class RuntimeRig {
     var keyStore: MemoryKeyStore?
     var ledgerStore = MemoryPairingFailureStore()
     var statuses: [PairingStatus] = []
+    var keyWatch: KeyWatch?
+    var keysChangedAlerts = 0
 
-    init(pairing: Bool = false) {
+    init(pairing: Bool = false, watchKeys: Bool = false, defaults: UserDefaults? = nil,
+         prepairedName: String? = nil) {
         paired = pairing ? [] : [linuxKey.publicKey.rawRepresentation]
         if pairing {
-            let store = MemoryKeyStore(identity: macKey)
+            let store = MemoryKeyStore(
+                identity: macKey,
+                paired: prepairedName.map { [PairedDevice(name: $0, key: linuxKey.publicKey.rawRepresentation)] } ?? [])
             keyStore = store
             let ledger = PairingFailureLedger(store: ledgerStore, wall: { [unowned self] in self.wall.timeIntervalSince1970 })
             coordinator = try! PairingCoordinator(
                 staticKey: macKey, store: store, ledger: ledger, monotonic: { [unowned self] in self.mono })
             coordinator?.onChange = { [unowned self] in self.statuses.append($0) }
+        }
+        if watchKeys {
+            let store = keyStore ?? MemoryKeyStore(identity: macKey)
+            keyStore = store
+            keyWatch = try! KeyWatch(store: store, ownKey: macKey.publicKey.rawRepresentation, defaults: defaults)
         }
         let coordinator = self.coordinator
         runtime = HelperRuntime(
@@ -79,7 +89,9 @@ final class RuntimeRig {
             session: session, sharing: sharing, access: access, ownUID: 501,
             clock: ChannelClock(monotonic: { [unowned self] in self.mono }, wall: { [unowned self] in self.wall }),
             timestamps: MemoryTimestampStore(),
-            deviceName: { coordinator?.name(for: $0) ?? HelperRuntime.fingerprintName($0) }, pairing: coordinator)
+            deviceName: { coordinator?.name(for: $0) ?? HelperRuntime.fingerprintName($0) }, pairing: coordinator,
+            keyWatch: keyWatch)
+        runtime.onKeysChanged = { [unowned self] in self.keysChangedAlerts += 1 }
         runtime.onState = { [unowned self] in self.states.append($0) }
     }
 
