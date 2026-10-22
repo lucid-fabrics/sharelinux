@@ -102,6 +102,14 @@ Open **Preferences** (Ctrl+comma) for quality, the Command key (Super or Alt), n
 
 `cmd/sharelinux/Dockerfile` builds the viewer on Debian 14 and runs a check under Xvfb; `cmd/sharelinux/internal/mockrfb` is a tiny RFB server (`-size WxH`, `-damage N`) for checking it without a Mac.
 
+#### Mac helper: your keys and what protects them
+
+The raw-mouse helper (`machelper`, a menu bar app on the Mac) trusts a Linux device only after you paired it at the Mac and compared the code on both screens. Its own key and the list of paired devices live in your login Keychain.
+
+A program that already runs as your macOS user can delete and replace those Keychain items and make itself a paired device. macOS only prevents that for apps signed with a real Apple developer team, and this helper is signed ad hoc. That is a known limit, accepted on purpose: it is the same trust model as the keys in `~/.ssh`, and malware running as you is out of scope. The helper does not claim to stop it. It does try to notice: when its keys change outside the app it ends every session, switches "Allow raw mouse" off and says "The helper's keys changed outside the app. Paired devices were turned off. Pair again only if you did this yourself." The menu shows two fingerprints ("This Mac's key" and "Paired list") so you can spot a change from one launch to the next. A program running as you could edit that note as well, so treat it as an alarm bell and not as a guarantee.
+
+Two more things to know. Restoring an old copy of your whole keychain (a backup) brings back devices you removed since then, so look at the paired list after a restore. And if the helper says its list of removed devices is damaged, or you do not trust its keys any more, choose **Reset helper keys...** in its menu: it deletes the helper's key and the list of paired devices and starts fresh, and every Linux device has to pair again. You never need Keychain Access for that.
+
 ## Roadmap
 
 * [x] Add support for macOS
