@@ -174,6 +174,15 @@ func (l *pointerLock) release() {
 	l.on, l.held, l.idle = false, false, false
 }
 
+// lose records a lock that stood and can no longer, because the window is gone
+// or the barriers could not be rebuilt. It ends the lock as a failure to start
+// one does, so only the keyboard stays captured, and reports whether the user
+// is told (once per stretch of Exclusive mode).
+func (l *pointerLock) lose() (notify bool) {
+	l.release()
+	return l.failedOnce()
+}
+
 // state takes the display server's report that the lock began or ended.
 func (l *pointerLock) state(locked bool) lockNotice {
 	if !l.on || locked == l.held {

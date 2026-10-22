@@ -33,10 +33,19 @@ void oss_x11_unlock(GtkWidget *widget, gboolean has_hint, double x, double y);
 // oss_x11_geometry reads what the lock needs to judge itself, in root pixels:
 // [0..3] the window box (left, top, right, bottom) as it is now, [4..7] the
 // picture widget (x, y, width, height), [8..9] the pointer, [10..13] the box the
-// barriers stand on. It returns FALSE when no barriers are up or anything
-// could not be read.
+// barriers stand on. The window and the pointer come from a cache that the
+// server is asked to refresh only when the window reported a change, or every
+// quarter second as a fallback. It returns OSS_GEOMETRY_SKIP when there is
+// nothing to judge yet (no barriers, no layout), and OSS_GEOMETRY_LOST when the
+// window can no longer be read, which means it is gone and the lock is over.
 #define OSS_GEOMETRY_LEN 14
-gboolean oss_x11_geometry(GtkWidget *widget, int geometry[OSS_GEOMETRY_LEN]);
+#define OSS_GEOMETRY_SKIP 0
+#define OSS_GEOMETRY_OK 1
+#define OSS_GEOMETRY_LOST 2
+int oss_x11_geometry(GtkWidget *widget, int geometry[OSS_GEOMETRY_LEN]);
+
+// oss_x11_test_vanish is for tests: the lock reads a window that is gone.
+void oss_x11_test_vanish(void);
 
 // oss_x11_center warps the pointer to the middle of the widget.
 void oss_x11_center(GtkWidget *widget);

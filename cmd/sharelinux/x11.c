@@ -16,6 +16,7 @@
 
 #include "_cgo_export.h"
 #include "wayland.h"
+#include "x11math.h"
 
 static PointerBarrier barriers[4];
 static void warp_to_middle(GtkWidget *widget);
@@ -36,6 +37,178 @@ unsigned long oss_x11_round_trips(void) {
 
 unsigned long oss_x11_geometry_ticks(void) {
 	return geometry_ticks;
+}
+
+// ---- window geometry cache ----
+//
+// The lock needs the window's place and the pointer every frame, but asking the
+// server costs a round trip each. A second connection watches the window for
+// ConfigureNotify (moved, resized), Reparent, Map, Unmap and the pointer
+// crossing it, and only then is the server asked again. A slow refresh stays
+// as a fallback in case an event is missed or the watch could not be made.
+
+#define REFRESH_US (250 * 1000)
+
+static struct {
+	gboolean have_window, window_dirty, have_pointer, pointer_dirty, lost;
+	int width, height, origin_x, origin_y, pointer_x, pointer_y;
+	gint64 window_at, pointer_at;
+} cache;
+
+static Display *watch_display = NULL;
+static Window watch_window = None;
+static guint watch_source = 0;
+static gboolean watch_failed = FALSE;
+static Window vanished_window = None;
+
+static int watch_error(Display *display, XErrorEvent *event) {
+	watch_failed = TRUE;
+	return 0;
+}
+
+static void watch_drain(void) {
+	while (watch_display != NULL && XPending(watch_display)) {
+		XEvent event;
+		XNextEvent(watch_display, &event);
+		switch (event.type) {
+		case DestroyNotify:
+			if (event.xdestroywindow.window == watch_window) {
+				cache.lost = TRUE;
+			}
+			break;
+		case ConfigureNotify:
+		case ReparentNotify:
+		case MapNotify:
+		case UnmapNotify:
+			cache.window_dirty = TRUE;
+			cache.pointer_dirty = TRUE;
+			break;
+		case EnterNotify:
+		case LeaveNotify:
+			cache.pointer_dirty = TRUE;
+			break;
+		}
+	}
+}
+
+static gboolean watch_ready(gint fd, GIOCondition condition, gpointer data) {
+	watch_drain();
+	return G_SOURCE_CONTINUE;
+}
+
+static void watch_close(void) {
+	if (watch_source != 0) {
+		g_source_remove(watch_source);
+		watch_source = 0;
+	}
+	if (watch_display != NULL) {
+		XCloseDisplay(watch_display);
+		watch_display = NULL;
+	}
+	watch_window = None;
+}
+
+// watch_open watches the window on a connection of its own, which leaves
+// GDK's event selection alone. Failing is fine: the slow refresh covers it.
+static void watch_open(Display *main_display, Window window) {
+	if (watch_display != NULL && watch_window == window) {
+		return;
+	}
+	watch_close();
+	watch_display = XOpenDisplay(XDisplayString(main_display));
+	if (watch_display == NULL) {
+		return;
+	}
+	// A destroyed window is an X error on this connection, which would end the
+	// program by default, so it is caught for the one request that names it.
+	watch_failed = FALSE;
+	XErrorHandler previous = XSetErrorHandler(watch_error);
+	XSelectInput(watch_display, window, StructureNotifyMask | EnterWindowMask | LeaveWindowMask);
+	XSync(watch_display, False);
+	ROUND_TRIP();
+	XSetErrorHandler(previous);
+	if (watch_failed) {
+		watch_close();
+		return;
+	}
+	watch_window = window;
+	watch_source = g_unix_fd_add(ConnectionNumber(watch_display), G_IO_IN, watch_ready, NULL);
+}
+
+// read_window asks the server for the window's size and place. A window that is
+// gone is an X error, which would end the program, so it runs in a trap and a
+// failure marks the lock lost.
+static gboolean read_window(GdkSurface *surface) {
+	GdkDisplay *gdk_display = gdk_surface_get_display(surface);
+	Display *display = gdk_x11_display_get_xdisplay(gdk_display);
+	Window window = vanished_window != None ? vanished_window : gdk_x11_surface_get_xid(surface), root = DefaultRootWindow(display), child;
+	XWindowAttributes attributes;
+	int x, y;
+	gdk_x11_display_error_trap_push(gdk_display);
+	ROUND_TRIP();
+	Status found = XGetWindowAttributes(display, window, &attributes);
+	if (found) {
+		ROUND_TRIP();
+		found = XTranslateCoordinates(display, window, root, 0, 0, &x, &y, &child);
+	}
+	gdk_x11_display_error_trap_pop_ignored(gdk_display);
+	if (!found) {
+		cache.lost = TRUE;
+		return FALSE;
+	}
+	cache.have_window = TRUE;
+	cache.window_dirty = FALSE;
+	cache.window_at = g_get_monotonic_time();
+	cache.width = attributes.width;
+	cache.height = attributes.height;
+	cache.origin_x = x;
+	cache.origin_y = y;
+	return TRUE;
+}
+
+static gboolean read_pointer(GdkSurface *surface) {
+	GdkDisplay *gdk_display = gdk_surface_get_display(surface);
+	Display *display = gdk_x11_display_get_xdisplay(gdk_display);
+	Window root_return, child_return;
+	int win_x, win_y, x, y;
+	unsigned int mask;
+	gdk_x11_display_error_trap_push(gdk_display);
+	ROUND_TRIP();
+	Bool found = XQueryPointer(display, DefaultRootWindow(display), &root_return, &child_return, &x, &y, &win_x, &win_y, &mask);
+	gdk_x11_display_error_trap_pop_ignored(gdk_display);
+	if (!found) {
+		cache.lost = TRUE;
+		return FALSE;
+	}
+	cache.have_pointer = TRUE;
+	cache.pointer_dirty = FALSE;
+	cache.pointer_at = g_get_monotonic_time();
+	cache.pointer_x = x;
+	cache.pointer_y = y;
+	return TRUE;
+}
+
+// fresh_window and fresh_pointer ask the server only when an event said the
+// cache is out of date, or the fallback interval has passed.
+static gboolean fresh_window(GdkSurface *surface) {
+	watch_drain();
+	if (cache.lost) {
+		return FALSE;
+	}
+	if (cache.have_window && !cache.window_dirty && g_get_monotonic_time() - cache.window_at < REFRESH_US) {
+		return TRUE;
+	}
+	return read_window(surface);
+}
+
+static gboolean fresh_pointer(GdkSurface *surface) {
+	if (cache.lost) {
+		return FALSE;
+	}
+	if (cache.have_pointer && !cache.pointer_dirty && g_get_monotonic_time() - cache.pointer_at < REFRESH_US) {
+		return TRUE;
+	}
+	return read_pointer(surface);
 }
 
 static void drop_barriers(void) {
@@ -59,6 +232,9 @@ gboolean oss_x11_confined(void) {
 gboolean oss_x11_confine(GtkWidget *widget, gboolean on) {
 	if (!on) {
 		drop_barriers();
+		watch_close();
+		vanished_window = None;
+		memset(&cache, 0, sizeof(cache));
 		return TRUE;
 	}
 	drop_barriers();
@@ -76,25 +252,23 @@ gboolean oss_x11_confine(GtkWidget *widget, gboolean on) {
 	if (!XFixesQueryExtension(display, &event_base, &error_base) || !XFixesQueryVersion(display, &major, &minor) || major < 5) {
 		return FALSE;
 	}
-	Window root = DefaultRootWindow(display), child;
-	XWindowAttributes attributes;
-	int x, y;
-	ROUND_TRIP();
-	if (!XGetWindowAttributes(display, window, &attributes)) {
+	if (watch_window != window) {
+		memset(&cache, 0, sizeof(cache));
+	}
+	cache.lost = FALSE;
+	watch_open(display, window);
+	if (!read_window(surface)) {
 		return FALSE;
 	}
-	ROUND_TRIP();
-	if (!XTranslateCoordinates(display, window, root, 0, 0, &x, &y, &child)) {
-		return FALSE;
-	}
+	cache.pointer_dirty = TRUE;
 	// Barrier coordinates are unsigned, and a window with its shadow can reach past the screen.
-	int right = MAX(x + attributes.width, 1), bottom = MAX(y + attributes.height, 1);
-	x = MAX(x, 1);
-	y = MAX(y, 1);
+	int x = MAX(cache.origin_x, 1), y = MAX(cache.origin_y, 1);
+	int right = MAX(cache.origin_x + cache.width, 1), bottom = MAX(cache.origin_y + cache.height, 1);
 	// The directions of a barrier are the ones it lets through, so each side
 	// passes only motion into the window and blocks motion out of it. Each side
 	// runs one pixel past its corners so a diagonal move cannot slip through.
 	// An X error would end the program, so the requests run in a trap.
+	Window root = DefaultRootWindow(display);
 	GdkDisplay *gdk_display = gdk_surface_get_display(surface);
 	gdk_x11_display_error_trap_push(gdk_display);
 	barriers[0] = XFixesCreatePointerBarrier(display, root, x - 1, y, right + 1, y, BarrierPositiveY, 0, NULL);
@@ -116,60 +290,54 @@ gboolean oss_x11_confine(GtkWidget *widget, gboolean on) {
 	return TRUE;
 }
 
-// window_box is the box oss_x11_confine builds its barriers on, in root coordinates.
-static gboolean window_box(GtkWidget *widget, GdkSurface *surface, Display *display, int box[4]) {
-	Window window = gdk_x11_surface_get_xid(surface), root = DefaultRootWindow(display), child;
-	XWindowAttributes attributes;
-	int x, y;
-	ROUND_TRIP();
-	if (!XGetWindowAttributes(display, window, &attributes)) {
-		return FALSE;
-	}
-	ROUND_TRIP();
-	if (!XTranslateCoordinates(display, window, root, 0, 0, &x, &y, &child)) {
-		return FALSE;
-	}
-	box[0] = MAX(x, 1);
-	box[1] = MAX(y, 1);
-	box[2] = MAX(x + attributes.width, 1);
-	box[3] = MAX(y + attributes.height, 1);
-	return TRUE;
-}
-
-gboolean oss_x11_geometry(GtkWidget *widget, int geometry[OSS_GEOMETRY_LEN]) {
-	GtkNative *native = gtk_widget_get_native(widget);
-	GdkSurface *surface = native != NULL ? gtk_native_get_surface(native) : NULL;
+// picture_rect is the picture widget in root pixels, from the cached window place.
+static gboolean picture_rect(GtkWidget *widget, GtkNative *native, GdkSurface *surface, oss_rect *rect) {
 	graphene_rect_t bounds;
-	if (barrier_count == 0 || surface == NULL || !GDK_IS_X11_SURFACE(surface) || !gtk_widget_compute_bounds(widget, GTK_WIDGET(native), &bounds)) {
-		return FALSE;
-	}
-	Display *display = gdk_x11_display_get_xdisplay(gdk_surface_get_display(surface));
-	Window root = DefaultRootWindow(display), window = gdk_x11_surface_get_xid(surface), child, root_return, child_return;
-	int origin_x, origin_y, pointer_x, pointer_y, win_x, win_y;
-	unsigned int mask;
-	geometry_ticks++;
-	if (!window_box(widget, surface, display, geometry)) {
-		return FALSE;
-	}
-	ROUND_TRIP();
-	if (!XTranslateCoordinates(display, window, root, 0, 0, &origin_x, &origin_y, &child)) {
-		return FALSE;
-	}
-	ROUND_TRIP();
-	if (!XQueryPointer(display, root, &root_return, &child_return, &pointer_x, &pointer_y, &win_x, &win_y, &mask)) {
+	if (!gtk_widget_compute_bounds(widget, GTK_WIDGET(native), &bounds)) {
 		return FALSE;
 	}
 	double offset_x = 0, offset_y = 0;
 	gtk_native_get_surface_transform(native, &offset_x, &offset_y);
-	double scale = gdk_surface_get_scale_factor(surface);
-	geometry[4] = origin_x + (int)((bounds.origin.x + offset_x) * scale);
-	geometry[5] = origin_y + (int)((bounds.origin.y + offset_y) * scale);
-	geometry[6] = (int)(bounds.size.width * scale);
-	geometry[7] = (int)(bounds.size.height * scale);
-	geometry[8] = pointer_x;
-	geometry[9] = pointer_y;
-	memcpy(geometry + 10, barrier_box, sizeof(barrier_box));
+	*rect = oss_picture_rect(cache.origin_x, cache.origin_y, bounds.origin.x, bounds.origin.y, bounds.size.width, bounds.size.height, offset_x, offset_y, gdk_surface_get_scale_factor(surface));
 	return TRUE;
+}
+
+int oss_x11_geometry(GtkWidget *widget, int geometry[OSS_GEOMETRY_LEN]) {
+	GtkNative *native = gtk_widget_get_native(widget);
+	GdkSurface *surface = native != NULL ? gtk_native_get_surface(native) : NULL;
+	if (barrier_count == 0 || surface == NULL || !GDK_IS_X11_SURFACE(surface)) {
+		return OSS_GEOMETRY_SKIP;
+	}
+	geometry_ticks++;
+	if (!fresh_window(surface) || !fresh_pointer(surface)) {
+		return OSS_GEOMETRY_LOST;
+	}
+	oss_rect picture;
+	if (!picture_rect(widget, native, surface, &picture)) {
+		return OSS_GEOMETRY_SKIP;
+	}
+	geometry[0] = MAX(cache.origin_x, 1);
+	geometry[1] = MAX(cache.origin_y, 1);
+	geometry[2] = MAX(cache.origin_x + cache.width, 1);
+	geometry[3] = MAX(cache.origin_y + cache.height, 1);
+	geometry[4] = picture.x;
+	geometry[5] = picture.y;
+	geometry[6] = picture.width;
+	geometry[7] = picture.height;
+	geometry[8] = cache.pointer_x;
+	geometry[9] = cache.pointer_y;
+	memcpy(geometry + 10, barrier_box, sizeof(barrier_box));
+	return OSS_GEOMETRY_OK;
+}
+
+// oss_x11_test_vanish makes the lock read a window that does not exist, as one
+// destroyed mid-unmap is, and stops the watch so only the request itself finds
+// out. The X error is the real one; the window GDK holds stays untouched. It
+// exists for the test of a lock that outlives its window.
+void oss_x11_test_vanish(void) {
+	watch_close();
+	vanished_window = 0x7ffffff0;
+	cache.window_dirty = TRUE;
 }
 
 void oss_x11_center(GtkWidget *widget) {
@@ -309,13 +477,38 @@ static void warp_to(GtkWidget *widget, double x, double y) {
 	gdk_x11_display_error_trap_pop_ignored(gdk_display);
 }
 
+// warp_to_middle puts the pointer in the middle of the part of the picture that
+// is on the screen: the picture of a window partly off the screen has a middle
+// the pointer cannot reach, and a barrier would hold it at the edge instead.
 static void warp_to_middle(GtkWidget *widget) {
-	graphene_rect_t bounds;
 	GtkNative *native = gtk_widget_get_native(widget);
-	// A widget not yet laid out has no middle; the lock's settle step centres it later.
-	if (native != NULL && gtk_widget_compute_bounds(widget, GTK_WIDGET(native), &bounds) && bounds.size.width > 0 && bounds.size.height > 0) {
-		warp_to(widget, bounds.origin.x + bounds.size.width / 2, bounds.origin.y + bounds.size.height / 2);
+	GdkSurface *surface = native != NULL ? gtk_native_get_surface(native) : NULL;
+	if (surface == NULL || !GDK_IS_X11_SURFACE(surface) || !fresh_window(surface)) {
+		return;
 	}
+	oss_rect picture;
+	// A widget not yet laid out has no middle; the lock's settle step centres it later.
+	if (!picture_rect(widget, native, surface, &picture) || picture.width <= 0 || picture.height <= 0) {
+		return;
+	}
+	GdkDisplay *gdk_display = gdk_surface_get_display(surface);
+	oss_rect screen = picture;
+	GdkMonitor *monitor = gdk_display_get_monitor_at_surface(gdk_display, surface);
+	if (monitor != NULL) {
+		GdkRectangle area;
+		gdk_monitor_get_geometry(monitor, &area);
+		int scale = MAX(gdk_monitor_get_scale_factor(monitor), 1);
+		screen = (oss_rect){area.x * scale, area.y * scale, area.width * scale, area.height * scale};
+	}
+	int x, y;
+	if (!oss_visible_middle(picture, screen, &x, &y)) {
+		return;
+	}
+	Display *display = gdk_x11_display_get_xdisplay(gdk_display);
+	gdk_x11_display_error_trap_push(gdk_display);
+	XWarpPointer(display, None, DefaultRootWindow(display), 0, 0, 0, 0, x, y);
+	XFlush(display);
+	gdk_x11_display_error_trap_pop_ignored(gdk_display);
 }
 
 static gboolean raw_ready(gint fd, GIOCondition condition, gpointer data) {

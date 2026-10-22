@@ -560,8 +560,8 @@ func (v *sessionView) poll() {
 		// The picture can move without changing size; the lock follows it.
 		v.screen.refreshLock(v.lockBackend)
 	}
-	if v.lock.held && v.focused {
-		v.screen.settleLock(v.lockBackend)
+	if v.lock.held && v.focused && !v.screen.settleLock(v.lockBackend) {
+		v.lockLost()
 	}
 	if cursor, changed := v.h.takeCursor(); changed {
 		v.screen.setCursor(cursor)
@@ -891,8 +891,8 @@ func (v *sessionView) applyGrabs() {
 // out of Exclusive mode, focus loss, unmap and the end of the session come here.
 func (v *sessionView) setPointerLock(on bool) {
 	if on == v.lock.on {
-		if on {
-			v.screen.refreshLock(v.lockBackend)
+		if on && !v.screen.refreshLock(v.lockBackend) {
+			v.lockLost()
 		}
 		return
 	}
@@ -936,6 +936,20 @@ func (v *sessionView) setPointerLock(on bool) {
 	}
 	v.lock.request(held)
 	v.g.app.logger.Debug("pointer lock requested", "backend", int(v.lockBackend), "held", held)
+}
+
+// lockLost ends a lock that stood and cannot any more (the window is gone, or
+// its barriers could not be rebuilt). The pointer is let go and only the
+// keyboard stays captured, as when a lock fails to start.
+func (v *sessionView) lockLost() {
+	notify := v.lock.lose()
+	lockSink.motion, lockSink.state = nil, nil
+	v.helper.reroute()
+	v.screen.unlockPointer(v.lockBackend, false, 0, 0)
+	v.g.app.logger.Debug("pointer lock lost", "backend", int(v.lockBackend))
+	if notify {
+		v.notify(lockFailedAnnouncement)
+	}
 }
 
 // requestIfIdle asks for the lock when it is wanted and no request stands: the
