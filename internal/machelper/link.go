@@ -61,10 +61,24 @@ type LinkTiming struct {
 	Keepalive time.Duration
 	// StatusTimeout is how long a live link may go without a status before it
 	// counts as lost: the Mac's 250 ms between statuses, one keepalive
-	// interval and some slack. Shorter would call a healthy helper lost. A
-	// helper that ends the session (switched off on the Mac) says nothing, so
-	// this is also how long that takes to notice, 330 ms at most.
+	// interval and room for Wi-Fi jitter, which bunches and delays datagrams
+	// by tens of milliseconds, so one late status must not flip the routing.
+	// The helper says so itself when it stops on purpose (switch off, Stop
+	// now, a refusal, a closed port), and those are noticed at once; this
+	// timeout is only for a helper that vanishes without a word (the Mac
+	// asleep, off the network).
 	StatusTimeout time.Duration
+	// Recover is how long the statuses must keep coming, each within
+	// StatusTimeout of the last, before a link that went quiet counts as live
+	// again. One stray status is not recovery, and routing that flaps between
+	// the helper and Screen Sharing is worse than routing that waits a moment.
+	// Zero: a third longer than StatusTimeout.
+	Recover time.Duration
+	// RepeatHeld is how often the held buttons are sent again as input while
+	// any is down. The Mac lifts a button when no input packet has arrived for
+	// a second (its keepalives do not count), so a button held without moving
+	// the mouse needs this heartbeat; one lost datagram is covered by the next.
+	RepeatHeld time.Duration
 	// Handshake bounds the wait for the Mac's answer to a handshake.
 	Handshake time.Duration
 	// Retry spaces new handshakes while the helper is down. The Mac allows one
@@ -81,7 +95,13 @@ func (t LinkTiming) withDefaults() LinkTiming {
 		t.Keepalive = 50 * time.Millisecond
 	}
 	if t.StatusTimeout <= 0 {
-		t.StatusTimeout = 330 * time.Millisecond
+		t.StatusTimeout = 600 * time.Millisecond
+	}
+	if t.Recover <= 0 {
+		t.Recover = t.StatusTimeout + t.StatusTimeout/3
+	}
+	if t.RepeatHeld <= 0 {
+		t.RepeatHeld = 250 * time.Millisecond
 	}
 	if t.Handshake <= 0 {
 		t.Handshake = time.Second
@@ -128,8 +148,16 @@ type Link struct {
 	locked    bool
 	status    LinkStatus
 	lastHeard time.Time // last status, or the session start before the first
-	sentPkts  uint64
-	closed    bool
+	// stableSince is when the current run of statuses began while recovering
+	// from silence (zero when not recovering).
+	stableSince time.Time
+	lastInput   time.Time // when input last went out, for the held-button heartbeat
+	sentPkts    uint64
+	closed      bool
+
+	// quietRetry: the next handshake follows a helper that stopped on purpose, so the
+	// status stays as it is instead of going back to "connecting".
+	quietRetry bool
 
 	hsResp  chan []byte
 	refused chan struct{}
@@ -222,6 +250,7 @@ func (l *Link) Send(p InputPacket) error {
 	l.seq++
 	p.Flags = l.flags()
 	l.buttons = p.Buttons
+	l.lastInput = time.Now()
 	sess := l.sess
 	l.sentPkts++
 	l.mu.Unlock()
@@ -355,8 +384,22 @@ func (l *Link) onTransport(datagram []byte) {
 	if err != nil {
 		return
 	}
+	heard := time.Now()
 	l.mu.Lock()
-	l.lastHeard = time.Now()
+	gap := heard.Sub(l.lastHeard)
+	l.lastHeard = heard
+	if l.status.State == LinkDown && errors.Is(l.status.Reason, ErrSilent) {
+		// Coming back from silence: a run of statuses, none more than StatusTimeout after
+		// the one before, for Recover. A single answer after a long gap starts the run.
+		if l.stableSince.IsZero() || gap > l.cfg.Timing.StatusTimeout {
+			l.stableSince = heard
+		}
+		if heard.Sub(l.stableSince) < l.cfg.Timing.Recover {
+			l.mu.Unlock()
+			return
+		}
+	}
+	l.stableSince = time.Time{}
 	l.mu.Unlock()
 	l.setStatus(LinkStatus{State: LinkLive, Helper: status.State})
 }
@@ -430,6 +473,7 @@ func (l *Link) sleep(d time.Duration) bool {
 
 func (l *Link) run() {
 	defer close(l.done)
+	quiet := false
 	for {
 		sess, err := l.handshake()
 		if err != nil {
@@ -445,12 +489,67 @@ func (l *Link) run() {
 			continue
 		}
 		l.install(sess)
-		l.setStatus(LinkStatus{State: LinkConnecting})
+		if !quiet {
+			l.setStatus(LinkStatus{State: LinkConnecting})
+		}
+		quiet = false
 		l.keepalive() // the first authenticated packet makes the session live on the Mac
 		if !l.serve() {
 			return
 		}
+		quiet, l.quietRetry = l.quietRetry, false
 	}
+}
+
+// rekeyAttempt is a new handshake in flight while the old session carries on.
+type rekeyAttempt struct {
+	hs       *Handshake
+	deadline time.Time
+}
+
+// repeatHeld sends the held buttons again as input (see LinkTiming.RepeatHeld).
+func (l *Link) repeatHeld() {
+	l.mu.Lock()
+	sess := l.sess
+	if sess == nil || l.buttons == 0 || time.Since(l.lastInput) < l.cfg.Timing.RepeatHeld ||
+		(l.status.State == LinkDown && !errors.Is(l.status.Reason, ErrSilent)) {
+		l.mu.Unlock()
+		return
+	}
+	p := InputPacket{Type: PacketInput, Seq: l.seq, Flags: l.flags(), Buttons: l.buttons}
+	l.seq++
+	l.lastInput = time.Now()
+	l.mu.Unlock()
+	l.write(sess, p)
+}
+
+// startRekey sends a new initiation without waiting for the answer: the
+// keepalives carry on meanwhile, so a lost answer costs nothing.
+func (l *Link) startRekey() *rekeyAttempt {
+	select { // an old answer must not satisfy this attempt
+	case <-l.hsResp:
+	default:
+	}
+	hs, init, err := NewIKInitiation(l.cfg.Static, l.cfg.MacKey, l.cfg.Now())
+	if err != nil {
+		return nil
+	}
+	if _, err := l.conn.Write(init); err != nil {
+		return nil
+	}
+	return &rekeyAttempt{hs: hs, deadline: time.Now().Add(l.cfg.Timing.Handshake)}
+}
+
+func (l *Link) finishRekey(rk *rekeyAttempt, answer []byte) {
+	if _, err := rk.hs.Read(answer); err != nil {
+		return
+	}
+	sess, err := rk.hs.Session(l.cfg.Now())
+	if err != nil {
+		return
+	}
+	l.install(sess)
+	l.keepalive()
 }
 
 // serve keeps one session going. It returns true when a new handshake is
@@ -459,10 +558,17 @@ func (l *Link) serve() bool {
 	ticker := time.NewTicker(l.cfg.Timing.Keepalive)
 	defer ticker.Stop()
 	lastTry := time.Now()
+	var rk *rekeyAttempt
 	for {
 		select {
 		case <-l.stop:
 			return false
+		case answer := <-l.hsResp:
+			if rk != nil {
+				l.finishRekey(rk, answer)
+				rk = nil
+			}
+			continue
 		case <-ticker.C:
 		}
 		l.mu.Lock()
@@ -484,17 +590,29 @@ func (l *Link) serve() bool {
 			continue
 		}
 		if silent >= l.cfg.Timing.StatusTimeout {
+			if st.State == LinkLive && st.Helper == StateDisabled {
+				// The helper said it stopped, and ends the session when it does, so it has
+				// nothing more to say. Knock again with a new session, keeping what is shown,
+				// and learn when it is switched back on.
+				if time.Since(lastTry) >= l.cfg.Timing.Retry {
+					l.quietRetry = true
+					return true
+				}
+				l.keepalive()
+				continue
+			}
 			l.markDown(ErrSilent)
 			lastTry = time.Now()
 			continue
 		}
 		l.keepalive()
-		if age >= l.cfg.Timing.RekeyAfter && (!held || age >= l.cfg.Timing.RekeyLatest) && time.Since(lastTry) >= l.cfg.Timing.Retry {
+		l.repeatHeld()
+		if rk != nil && time.Now().After(rk.deadline) {
+			rk = nil
+		}
+		if rk == nil && age >= l.cfg.Timing.RekeyAfter && (!held || age >= l.cfg.Timing.RekeyLatest) && time.Since(lastTry) >= l.cfg.Timing.Retry {
 			lastTry = time.Now()
-			if sess, err := l.handshake(); err == nil {
-				l.install(sess)
-				l.keepalive()
-			}
+			rk = l.startRekey()
 		}
 	}
 }

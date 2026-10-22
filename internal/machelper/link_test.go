@@ -29,6 +29,15 @@ type fakeMac struct {
 	handshake int
 	stop      chan struct{}
 	lastStat  time.Time
+
+	// statusGap is the least time between statuses; zero is 40 ms. The real helper uses 250 ms.
+	statusGap time.Duration
+	// dropHS swallows handshake initiations without answering (a lost rekey reply).
+	dropHS bool
+	// peer is where the last datagram came from.
+	peer *net.UDPAddr
+	// keepaliveAt and inputAt record when each arrived.
+	keepaliveAt, inputAt []time.Time
 }
 
 func newFakeMac(t *testing.T) *fakeMac {
@@ -60,6 +69,12 @@ func (m *fakeMac) set(state HelperState) {
 	m.mu.Unlock()
 }
 
+func (m *fakeMac) setStatusGap(d time.Duration) {
+	m.mu.Lock()
+	m.statusGap = d
+	m.mu.Unlock()
+}
+
 func (m *fakeMac) setMute(on bool) {
 	m.mu.Lock()
 	m.mute = on
@@ -71,6 +86,22 @@ func (m *fakeMac) forget() {
 	m.mu.Lock()
 	m.active, m.pending = nil, nil
 	m.mu.Unlock()
+}
+
+// stopped is the helper stopping on purpose: it volunteers a status (twice) and forgets the
+// session, like the real one when it is switched off.
+func (m *fakeMac) stopped(state HelperState) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.active == nil || m.peer == nil {
+		return
+	}
+	for range 2 {
+		if sealed, err := m.active.Seal(StatusPacket{State: state}.Encode(), time.Now()); err == nil {
+			m.conn.WriteToUDP(sealed, m.peer)
+		}
+	}
+	m.active, m.pending = nil, nil
 }
 
 func (m *fakeMac) counts() (inputs, keepalives, byes, handshakes int) {
@@ -88,6 +119,7 @@ func (m *fakeMac) serve() {
 		}
 		datagram := append([]byte(nil), buf[:n]...)
 		m.mu.Lock()
+		m.peer = from
 		reply := m.handle(datagram)
 		mute := m.mute
 		m.mu.Unlock()
@@ -105,6 +137,10 @@ func (m *fakeMac) handle(datagram []byte) []byte {
 	}
 	switch kind {
 	case KindIKInitiation:
+		if m.dropHS {
+			m.handshake++
+			return nil
+		}
 		res, err := NewHandshake(HandshakeConfig{Pattern: PatternIK, Static: m.static})
 		if err != nil {
 			return nil
@@ -148,14 +184,20 @@ func (m *fakeMac) handle(datagram []byte) []byte {
 			m.active = nil
 			return nil
 		case PacketInput:
+			m.inputAt = append(m.inputAt, now)
 			m.inputs = append(m.inputs, p)
 			if m.state == StateActive {
 				return nil // accepted input is not answered
 			}
 		case PacketKeepalive:
 			m.keepalive++
+			m.keepaliveAt = append(m.keepaliveAt, now)
 		}
-		if now.Sub(m.lastStat) < 40*time.Millisecond && m.state == StateActive {
+		gap := m.statusGap
+		if gap == 0 {
+			gap = 40 * time.Millisecond
+		}
+		if now.Sub(m.lastStat) < gap && m.state == StateActive {
 			return nil
 		}
 		m.lastStat = now
@@ -502,14 +544,21 @@ func TestLinkSendIsStillAllowedWhileTheHelperIsOnlyQuiet(t *testing.T) {
 	}
 }
 
-func TestLinkDefaultsGiveTheMacARegularKeepaliveAndNoticeWithinAThirdOfASecond(t *testing.T) {
+func TestLinkDefaultsGiveTheMacARegularKeepaliveAndToleratePlainWifiJitter(t *testing.T) {
 	d := LinkTiming{}.withDefaults()
 	if d.Keepalive > 50*time.Millisecond {
 		t.Fatalf("keepalive %v", d.Keepalive)
 	}
-	// The Mac answers at most every 250 ms: a shorter timeout would call a healthy helper lost.
-	if d.StatusTimeout < 250*time.Millisecond+d.Keepalive || d.StatusTimeout > 350*time.Millisecond {
+	// The Mac answers at most every 250 ms and Wi-Fi bunches datagrams: the timeout leaves room for a
+	// late status or two, and recovery needs a run of them, so the routing does not flap.
+	if d.StatusTimeout < 500*time.Millisecond || d.StatusTimeout > 700*time.Millisecond {
 		t.Fatalf("status timeout %v", d.StatusTimeout)
+	}
+	if d.Recover <= d.StatusTimeout {
+		t.Fatalf("recover %v must outlast one status timeout %v", d.Recover, d.StatusTimeout)
+	}
+	if d.RepeatHeld <= 0 || d.RepeatHeld > 400*time.Millisecond {
+		t.Fatalf("held buttons are repeated every %v; the Mac lifts them after a second", d.RepeatHeld)
 	}
 	if d.Retry <= time.Second {
 		t.Fatalf("retry %v: the Mac allows one handshake per second", d.Retry)
