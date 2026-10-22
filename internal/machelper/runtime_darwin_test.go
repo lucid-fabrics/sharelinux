@@ -301,7 +301,36 @@ func liveSession(t *testing.T) (*harness, *Session, noise.DHKey) {
 	h.settle()
 	h.drainReplies()
 	h.takePosts()
+	// The Mac takes the buttons of a new session as up until it sees a packet with all of them up.
+	h.send(s, InputPacket{Type: PacketInput})
+	h.settle()
+	h.takePosts()
 	return h, s, static
+}
+
+// A press before any all-up packet in the session is not a press: the Linux side may be holding a
+// button the Mac let go of, and that must never turn into a click.
+func TestRuntimeSocketFirstPressNeedsAnAllUpPacket(t *testing.T) {
+	static := mustKey(t)
+	h := startHarness(t, static.Public)
+	h.do("!toggle on")
+	h.settle()
+	s := h.connect(static)
+	h.settle()
+	h.takePosts()
+	for range 3 {
+		h.send(s, InputPacket{Type: PacketInput, Buttons: ButtonLeft, DX: 16})
+	}
+	h.settle()
+	if got := strings.Join(h.takePosts(), "|"); strings.Contains(got, "down") {
+		t.Fatalf("a held mask pressed on a new session: %q", got)
+	}
+	h.send(s, InputPacket{Type: PacketInput})
+	h.send(s, InputPacket{Type: PacketInput, Buttons: ButtonLeft})
+	h.settle()
+	if got := strings.Join(h.takePosts(), "|"); !strings.Contains(got, "down 0") {
+		t.Fatalf("a fresh press after all-up did not post: %q", got)
+	}
 }
 
 func TestRuntimeSocketMotionButtonsAndScrollReachThePoster(t *testing.T) {

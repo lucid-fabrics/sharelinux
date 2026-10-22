@@ -147,6 +147,9 @@ func TestInteropPairThenConnectThenRemoveThenRePair(t *testing.T) {
 		sess := h.connectPaced(linux)
 		h.settle()
 		h.takePosts()
+		h.send(sess, InputPacket{Type: PacketInput}) // every button up first
+		h.settle()
+		h.takePosts()
 		h.send(sess, InputPacket{Type: PacketInput, DX: 32, DY: 0, Buttons: ButtonLeft})
 		h.settle()
 		if posts := strings.Join(h.takePosts(), "|"); !strings.Contains(posts, "move 2 0") || !strings.Contains(posts, "down 0") {
