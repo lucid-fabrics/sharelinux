@@ -252,6 +252,16 @@ final class PairingWindowTests: XCTestCase {
         XCTAssertEqual(calls(), 1)
     }
 
+    /// The real signature check on real processes: the Dock (when running) is Apple's, this test process is not.
+    func testTheSystemCheckKnowsTheRealDockAndNotThisProcess() throws {
+        XCTAssertFalse(AppleOverlayVerifier.systemCheck(ProcessInfo.processInfo.processIdentifier))
+        XCTAssertFalse(AppleOverlayVerifier.systemCheck(0))
+        let dock = try XCTUnwrap(
+            NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == "com.apple.dock" },
+            "no Dock running on this machine")
+        XCTAssertTrue(AppleOverlayVerifier.systemCheck(dock.processIdentifier))
+    }
+
     func testTheCoveredNoticeNamesTheApp() {
         controller.isFullyVisible = { _ in false }
         controller.coveringOwners = { _ in ["Google Chrome"] }

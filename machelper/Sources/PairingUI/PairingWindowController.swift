@@ -51,10 +51,11 @@ public final class AppleOverlayVerifier {
         guard SecRequirementCreateWithString("anchor apple" as CFString, [], &req) == errSecSuccess, let req,
             SecCodeCheckValidity(code, [], req) == errSecSuccess
         else { return false }
-        var staticCode: SecStaticCode?
-        guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode else { return false }
+        // The running code itself (not its static copy) carries the status flags. A SecCode is a
+        // SecStaticCode in the Security framework's type hierarchy.
         var info: CFDictionary?
-        guard SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSDynamicInformation), &info) == errSecSuccess,
+        guard SecCodeCopySigningInformation(
+            unsafeBitCast(code, to: SecStaticCode.self), SecCSFlags(rawValue: kSecCSDynamicInformation), &info) == errSecSuccess,
             let dict = info as? [String: Any], let status = (dict[kSecCodeInfoStatus as String] as? NSNumber)?.uint32Value
         else { return false }
         return status & platformFlag != 0
