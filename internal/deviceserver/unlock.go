@@ -33,9 +33,6 @@ func validateAutoUnlock(options Options) error {
 	if passcode == "" {
 		return nil
 	}
-	if options.DisableInput {
-		return E.New("automatic unlocking requires remote input")
-	}
 	if len(passcode) > maxPasscodeLength {
 		return E.New("the device passcode must contain at most 64 characters")
 	}

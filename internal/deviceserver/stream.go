@@ -287,7 +287,7 @@ func (s *Server) startVideo(ctx context.Context, a *attachment, request media.Se
 	readOptions := N.ReadWaitOptions{RearHeadroom: media.ServerRearHeadroom}
 	var audio *display.Stream
 	var err error
-	if s.options.Audio && request.Audio {
+	if request.Audio {
 		// The device returned a nonzero video SyncStreamToken with audio, zero without it (observed on iPad17,1, build 24B5089g).
 		audio, err = a.display.StartAudio(ctx, display.StreamOptions{SessionID: sessionID, ReadOptions: readOptions})
 		if err != nil {

@@ -66,7 +66,6 @@ func (s State) String() string {
 type Observer interface {
 	StateChanged(state State, err error)
 	DeviceConnected(info coredevice.DeviceInfo)
-	DiskImageProgress(received int64)
 	ViewerConnected(session *rfb.ServerSession)
 	ViewerDisconnected(session *rfb.ServerSession, err error)
 	StreamingChanged(active bool)
@@ -80,10 +79,6 @@ type Options struct {
 	Listen string
 	RFB    rfb.ServerOptions
 
-	Audio           bool
-	SharedClipboard bool
-	DisableInput    bool
-
 	AutoUnlockPasscode     string
 	AutoUnlockPasscodeType PasscodeType
 	// BLSBacklightState: 0 off, 1 inactiveOn, 2 activeOn, 3 dimmed (BacklightServices
@@ -91,7 +86,6 @@ type Options struct {
 	BacklightState func() int32
 
 	DiskImageDirectory string
-	DownloadDiskImage  bool
 }
 
 type Server struct {
@@ -211,10 +205,6 @@ func (s *Server) Retry() {
 	if cancel != nil {
 		cancel(errRetryRequested)
 	}
-}
-
-func (s *Server) Sessions() []*rfb.ServerSession {
-	return s.rfb.Sessions()
 }
 
 func (s *Server) Close() error {
@@ -499,9 +489,6 @@ func (s *Server) listen() error {
 	if s.listener == nil {
 		media := s.options.RFB.Media
 		for _, port := range []uint16{media.VideoPort, media.AudioPort} {
-			if port == media.AudioPort && media.DisableAudioLeg {
-				continue
-			}
 			conn, err := media.ListenUDP(port)
 			if err != nil {
 				return &Error{Problem: ProblemListen, Err: E.Cause(err, "listen on media port ", port)}
@@ -535,7 +522,7 @@ func (s *Server) attach(a *attachment) *attachment {
 	s.attachWake = make(chan struct{})
 	s.access.Unlock()
 	go s.pollDisplay(a)
-	if !s.options.DisableInput && a.device.HasService("com.apple.accessibility.axAuditDaemon.remoteAXService") {
+	if a.device.HasService("com.apple.accessibility.axAuditDaemon.remoteAXService") {
 		a.notificationsDone = make(chan error, 1)
 		go func() { a.notificationsDone <- s.dismissScreenViewingNotifications(a) }()
 	}

@@ -89,12 +89,6 @@ type serverLeg struct {
 	deviceReports map[uint32]*deviceReport
 	clientRTT     time.Duration
 	timing        serverTiming
-
-	packets       uint64
-	octets        uint64
-	clientReports uint64
-	authFailures  uint64
-	sendErrors    uint64
 }
 
 func newServerLeg(name string, conn *net.UDPConn, clockRate float64, initial netip.Addr, logger *slog.Logger) *serverLeg {
@@ -179,30 +173,6 @@ func (l *serverLeg) latchLocked(from netip.AddrPort) (bool, error) {
 	return held > 0, nil
 }
 
-type serverLegSnapshot struct {
-	packets       uint64
-	octets        uint64
-	held          uint64
-	clientReports uint64
-	authFailures  uint64
-	sendErrors    uint64
-	target        netip.AddrPort
-}
-
-func (l *serverLeg) snapshot() serverLegSnapshot {
-	l.access.Lock()
-	defer l.access.Unlock()
-	return serverLegSnapshot{
-		packets:       l.packets,
-		octets:        l.octets,
-		held:          l.held,
-		clientReports: l.clientReports,
-		authFailures:  l.authFailures,
-		sendErrors:    l.sendErrors,
-		target:        l.target,
-	}
-}
-
 func (l *serverLeg) currentTarget() netip.AddrPort {
 	l.access.Lock()
 	defer l.access.Unlock()
@@ -276,8 +246,6 @@ func (l *serverLeg) protectLocked(packet []byte, header rtpPacket, generation ui
 	output.lastSentAt = now
 	output.packets++
 	output.octets += uint32(len(packet) - header.payloadOffset)
-	l.packets++
-	l.octets += uint64(len(packet))
 	return l.sender.protect(packet, header.payloadOffset, index), true
 }
 
@@ -297,7 +265,6 @@ func (l *serverLeg) send(datagrams []*buf.Buffer, target netip.AddrPort, writer 
 		return
 	}
 	l.access.Lock()
-	l.sendErrors++
 	l.timing.interval.sendErrors++
 	l.timing.interval.lastSendError = err
 	l.access.Unlock()

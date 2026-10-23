@@ -109,9 +109,3 @@ func (c *Client) releaseDisplayChangesLocked() error {
 	}
 	return nil
 }
-
-func (c *Client) HDR() bool {
-	c.access.Lock()
-	defer c.access.Unlock()
-	return c.hdr
-}

@@ -23,35 +23,14 @@ const (
 )
 
 type ServerStreamConfig struct {
-	Logger               *slog.Logger
-	InitialTarget        netip.Addr
-	AllowLoopbackTarget  bool
-	VideoPort            uint16
-	AudioPort            uint16
-	DisableAudioLeg      bool
-	ListenUDP            func(port uint16) (*net.UDPConn, error)
-	OpenVideo            ServerVideoOpener
-	OpenAudio            ServerAudioOpener
-	Send                 func(payload []byte) error
-	KeepExtensionProfile bool
-	StripSliceTrailer    bool
-}
-
-type ServerStreamStats struct {
-	Offers           uint64
-	Answers          uint64
-	Errors           uint64
-	VideoPackets     uint64
-	VideoBytes       uint64
-	AudioPackets     uint64
-	HeldPackets      uint64
-	ClientReports    uint64
-	AuthFailures     uint64
-	SendErrors       uint64
-	KeyframeRequests uint64
-	VideoTarget      netip.AddrPort
-	AudioTarget      netip.AddrPort
-	Running          bool
+	Logger        *slog.Logger
+	InitialTarget netip.Addr
+	VideoPort     uint16
+	AudioPort     uint16
+	ListenUDP     func(port uint16) (*net.UDPConn, error)
+	OpenVideo     ServerVideoOpener
+	OpenAudio     ServerAudioOpener
+	Send          func(payload []byte) error
 }
 
 type ServerStream struct {
@@ -71,7 +50,6 @@ type ServerStream struct {
 	cancelOpen      context.CancelFunc
 	session         *serverSession
 	failures        int
-	stats           ServerStreamStats
 }
 
 type serverSession struct {
@@ -95,7 +73,7 @@ func (s *serverSession) close() {
 
 func ListenServerStream(config ServerStreamConfig) (*ServerStream, error) {
 	initial := config.InitialTarget.Unmap()
-	if initial.IsLoopback() && !config.AllowLoopbackTarget {
+	if initial.IsLoopback() {
 		initial = netip.Addr{}
 	}
 	videoConn, err := config.ListenUDP(config.VideoPort)
@@ -112,16 +90,14 @@ func ListenServerStream(config ServerStreamConfig) (*ServerStream, error) {
 		cancel: cancel,
 		video:  newServerLeg("video", videoConn, videoClockRate, initial, config.Logger),
 	}
-	if !config.DisableAudioLeg {
-		audioConn, err := config.ListenUDP(config.AudioPort)
-		if err != nil {
-			cancel()
-			_ = videoConn.Close()
-			return nil, E.Cause(err, "media: listen on UDP port ", config.AudioPort)
-		}
-		_ = audioConn.SetReadBuffer(serverReadBuffer)
-		s.audio = newServerLeg("audio", audioConn, audioSampleRate, initial, config.Logger)
+	audioConn, err := config.ListenUDP(config.AudioPort)
+	if err != nil {
+		cancel()
+		_ = videoConn.Close()
+		return nil, E.Cause(err, "media: listen on UDP port ", config.AudioPort)
 	}
+	_ = audioConn.SetReadBuffer(serverReadBuffer)
+	s.audio = newServerLeg("audio", audioConn, audioSampleRate, initial, config.Logger)
 	for _, leg := range s.legs() {
 		s.wg.Go(func() { leg.receive(s.handleClientDatagram) })
 	}
@@ -130,17 +106,11 @@ func ListenServerStream(config ServerStreamConfig) (*ServerStream, error) {
 }
 
 func (s *ServerStream) legs() []*serverLeg {
-	if s.audio == nil {
-		return []*serverLeg{s.video}
-	}
 	return []*serverLeg{s.video, s.audio}
 }
 
 func (s *ServerStream) Ports() (audio, video uint16) {
-	if s.audio != nil {
-		audio = s.audio.port
-	}
-	return audio, s.video.port
+	return s.audio.port, s.video.port
 }
 
 func (s *ServerStream) PortsMessage() []byte {
@@ -152,10 +122,8 @@ func (s *ServerStream) HandleOffer(message []byte) error {
 	offer, err := parseOffer(message)
 	s.access.Lock()
 	defer s.access.Unlock()
-	s.stats.Offers++
 	if err != nil {
 		s.logger.Warn("media offer", "error", err)
-		s.stats.Errors++
 		return s.config.Send(ErrorMessage(ServerErrorBadConfiguration, 0))
 	}
 	s.generation++
@@ -163,12 +131,11 @@ func (s *ServerStream) HandleOffer(message []byte) error {
 	s.closeLaterLocked(s.detachLocked())
 	now := time.Now()
 	err = s.video.setKeys(&offer.Video, now)
-	if err == nil && s.audio != nil {
+	if err == nil {
 		err = s.audio.setKeys(&offer.Audio, now)
 	}
 	if err != nil {
 		s.logger.Warn("media offer", "error", err)
-		s.stats.Errors++
 		return s.config.Send(ErrorMessage(ServerErrorBadConfiguration, 0))
 	}
 	ctx, cancel := context.WithCancel(s.ctx)
@@ -189,7 +156,7 @@ func (s *ServerStream) closeLaterLocked(session *serverSession) {
 
 func (s *ServerStream) open(ctx context.Context, cancel context.CancelFunc, generation uint64, offer *serverOffer) {
 	defer cancel()
-	wantsAudio := s.audio != nil && offer.Audio.Present && offer.Audio.Mode == negotiatorModeRemoteDesktopSystemAudio
+	wantsAudio := offer.Audio.Present && offer.Audio.Mode == negotiatorModeRemoteDesktopSystemAudio
 	video, err := s.config.OpenVideo(ctx, ServerVideoRequest{
 		ClientSSRC:     offer.Video.SSRC,
 		Mode:           VideoMode(offer.Video.Mode),
@@ -254,8 +221,6 @@ func (s *ServerStream) open(ctx context.Context, cancel context.CancelFunc, gene
 	err = s.config.Send(payload)
 	if err != nil {
 		s.logger.Debug("send the media answer", "error", err)
-	} else {
-		s.stats.Answers++
 	}
 	s.video.activate(&serverActive{ssrc: info.SSRC, receiverSSRC: info.ReceiverSSRC, generation: generation})
 	if audio != nil {
@@ -287,7 +252,6 @@ func (s *ServerStream) openFailed(generation uint64, err error) {
 	}
 	s.cancelOpen = nil
 	s.renegotiateSize = nil
-	s.stats.Errors++
 	s.logger.Warn("media stream", "error", err)
 	_ = s.config.Send(ErrorMessage(ServerErrorBadConfiguration, 0))
 }
@@ -370,30 +334,6 @@ func (s *ServerStream) Close() error {
 	return nil
 }
 
-func (s *ServerStream) Stats() ServerStreamStats {
-	s.access.Lock()
-	stats := s.stats
-	stats.Running = s.session != nil
-	s.access.Unlock()
-	video := s.video.snapshot()
-	stats.VideoPackets, stats.VideoBytes = video.packets, video.octets
-	stats.HeldPackets = video.held
-	stats.ClientReports = video.clientReports
-	stats.AuthFailures = video.authFailures
-	stats.SendErrors = video.sendErrors
-	stats.VideoTarget = video.target
-	if s.audio != nil {
-		audio := s.audio.snapshot()
-		stats.AudioPackets = audio.packets
-		stats.HeldPackets += audio.held
-		stats.ClientReports += audio.clientReports
-		stats.AuthFailures += audio.authFailures
-		stats.SendErrors += audio.sendErrors
-		stats.AudioTarget = audio.target
-	}
-	return stats
-}
-
 func (s *ServerStream) forward(session *serverSession, leg *serverLeg, read func(context.Context, []ServerPacket) (int, error)) {
 	isVideo := leg == s.video
 	batch := 1
@@ -403,7 +343,7 @@ func (s *ServerStream) forward(session *serverSession, leg *serverLeg, read func
 	packets := make([]ServerPacket, batch)
 	datagrams := make([]*buf.Buffer, 0, batch)
 	var positioner *bandPositioner
-	if isVideo && !s.config.StripSliceTrailer {
+	if isVideo {
 		positioner = newBandPositioner(session.video.Info())
 	}
 	for {
@@ -433,12 +373,7 @@ func (s *ServerStream) forward(session *serverSession, leg *serverLeg, read func
 				continue
 			}
 			if isVideo {
-				if s.config.StripSliceTrailer {
-					packet = stripSliceTrailer(packet, header.payloadOffset)
-				}
-				if !s.config.KeepExtensionProfile {
-					rewriteExtensionProfile(packet)
-				}
+				rewriteExtensionProfile(packet)
 				if positioner != nil {
 					packet = positioner.rewrite(packet, header)
 				}
@@ -488,7 +423,6 @@ func (s *ServerStream) sourceEnded(session *serverSession, leg *serverLeg, err e
 		s.failures = 0
 		s.generation++
 		previous := s.detachLocked()
-		s.stats.Errors++
 		_ = s.config.Send(ErrorMessage(ServerErrorBadConfiguration, 0))
 		s.closeLaterLocked(previous)
 		s.access.Unlock()
@@ -512,20 +446,17 @@ func (s *ServerStream) handleClientDatagram(leg *serverLeg, datagram []byte, fro
 	packet, err := leg.receiver.unprotect(datagram)
 	if err != nil {
 		if errors.Is(err, errAuthentication) {
-			leg.authFailures++
 			leg.keepPendingLocked(datagram, from, now)
 		}
 		leg.access.Unlock()
 		return
 	}
-	leg.clientReports++
 	missed, err := leg.latchLocked(from)
 	if err != nil {
 		leg.access.Unlock()
 		s.access.Lock()
 		s.generation++
 		s.closeLaterLocked(s.detachLocked())
-		s.stats.Errors++
 		s.logger.Warn("media stream", "error", err)
 		_ = s.config.Send(ErrorMessage(ServerErrorBadConfiguration, 0))
 		s.access.Unlock()
@@ -540,9 +471,6 @@ func (s *ServerStream) handleClientDatagram(leg *serverLeg, datagram []byte, fro
 	}
 	s.access.Lock()
 	session := s.session
-	if session != nil && keyframe {
-		s.stats.KeyframeRequests++
-	}
 	s.access.Unlock()
 	if session == nil {
 		return
