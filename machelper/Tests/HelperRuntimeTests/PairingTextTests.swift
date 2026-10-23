@@ -36,13 +36,25 @@ final class PairingTextTests: XCTestCase {
         return out
     }
 
+    func testCoveringAppNamesAreSanitisedAndQuoted() {
+        let hostile = "Safe\u{202E}gnp.exe\u{2066}\u{2069}\u{200B}\n  App\t\u{7}"
+        XCTAssertEqual(PairingText.namesList([hostile]), "\"Safegnp.exe App\"")
+        let long = String(repeating: "x", count: 80)
+        let capped = PairingText.cleanName(long)
+        XCTAssertEqual(capped.count, 32)
+        XCTAssertTrue(capped.hasSuffix("\u{2026}"))
+        XCTAssertEqual(PairingText.cleanName(String(repeating: "y", count: 32)).count, 32)
+        XCTAssertEqual(PairingText.cleanName("\u{202A}\u{202B}\u{202C}\u{202D}\u{202E}"), "")
+        XCTAssertNil(PairingText.namesList(["\u{202E}", " "]))
+    }
+
     func testTheCoveredNoticeNamesWhatCoversAndFallsBack() {
         XCTAssertEqual(
             PairingText.refusal(.windowCovered(by: ["Google Chrome"])),
-            "Google Chrome is covering this window, so Confirm is off. Move it away and check the code again.")
+            "\"Google Chrome\" is covering this window, so Confirm is off. Move it away and check the code again.")
         XCTAssertEqual(
             PairingText.refusal(.windowCovered(by: ["Slack", "Zoom"])),
-            "Slack and Zoom are covering this window, so Confirm is off. Move them away and check the code again.")
+            "\"Slack\" and \"Zoom\" are covering this window, so Confirm is off. Move them away and check the code again.")
         XCTAssertEqual(
             PairingText.refusal(.windowCovered(by: [])),
             "Another window is covering this one, so Confirm is off. Move the other window away and check the code again.")

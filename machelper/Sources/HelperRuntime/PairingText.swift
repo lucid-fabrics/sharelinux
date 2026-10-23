@@ -87,11 +87,26 @@ public enum PairingText {
         ("This Mac's key: \(identity)", "Paired list: \(pairedList)")
     }
 
-    /// "A", "A and B", "A, B and C" (names are from other processes: control characters dropped,
-    /// length capped); nil when there is no usable name.
+    /// One app name from another process, made safe to show: control and format characters
+    /// (newlines, bidi overrides U+202A-202E and U+2066-2069, zero-width marks) dropped,
+    /// whitespace collapsed, capped at 32 characters with an ellipsis. Empty when nothing is left.
+    static func cleanName(_ name: String) -> String {
+        let kept = name.unicodeScalars.filter { scalar in
+            switch scalar.properties.generalCategory {
+            case .control, .format, .lineSeparator, .paragraphSeparator: return false
+            default: return true
+            }
+        }
+        let words = String(String.UnicodeScalarView(kept)).split(whereSeparator: { $0.isWhitespace })
+        let line = words.joined(separator: " ")
+        guard line.count > 32 else { return line }
+        return String(line.prefix(31)) + "\u{2026}"
+    }
+
+    /// "\"A\"", "\"A\" and \"B\"", "\"A\", \"B\" and \"C\"" (names are from other processes, so each
+    /// is cleaned and quoted); nil when there is no usable name.
     static func namesList(_ names: [String]) -> String? {
-        let n = names.map { String($0.unicodeScalars.filter { $0.value >= 0x20 && $0.value != 0x7f }.prefix(40).map(Character.init)) }
-            .filter { !$0.isEmpty }
+        let n = names.map(cleanName).filter { !$0.isEmpty }.map { "\"\($0)\"" }
         switch n.count {
         case 0: return nil
         case 1: return n[0]
