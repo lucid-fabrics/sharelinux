@@ -352,7 +352,7 @@ func (p *pairDialog) confirm() {
 	}
 	p.finished = true
 	go func() {
-		mac, err := attempt.Confirm(name)
+		_, err := attempt.Confirm(name)
 		onMain(func() {
 			if err != nil {
 				p.fail(pairingProblem(err))
