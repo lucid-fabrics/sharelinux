@@ -65,7 +65,31 @@ type pairedMac struct {
 	// to this side after the codes were compared, so the Mac's own Confirm is invisible
 	// here. The first authenticated session (the Mac answered under this computer's key,
 	// which it only does once it trusts it) clears the flag.
-	Pending bool `json:"pending,omitempty"`
+	//
+	// It is stored inverted, as "confirmed", and a stored entry without that field is
+	// pending: Macs saved before the flag existed were never proven, so they load as
+	// pending, not paired.
+	Pending bool `json:"-"`
+}
+
+type pairedMacJSON struct {
+	Name      string `json:"name"`
+	Address   string `json:"address"`
+	Key       string `json:"key"`
+	Confirmed bool   `json:"confirmed,omitempty"`
+}
+
+func (m pairedMac) MarshalJSON() ([]byte, error) {
+	return json.Marshal(pairedMacJSON{Name: m.Name, Address: m.Address, Key: m.Key, Confirmed: !m.Pending})
+}
+
+func (m *pairedMac) UnmarshalJSON(data []byte) error {
+	var raw pairedMacJSON
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*m = pairedMac{Name: raw.Name, Address: raw.Address, Key: raw.Key, Pending: !raw.Confirmed}
+	return nil
 }
 
 func (m pairedMac) valid() bool {

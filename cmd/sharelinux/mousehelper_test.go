@@ -456,3 +456,33 @@ func TestStatusWithMixedPairedAndWaitingMacs(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+// Macs saved before the pending flag existed were never proven to trust this computer, so they
+// load as pending; only an entry written as confirmed loads as paired.
+func TestAMacSavedBeforeThePendingFlagLoadsAsPending(t *testing.T) {
+	secrets := memorySecrets{}
+	keys := &helperKeys{secrets: secrets}
+	secrets[helperMacsID] = `[{"name":"Old","address":"old:1","key":"` + macKeyHex(5) + `"},` +
+		`{"name":"Legacy","address":"l:1","key":"` + macKeyHex(6) + `","pending":false},` +
+		`{"name":"Proven","address":"p:1","key":"` + macKeyHex(7) + `","confirmed":true}]`
+	macs, err := keys.Macs()
+	if err != nil || len(macs) != 3 {
+		t.Fatalf("%+v %v", macs, err)
+	}
+	got := map[string]bool{}
+	for _, m := range macs {
+		got[m.Name] = m.Pending
+	}
+	if !got["Old"] || !got["Legacy"] || got["Proven"] {
+		t.Fatalf("pending by name: %+v", got)
+	}
+	if err := keys.PromoteMac(macKeyHex(5)); err != nil {
+		t.Fatal(err)
+	}
+	macs, _ = keys.Macs()
+	for _, m := range macs {
+		if m.Name == "Old" && m.Pending {
+			t.Fatal("promotion did not persist")
+		}
+	}
+}
