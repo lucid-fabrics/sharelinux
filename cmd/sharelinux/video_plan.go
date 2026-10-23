@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -134,13 +135,21 @@ func (c videoCaps) any() bool {
 }
 
 // videoHint is the line under the Video preference that says what this machine can do.
+// emptyParens matches the "()" a VA-API driver prints after its version when it has no build detail.
+var emptyParens = regexp.MustCompile(`\s*\(\s*\)`)
+
+// driverLabel is the driver's own name without an empty "()" left over, and without stray space.
+func driverLabel(name string) string {
+	return strings.TrimSpace(emptyParens.ReplaceAllString(name, ""))
+}
+
 func videoHint(caps videoCaps) string {
 	switch {
 	case !caps.any():
 		return "No HEVC decoder was found. In the Flatpak it comes with org.freedesktop.Platform.codecs-extra"
 	case caps.HEVCVAAPI || caps.H264VAAPI:
-		if caps.Driver != "" {
-			return "Decodes on the GPU: " + caps.Driver
+		if name := driverLabel(caps.Driver); name != "" {
+			return "Decodes on the GPU: " + name
 		}
 		return "Decodes on the GPU"
 	case caps.Error != "":
