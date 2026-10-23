@@ -76,6 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pairingWindow.onConfirm = { [unowned self] code, key in
             runtime.queue.async { self.pairing.confirm(code: code, peerKey: key) }
         }
+        pairingWindow.isSessionLive = { [unowned self] in state.pairingBlocked }
         pairingWindow.onReject = { [unowned self] in runtime.queue.async { self.pairing.reject() } }
         pairingWindow.onClose = { [unowned self] in runtime.queue.async { self.pairing.close() } }
         pairingWindow.onUnlock = { [unowned self] in runtime.queue.async { self.pairing.resetCooldown() } }

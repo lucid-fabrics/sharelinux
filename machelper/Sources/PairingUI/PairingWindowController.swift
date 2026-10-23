@@ -7,7 +7,8 @@ import HelperRuntime
 /// count as covering the pairing window. The owner NAME the window server reports is only a claim
 /// (any process can call itself "Dock"), so a window is ignored only when its process also proves
 /// to be Apple's: the binary lives under /System and its signature is `anchor apple` and a
-/// platform binary. The verdict is cached per pid. Anything not proven stays a cover.
+/// platform binary. The verdict is cached per pid AND process start time, so a reused pid never
+/// inherits an earlier process's verdict. Anything not proven stays a cover.
 public final class AppleOverlayVerifier {
     /// Process names of the system UI overlays that are allowed to be ignored once verified.
     static let overlayNames: Set<String> = [
@@ -18,10 +19,27 @@ public final class AppleOverlayVerifier {
     /// Whether the process with this pid is a genuine Apple platform binary under /System.
     public typealias Check = (Int32) -> Bool
     private let check: Check
-    private var cache: [Int32: Bool] = [:]
+    /// When the process with this pid started (microseconds since the epoch); nil when unknown.
+    public typealias StartTime = (Int32) -> UInt64?
+    private let startTime: StartTime
+    private var cache: [Int32: (start: UInt64, verdict: Bool)] = [:]
     private let lock = NSLock()
 
-    public init(check: @escaping Check = AppleOverlayVerifier.systemCheck) { self.check = check }
+    public init(
+        check: @escaping Check = AppleOverlayVerifier.systemCheck,
+        startTime: @escaping StartTime = AppleOverlayVerifier.systemStartTime
+    ) {
+        self.check = check
+        self.startTime = startTime
+    }
+
+    /// The kernel's start time for a pid (proc_pidinfo, PROC_PIDTBSDINFO).
+    public static let systemStartTime: StartTime = { pid in
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
+        return info.pbi_start_tvsec &* 1_000_000 &+ info.pbi_start_tvusec
+    }
 
     public static let shared = AppleOverlayVerifier()
 
@@ -29,9 +47,14 @@ public final class AppleOverlayVerifier {
     public func isVerifiedOverlay(pid: Int32, ownerName: String?) -> Bool {
         guard pid > 0, let name = ownerName, Self.overlayNames.contains(name) else { return false }
         lock.lock(); defer { lock.unlock() }
-        if let known = cache[pid] { return known }
+        // Unknown start time: unverified. A cached verdict counts only for the same process
+        // (same pid, same start time); a different one is verified afresh.
+        guard let start = startTime(pid) else { cache[pid] = nil; return false }
+        if let known = cache[pid], known.start == start { return known.verdict }
         let verdict = check(pid)
-        cache[pid] = verdict
+        // The pid must still be the same process after the check, or the verdict is void.
+        guard startTime(pid) == start else { cache[pid] = nil; return false }
+        cache[pid] = (start, verdict)
         return verdict
     }
 
@@ -71,25 +94,52 @@ public enum WindowCoverage {
         public var alpha: Double
         public var pid: Int32
         public var ownerName: String?
-        public init(frame: CGRect, alpha: Double, pid: Int32 = 0, ownerName: String? = nil) {
-            self.frame = frame; self.alpha = alpha; self.pid = pid; self.ownerName = ownerName
+        /// The window server's layer (0 for ordinary windows; Apple's overlays sit at 20 and up).
+        public var layer: Int
+        public init(frame: CGRect, alpha: Double, pid: Int32 = 0, ownerName: String? = nil, layer: Int = 0) {
+            self.frame = frame; self.alpha = alpha; self.pid = pid; self.ownerName = ownerName; self.layer = layer
         }
+    }
+
+    /// The lowest layer of the transparent system overlays (the Dock's level); ordinary windows are 0.
+    static let overlayLayer = 20
+
+    /// The displays in the window server's coordinates (top-left origin).
+    static func screenFrames() -> [CGRect] {
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+        return NSScreen.screens.map {
+            CGRect(x: $0.frame.minX, y: primaryHeight - $0.frame.maxY, width: $0.frame.width, height: $0.frame.height)
+        }
+    }
+
+    /// A full-display overlay: at the overlay layer, and its bounds cover a whole display or all of them together.
+    static func isFullDisplayOverlay(_ o: Other, screens: [CGRect]) -> Bool {
+        guard o.layer >= overlayLayer, !screens.isEmpty else { return false }
+        if screens.contains(where: { o.frame.contains($0) }) { return true }
+        return o.frame.contains(screens.dropFirst().reduce(screens[0]) { $0.union($1) })
     }
 
     /// The windows that really cover `frame`: visible, overlapping, and not a verified Apple
-    /// system overlay. A see-through overlay from anything else could be showing the person
-    /// something other than the truth, so any visible overlap counts, not only a full cover.
+    /// full-display overlay. Only that exact shape is ignored: a smaller window from the same
+    /// processes (a banner, a Dock tile, a Control Center panel) is content any app can control,
+    /// so it covers like any other. A see-through window from anything else could be showing the
+    /// person something other than the truth, so any visible overlap counts, not only a full cover.
     public static func covering(
-        _ frame: CGRect, by others: [Other], verifier: AppleOverlayVerifier = .shared
+        _ frame: CGRect, by others: [Other], verifier: AppleOverlayVerifier = .shared,
+        screens: [CGRect]? = nil
     ) -> [Other] {
-        others.filter {
+        let displays = screens ?? screenFrames()
+        return others.filter {
             $0.alpha > 0.05 && $0.frame.intersects(frame)
-                && !verifier.isVerifiedOverlay(pid: $0.pid, ownerName: $0.ownerName)
+                && !(isFullDisplayOverlay($0, screens: displays)
+                    && verifier.isVerifiedOverlay(pid: $0.pid, ownerName: $0.ownerName))
         }
     }
 
-    public static func isCovered(_ frame: CGRect, by others: [Other], verifier: AppleOverlayVerifier = .shared) -> Bool {
-        !covering(frame, by: others, verifier: verifier).isEmpty
+    public static func isCovered(
+        _ frame: CGRect, by others: [Other], verifier: AppleOverlayVerifier = .shared, screens: [CGRect]? = nil
+    ) -> Bool {
+        !covering(frame, by: others, verifier: verifier, screens: screens).isEmpty
     }
 
     /// Names of the apps owning the covering windows, each once, in front-to-back order.
@@ -129,7 +179,8 @@ public enum WindowCoverage {
             return Other(
                 frame: rect, alpha: (w[kCGWindowAlpha as String] as? Double) ?? 1,
                 pid: Int32(truncatingIfNeeded: (w[kCGWindowOwnerPID as String] as? Int) ?? 0),
-                ownerName: w[kCGWindowOwnerName as String] as? String)
+                ownerName: w[kCGWindowOwnerName as String] as? String,
+                layer: (w[kCGWindowLayer as String] as? Int) ?? 0)
         }
     }
 
@@ -137,10 +188,11 @@ public enum WindowCoverage {
     /// window server's list of windows in front is available and none of them overlaps. An
     /// unavailable list is NOT a pass: with nothing to check against, Confirm stays off.
     static func verdict(
-        onScreen: Bool, others: [Other]?, topLeftFrame: CGRect, verifier: AppleOverlayVerifier = .shared
+        onScreen: Bool, others: [Other]?, topLeftFrame: CGRect, verifier: AppleOverlayVerifier = .shared,
+        screens: [CGRect]? = nil
     ) -> Bool {
         guard onScreen, let others else { return false }
-        return !isCovered(topLeftFrame, by: others, verifier: verifier)
+        return !isCovered(topLeftFrame, by: others, verifier: verifier, screens: screens)
     }
 
     /// The window on screen, on this space, not minimised, not even partly hidden.
@@ -159,8 +211,25 @@ public enum WindowCoverage {
 final class FrontOnClickWindow: NSWindow {
     /// Called for every mouse press before it is handled (tests).
     var onPress: () -> Void = {}
+    /// Called for every genuine mouse press BEFORE the window is raised: what covers the window
+    /// at that instant is what the person was aiming at, and raising changes it.
+    var beforeRaise: () -> Void = {}
+    /// Whether a Linux session is live (an injected click then is not the person's).
+    var isSessionLive: () -> Bool = { false }
+    /// The pid of the process that created the event (0 for real hardware), nil when unknown.
+    var sourcePid: (NSEvent) -> Int32? = { event in
+        event.cgEvent.map { Int32(truncatingIfNeeded: $0.getIntegerValueField(.eventSourceUnixProcessID)) }
+    }
+
+    /// An event this helper injected itself (or any event while a session is live) is not the
+    /// person's click, so it must neither raise the window nor count as a press.
+    func isOwnInjection(_ event: NSEvent) -> Bool {
+        sourcePid(event) == ProcessInfo.processInfo.processIdentifier || isSessionLive()
+    }
+
     override func sendEvent(_ event: NSEvent) {
-        if event.type == .leftMouseDown || event.type == .rightMouseDown {
+        if event.type == .leftMouseDown || event.type == .rightMouseDown, !isOwnInjection(event) {
+            beforeRaise()
             bringToFront()
         }
         super.sendEvent(event)
@@ -229,6 +298,8 @@ public final class PairingWindowController: NSWindowController, NSWindowDelegate
     public var now: () -> Double = { ProcessInfo.processInfo.systemUptime }
     /// Whether the window can be seen in full (tests replace it).
     public var isFullyVisible: (NSWindow) -> Bool = WindowCoverage.isFullyVisible
+    /// Whether a Linux session is live (wired to the runtime; tests replace it).
+    public var isSessionLive: () -> Bool = { false }
     /// Names of the apps whose windows cover the window (tests replace it).
     public var coveringOwners: (NSWindow) -> [String] = WindowCoverage.coveringOwners
 
@@ -262,6 +333,9 @@ public final class PairingWindowController: NSWindowController, NSWindowDelegate
     private var shownTuple: (String, Data)?
     /// Whether the window was fully in view when the mouse went down on Confirm (nil: no press is pending).
     private var visibleAtMouseDown: Bool?
+    /// Whether the window was fully in view when the latest mouse press reached it, taken before
+    /// the press raised the window (nil: none recorded).
+    private var visibleAtPress: Bool?
 
     public init() {
         let window = FrontOnClickWindow(
@@ -273,6 +347,8 @@ public final class PairingWindowController: NSWindowController, NSWindowDelegate
         window.level = .normal
         super.init(window: window)
         window.delegate = self
+        window.beforeRaise = { [weak self] in self?.recordPressVerdict() }
+        window.isSessionLive = { [weak self] in self?.isSessionLive() ?? false }
         build()
         window.center()
     }
@@ -578,7 +654,16 @@ public final class PairingWindowController: NSWindowController, NSWindowDelegate
 
     /// The mouse went down on Confirm: note whether the window was fully in view right then.
     public func confirmMouseDown() {
-        visibleAtMouseDown = window.map { isFullyVisible($0) } ?? false
+        // The window's own press hook already took the verdict before raising the window; the
+        // button's mouse-down comes after the raise, so a fresh check here could see a window
+        // that the raise just uncovered. Use the earlier verdict when there is one.
+        visibleAtMouseDown = visibleAtPress ?? window.map { isFullyVisible($0) } ?? false
+        visibleAtPress = nil
+    }
+
+    /// Records the coverage verdict for a mouse press, before the window is raised.
+    func recordPressVerdict() {
+        visibleAtPress = window.map { isFullyVisible($0) } ?? false
     }
 
     /// The click handler (mouse up), callable by tests. The window must have been fully in view at
