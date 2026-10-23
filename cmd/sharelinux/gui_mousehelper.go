@@ -75,7 +75,7 @@ func (h *helperGroup) apply(macs []pairedMac, err error) {
 	for _, mac := range macs {
 		row := adw.NewActionRow()
 		row.SetTitle(glib.MarkupEscapeText(mac.Name))
-		row.SetSubtitle(glib.MarkupEscapeText(mac.Address + " \u00b7 " + fingerprintOfHex(mac.Key)))
+		row.SetSubtitle(glib.MarkupEscapeText(macRowSubtitle(mac)))
 		remove := gtk.NewButtonWithLabel("Remove")
 		remove.SetVAlign(gtk.AlignCenter)
 		remove.AddCSSClass("flat")
@@ -248,7 +248,7 @@ func (p *pairDialog) build() {
 	mark.SetPixelSize(48)
 	mark.AddCSSClass("success")
 	done := page(mark, p.doneText,
-		wrapLabel("If the Mac still shows its pairing window, click Confirm there as well. The Mac only trusts this computer once you do.", "dim-label"), finish)
+		wrapLabel("Click Confirm in the Mac's pairing window as well. The Mac only trusts this computer once you do, and this computer shows Paired after the Mac has accepted it.", "dim-label"), finish)
 
 	// 5. it did not work
 	p.failText = wrapLabel("", "error")
@@ -358,7 +358,7 @@ func (p *pairDialog) confirm() {
 				p.fail(pairingProblem(err))
 				return
 			}
-			p.doneText.SetLabel("Paired with " + mac.Name)
+			p.doneText.SetLabel("Saved. Waiting for the Mac to confirm")
 			p.stack.SetVisibleChildName("done")
 			p.changed()
 		})

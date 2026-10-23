@@ -60,6 +60,12 @@ type pairedMac struct {
 	// Key is the Mac helper's static public key, hex, 32 bytes. It was pinned
 	// after the person compared the codes.
 	Key string `json:"key"`
+	// Pending is true from the moment this side saved the Mac until the Mac proved it
+	// accepted this computer. The pairing protocol carries no message from the Mac back
+	// to this side after the codes were compared, so the Mac's own Confirm is invisible
+	// here. The first authenticated session (the Mac answered under this computer's key,
+	// which it only does once it trusts it) clears the flag.
+	Pending bool `json:"pending,omitempty"`
 }
 
 func (m pairedMac) valid() bool {
@@ -163,6 +169,28 @@ func (h *helperKeys) AddMac(mac pairedMac) error {
 		return E.New("too many paired Macs; remove one first")
 	}
 	return h.writeLocked(append(kept, mac))
+}
+
+// PromoteMac clears Pending for the Mac with this key: it answered a session, so it
+// trusts this computer. A Mac that is not saved, or not pending, changes nothing.
+func (h *helperKeys) PromoteMac(key string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	macs, err := h.macsLocked()
+	if err != nil {
+		return err
+	}
+	changed := false
+	for i := range macs {
+		if macs[i].Key == key && macs[i].Pending {
+			macs[i].Pending = false
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return h.writeLocked(macs)
 }
 
 // RemoveMac forgets a pinned key. The Mac itself keeps this computer in its
@@ -308,7 +336,7 @@ func (a *pairingAttempt) Confirm(name string) (pairedMac, error) {
 	if err != nil {
 		return pairedMac{}, err
 	}
-	mac := pairedMac{Name: strings.TrimSpace(name), Address: a.address, Key: hex.EncodeToString(key)}
+	mac := pairedMac{Name: strings.TrimSpace(name), Address: a.address, Key: hex.EncodeToString(key), Pending: true}
 	if mac.Name == "" {
 		mac.Name = hostOf(a.address)
 	}
@@ -363,10 +391,34 @@ func helperStatus(macs []pairedMac, err error) string {
 		return pairingProblem(err)
 	case len(macs) == 0:
 		return "Not paired with any Mac"
-	case len(macs) == 1:
-		return "Paired with " + macs[0].Name
 	}
-	return "Paired with " + strconv.Itoa(len(macs)) + " Macs"
+	var paired []pairedMac
+	waiting := 0
+	for _, m := range macs {
+		if m.Pending {
+			waiting++
+		} else {
+			paired = append(paired, m)
+		}
+	}
+	var line string
+	switch {
+	case len(paired) == 1:
+		line = "Paired with " + paired[0].Name
+	case len(paired) > 1:
+		line = "Paired with " + strconv.Itoa(len(paired)) + " Macs"
+	case waiting == 1:
+		return "Waiting for the Mac to confirm"
+	default:
+		return "Waiting for " + strconv.Itoa(waiting) + " Macs to confirm"
+	}
+	switch waiting {
+	case 0:
+		return line
+	case 1:
+		return line + " \u00b7 waiting for another Mac to confirm"
+	}
+	return line + " \u00b7 waiting for " + strconv.Itoa(waiting) + " more Macs to confirm"
 }
 
 // defaultHelperAddress is where the pairing dialog starts: the Mac used most recently.
@@ -394,4 +446,13 @@ func defaultDeviceName() string {
 		return name
 	}
 	return "Linux computer"
+}
+
+// macRowSubtitle is the second line of a Mac's row in Preferences.
+func macRowSubtitle(mac pairedMac) string {
+	line := mac.Address + " \u00b7 " + fingerprintOfHex(mac.Key)
+	if mac.Pending {
+		return "Waiting for the Mac to confirm \u00b7 " + line
+	}
+	return line
 }

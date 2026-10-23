@@ -396,3 +396,63 @@ func TestKeyFingerprintIsTheSameStringTheMacShows(t *testing.T) {
 		t.Fatal("two keys share a fingerprint")
 	}
 }
+
+// The pairing protocol has no message from the Mac to this side after the codes were compared,
+// so a Mac this side saved is NOT known to have confirmed. It is saved as pending and shown as
+// waiting until a session proves the Mac trusts this computer.
+func TestAConfirmedMacIsPendingUntilItAnswersASession(t *testing.T) {
+	keys := testKeys()
+	macKey := bytes.Repeat([]byte{9}, 32)
+	var calls []string
+	attempt, err := fakePairing(keys, newFakeRun(macKey), &calls).Begin(context.Background(), "studio.local", "Desk PC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mac, err := attempt.Confirm("Studio")
+	if err != nil || !mac.Pending {
+		t.Fatalf("%+v %v", mac, err)
+	}
+	macs, _ := keys.Macs()
+	if len(macs) != 1 || !macs[0].Pending {
+		t.Fatalf("saved as paired before the Mac answered: %+v", macs)
+	}
+	if got := helperStatus(macs, nil); got != "Waiting for the Mac to confirm" || strings.Contains(got, "Paired") {
+		t.Fatalf("%q", got)
+	}
+	if got := macRowSubtitle(macs[0]); !strings.HasPrefix(got, "Waiting for the Mac to confirm") {
+		t.Fatalf("%q", got)
+	}
+
+	if err := keys.PromoteMac(hex.EncodeToString(bytes.Repeat([]byte{1}, 32))); err != nil {
+		t.Fatal(err)
+	}
+	if macs, _ := keys.Macs(); !macs[0].Pending {
+		t.Fatal("another key's session promoted this Mac")
+	}
+	if err := keys.PromoteMac(mac.Key); err != nil {
+		t.Fatal(err)
+	}
+	macs, _ = keys.Macs()
+	if len(macs) != 1 || macs[0].Pending || helperStatus(macs, nil) != "Paired with Studio" {
+		t.Fatalf("%+v", macs)
+	}
+	if got := macRowSubtitle(macs[0]); strings.Contains(got, "Waiting") {
+		t.Fatalf("%q", got)
+	}
+	if err := keys.PromoteMac(mac.Key); err != nil { // second time: nothing to do
+		t.Fatal(err)
+	}
+}
+
+func TestStatusWithMixedPairedAndWaitingMacs(t *testing.T) {
+	macs := []pairedMac{{Name: "A"}, {Name: "B", Pending: true}, {Name: "C", Pending: true}}
+	if got := helperStatus(macs, nil); got != "Paired with A \u00b7 waiting for 2 more Macs to confirm" {
+		t.Fatalf("%q", got)
+	}
+	if got := helperStatus(macs[1:], nil); got != "Waiting for 2 Macs to confirm" {
+		t.Fatalf("%q", got)
+	}
+	if got := helperStatus(macs[:2], nil); got != "Paired with A \u00b7 waiting for another Mac to confirm" {
+		t.Fatalf("%q", got)
+	}
+}

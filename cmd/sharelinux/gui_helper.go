@@ -185,9 +185,25 @@ func (h *helperUse) onStatus(gen int, st machelper.LinkStatus) {
 		return
 	}
 	h.status, h.linked = st, true
+	h.promoteIfLive(st)
 	h.v.g.app.logger.Debug("mouse helper status", "state", int(st.State), "helper", int(st.Helper), "reason", st.Reason)
 	h.updateChip()
 	h.reroute()
+}
+
+// promoteIfLive turns a saved but unconfirmed Mac into a paired one the first time it
+// answers a session: it can only answer under a key it trusts.
+func (h *helperUse) promoteIfLive(st machelper.LinkStatus) {
+	if st.State != machelper.LinkLive || !h.mac.Pending {
+		return
+	}
+	h.mac.Pending = false
+	keys, key := h.v.g.app.helperKeys(), h.mac.Key
+	go func() {
+		if err := keys.PromoteMac(key); err != nil {
+			h.v.g.app.logger.Info("mouse helper: could not mark the Mac as paired", "error", err)
+		}
+	}()
 }
 
 func (h *helperUse) updateChip() {
