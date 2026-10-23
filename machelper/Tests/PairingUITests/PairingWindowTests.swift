@@ -337,6 +337,63 @@ final class PairingWindowTests: XCTestCase {
         XCTAssertEqual(confirmed.count, 1)
     }
 
+    /// A press skipped by sendEvent must fail closed, not reuse an older clear verdict.
+    func testASkippedPressFailsClosedInsteadOfReusingAnOlderClearVerdict() throws {
+        let window = try XCTUnwrap(controller.window as? FrontOnClickWindow)
+        controller.update(confirmStatus())
+        clock += 5
+        var covered = false
+        controller.isFullyVisible = { _ in !covered }
+        let down = try XCTUnwrap(
+            NSEvent.mouseEvent(
+                with: .leftMouseDown, location: NSPoint(x: 10, y: 10), modifierFlags: [], timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+        window.sourcePid = { _ in 0 }
+        window.sendEvent(down)  // clear press on the background
+        covered = true
+        controller.isSessionLive = { true }
+        window.sendEvent(down)  // skipped path
+        covered = false  // even if it looks clear by the time Confirm sees it
+        controller.confirmMouseDown()
+        controller.confirmClicked()
+        XCTAssertTrue(confirmed.isEmpty, "the skipped press never vouched for the window")
+    }
+
+    func testMouseUpPhaseChangeAndCloseClearTheStoredVerdict() throws {
+        let window = try XCTUnwrap(controller.window as? FrontOnClickWindow)
+        controller.update(confirmStatus())
+        clock += 5
+        var covered = false
+        controller.isFullyVisible = { _ in !covered }
+        window.sourcePid = { _ in 0 }
+        func press() throws {
+            covered = false
+            window.sendEvent(try XCTUnwrap(NSEvent.mouseEvent(
+                with: .leftMouseDown, location: NSPoint(x: 10, y: 10), modifierFlags: [], timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1)))
+            covered = true  // a stale verdict would say clear; a fresh check says covered
+        }
+        try press()
+        window.sendEvent(try XCTUnwrap(NSEvent.mouseEvent(
+            with: .leftMouseUp, location: NSPoint(x: 10, y: 10), modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 2, clickCount: 1, pressure: 1)))
+        controller.confirmMouseDown()
+        controller.confirmClicked()
+        XCTAssertTrue(confirmed.isEmpty, "mouse-up cleared the press, so the fresh check sees the cover")
+        try press()
+        controller.update(PairingStatus())  // phase change
+        controller.update(confirmStatus())
+        clock += 5
+        controller.confirmMouseDown()
+        controller.confirmClicked()
+        XCTAssertTrue(confirmed.isEmpty, "phase change cleared the press")
+        try press()
+        controller.windowWillClose(Notification(name: NSWindow.willCloseNotification))
+        controller.confirmMouseDown()
+        controller.confirmClicked()
+        XCTAssertTrue(confirmed.isEmpty, "close cleared the press")
+    }
+
     /// Finding 6: the helper's own injected clicks, or any click while a session is live, never raise it.
     func testAnInjectedClickNeverRaisesTheWindow() throws {
         let window = try XCTUnwrap(controller.window as? FrontOnClickWindow)

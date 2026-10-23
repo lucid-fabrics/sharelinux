@@ -48,6 +48,17 @@ final class PairingTextTests: XCTestCase {
         XCTAssertNil(PairingText.namesList(["\u{202E}", " "]))
     }
 
+    func testCombiningMarkStacksAreCappedByScalars() {
+        let stack = "e" + String(repeating: "\u{0301}", count: 500)
+        XCTAssertLessThanOrEqual(PairingText.cleanName(stack).unicodeScalars.count, 32)
+        XCTAssertLessThanOrEqual(PairingText.cleanName("a" + String(repeating: "\u{20DD}", count: 500)).unicodeScalars.count, 32)
+    }
+
+    func testQuoteMarksAreRemovedFromNames() {
+        XCTAssertEqual(PairingText.cleanName("Ev\"il\u{201C}A\u{201D}\u{00AB}B\u{00BB}'C\u{2019}"), "EvilABC")
+        XCTAssertEqual(PairingText.namesList(["a\" and \"b"]), "\"a and b\"")
+    }
+
     func testTheCoveredNoticeNamesWhatCoversAndFallsBack() {
         XCTAssertEqual(
             PairingText.refusal(.windowCovered(by: ["Google Chrome"])),

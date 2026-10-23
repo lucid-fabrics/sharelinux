@@ -214,6 +214,11 @@ final class FrontOnClickWindow: NSWindow {
     /// Called for every genuine mouse press BEFORE the window is raised: what covers the window
     /// at that instant is what the person was aiming at, and raising changes it.
     var beforeRaise: () -> Void = {}
+    /// Called for a press that is skipped (own injection, or a session is live): it cannot vouch
+    /// for the window being in view, so the pre-raise verdict must fail closed.
+    var onSkippedPress: () -> Void = {}
+    /// Called when a mouse button goes up in the window.
+    var onRelease: () -> Void = {}
     /// Whether a Linux session is live (an injected click then is not the person's).
     var isSessionLive: () -> Bool = { false }
     /// The pid of the process that created the event (0 for real hardware), nil when unknown.
@@ -228,9 +233,15 @@ final class FrontOnClickWindow: NSWindow {
     }
 
     override func sendEvent(_ event: NSEvent) {
-        if event.type == .leftMouseDown || event.type == .rightMouseDown, !isOwnInjection(event) {
-            beforeRaise()
-            bringToFront()
+        if event.type == .leftMouseDown || event.type == .rightMouseDown {
+            if isOwnInjection(event) {
+                onSkippedPress()
+            } else {
+                beforeRaise()
+                bringToFront()
+            }
+        } else if event.type == .leftMouseUp || event.type == .rightMouseUp {
+            onRelease()
         }
         super.sendEvent(event)
     }
@@ -348,6 +359,8 @@ public final class PairingWindowController: NSWindowController, NSWindowDelegate
         super.init(window: window)
         window.delegate = self
         window.beforeRaise = { [weak self] in self?.recordPressVerdict() }
+        window.onSkippedPress = { [weak self] in self?.visibleAtPress = false }
+        window.onRelease = { [weak self] in self?.visibleAtPress = nil }
         window.isSessionLive = { [weak self] in self?.isSessionLive() ?? false }
         build()
         window.center()
@@ -502,6 +515,7 @@ public final class PairingWindowController: NSWindowController, NSWindowDelegate
 
     /// Redraws for a new status. Never orders the window front or takes focus.
     public func update(_ s: PairingStatus) {
+        if s.phase != current.phase { visibleAtPress = nil }
         current = s
         localRefusal = nil
         render()
@@ -705,7 +719,11 @@ public final class PairingWindowController: NSWindowController, NSWindowDelegate
         if alert.runModal() == .alertSecondButtonReturn { onRemove(d) }
     }
 
-    public func windowWillClose(_ notification: Notification) { onClose() }
+    public func windowWillClose(_ notification: Notification) {
+        visibleAtPress = nil
+        visibleAtMouseDown = nil
+        onClose()
+    }
 
     /// Renders the window, frame included, to PNG data without showing anything (the
     /// layout preview and its test use it; no screen capture permission is needed).

@@ -89,18 +89,21 @@ public enum PairingText {
 
     /// One app name from another process, made safe to show: control and format characters
     /// (newlines, bidi overrides U+202A-202E and U+2066-2069, zero-width marks) dropped,
-    /// whitespace collapsed, capped at 32 characters with an ellipsis. Empty when nothing is left.
+    /// whitespace collapsed, capped at 32 scalars with an ellipsis, quote marks dropped. Empty when nothing is left.
     static func cleanName(_ name: String) -> String {
+        let quotes: Set<Unicode.Scalar> = ["\"", "'", "\u{2018}", "\u{2019}", "\u{201C}", "\u{201D}", "\u{00AB}", "\u{00BB}", "\u{2039}", "\u{203A}", "\u{201A}", "\u{201E}", "`"]
         let kept = name.unicodeScalars.filter { scalar in
+            if quotes.contains(scalar) { return false }
             switch scalar.properties.generalCategory {
             case .control, .format, .lineSeparator, .paragraphSeparator: return false
             default: return true
             }
         }
         let words = String(String.UnicodeScalarView(kept)).split(whereSeparator: { $0.isWhitespace })
-        let line = words.joined(separator: " ")
-        guard line.count > 32 else { return line }
-        return String(line.prefix(31)) + "\u{2026}"
+        let line = Array(words.joined(separator: " ").unicodeScalars)
+        // Capped by scalars, so a stack of combining marks cannot grow one character without bound.
+        guard line.count > 32 else { return String(String.UnicodeScalarView(line)) }
+        return String(String.UnicodeScalarView(line.prefix(31))) + "\u{2026}"
     }
 
     /// "\"A\"", "\"A\" and \"B\"", "\"A\", \"B\" and \"C\"" (names are from other processes, so each
