@@ -22,6 +22,7 @@ final class PairingWindowTests: XCTestCase {
         controller = PairingWindowController()
         controller.now = { [unowned self] in self.clock }
         controller.isFullyVisible = { _ in true }
+        controller.coveringOwners = { _ in [] }
         controller.onConfirm = { [unowned self] c, k in self.confirmed.append((c, k)) }
         controller.onReject = { [unowned self] in self.rejected += 1 }
     }
