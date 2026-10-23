@@ -91,6 +91,7 @@ type sessionView struct {
 	lockBackend lockBackend
 	lock        pointerLock
 	rel         relativePointer
+	warp        warpEcho
 	// helper is this session's use of the Mac mouse helper.
 	helper *helperUse
 	// sent is set once a pointer position went to the Mac; sentReports is how many
@@ -904,8 +905,12 @@ func (v *sessionView) setPointerLock(on bool) {
 		trips, ticks := x11Cost()
 		v.g.app.logger.Debug("pointer lock released", "round_trips", trips, "ticks", ticks, "backend", int(v.lockBackend), "hint", hint, "x", x, "y", y, "mac_x", v.pointerX, "mac_y", v.pointerY)
 		v.screen.unlockPointer(v.lockBackend, hint, x, y)
+		if hint {
+			v.warp.arm(x, y, time.Now())
+		}
 		return
 	}
+	v.warp.disarm()
 	if !v.lockBackend.holds() {
 		return
 	}
@@ -977,7 +982,7 @@ func (v *sessionView) unlockHint() (bool, float64, float64) {
 	if port.empty() || width <= 0 || height <= 0 {
 		return false, 0, 0
 	}
-	x, y := port.toWindow(float64(v.pointerX), float64(v.pointerY), width, height)
+	x, y := port.toWindow(float64(v.pointerX)+0.5, float64(v.pointerY)+0.5, width, height)
 	return true, float64(x), float64(y)
 }
 
@@ -1238,6 +1243,10 @@ func (v *sessionView) onMotion(x, y float64) {
 	fx, fy, inside := v.toFramebuffer(x, y)
 	v.pointerInside = inside
 	v.updateSystemCursor()
+	if v.warp.swallows(x, y, time.Now()) {
+		// The pointer we just put over the Mac's cursor: the Mac's cursor is already there.
+		return
+	}
 	if inside || v.buttons != 0 || v.mode == rfb.ModeExclusiveControl {
 		v.sendPointer(fx, fy)
 	}
@@ -1277,7 +1286,7 @@ func (v *sessionView) onButton(gesture *gtk.GestureSingle, x, y float64, down bo
 		fx, fy, inside := v.toFramebuffer(x, y)
 		if v.mode == rfb.ModeExclusiveControl {
 			fx, fy, inside = v.pointerX, v.pointerY, true
-			if px, py, ok := v.toFramebuffer(x, y); ok && !v.lock.held {
+			if px, py, ok := v.toFramebuffer(x, y); ok && !v.lock.held && !v.warp.swallows(x, y, time.Now()) {
 				fx, fy = px, py
 			}
 		}

@@ -280,3 +280,40 @@ func settleActions(g lockGeometry, centre bool) (rebuild, recenter bool) {
 	}
 	return rebuild, recenter
 }
+
+// warpEchoLife is how long the motion event of our own unlock warp can wait.
+const warpEchoLife = time.Second
+
+// warpEcho remembers where the unlock put the local pointer. The display server
+// can only place it on a whole device pixel, and the window pixel it lands on
+// maps back to a Mac position a little off the one it was drawn from, so the
+// motion event of that warp must not be sent to the Mac, or every enter and
+// leave of Exclusive would move the Mac's pointer.
+type warpEcho struct {
+	x, y float64
+	at   time.Time
+	on   bool
+}
+
+// arm records the point (window units) the pointer was warped to.
+func (e *warpEcho) arm(x, y float64, at time.Time) {
+	*e = warpEcho{x, y, at, true}
+}
+
+// disarm forgets the warp: the pointer moved on its own or the lock began.
+func (e *warpEcho) disarm() {
+	e.on = false
+}
+
+// swallows reports whether a pointer position is the echo of the warp. The
+// first position away from it ends the warp's life.
+func (e *warpEcho) swallows(x, y float64, at time.Time) bool {
+	if !e.on {
+		return false
+	}
+	if at.Sub(e.at) > warpEchoLife || math.Abs(x-e.x) > 1 || math.Abs(y-e.y) > 1 {
+		e.on = false
+		return false
+	}
+	return true
+}

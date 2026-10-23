@@ -472,7 +472,7 @@ static void warp_to(GtkWidget *widget, double x, double y) {
 	gtk_native_get_surface_transform(native, &offset_x, &offset_y);
 	double scale = gdk_surface_get_scale_factor(surface);
 	gdk_x11_display_error_trap_push(gdk_display);
-	XWarpPointer(display, None, gdk_x11_surface_get_xid(surface), 0, 0, 0, 0, (int)((x + offset_x) * scale), (int)((y + offset_y) * scale));
+	XWarpPointer(display, None, gdk_x11_surface_get_xid(surface), 0, 0, 0, 0, (int)lround((x + offset_x) * scale), (int)lround((y + offset_y) * scale));
 	XFlush(display);
 	gdk_x11_display_error_trap_pop_ignored(gdk_display);
 }
