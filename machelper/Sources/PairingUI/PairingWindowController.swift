@@ -2,24 +2,118 @@ import AppKit
 import HelperCore
 import HelperRuntime
 
+/// Apple's own system UI processes that keep transparent full-screen windows above every normal
+/// window (Dock, Notification Center and the like). Such a window shows nothing, so it must not
+/// count as covering the pairing window. The owner NAME the window server reports is only a claim
+/// (any process can call itself "Dock"), so a window is ignored only when its process also proves
+/// to be Apple's: the binary lives under /System and its signature is `anchor apple` and a
+/// platform binary. The verdict is cached per pid. Anything not proven stays a cover.
+public final class AppleOverlayVerifier {
+    /// Process names of the system UI overlays that are allowed to be ignored once verified.
+    static let overlayNames: Set<String> = [
+        "Dock", "Notification Center", "Notification Centre", "Control Center", "Control Centre",
+        "WindowManager", "SystemUIServer", "Spotlight",
+    ]
+
+    /// Whether the process with this pid is a genuine Apple platform binary under /System.
+    public typealias Check = (Int32) -> Bool
+    private let check: Check
+    private var cache: [Int32: Bool] = [:]
+    private let lock = NSLock()
+
+    public init(check: @escaping Check = AppleOverlayVerifier.systemCheck) { self.check = check }
+
+    public static let shared = AppleOverlayVerifier()
+
+    /// True when a window of this owner is a see-through system overlay that may be ignored.
+    public func isVerifiedOverlay(pid: Int32, ownerName: String?) -> Bool {
+        guard pid > 0, let name = ownerName, Self.overlayNames.contains(name) else { return false }
+        lock.lock(); defer { lock.unlock() }
+        if let known = cache[pid] { return known }
+        let verdict = check(pid)
+        cache[pid] = verdict
+        return verdict
+    }
+
+    /// CS_PLATFORM_BINARY in the code-signing status flags.
+    private static let platformFlag: UInt32 = 0x0400_0000
+
+    /// The real check: path under /System, signature anchored in Apple's root, platform binary.
+    public static let systemCheck: Check = { pid in
+        var buf = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        guard proc_pidpath(pid, &buf, UInt32(buf.count)) > 0 else { return false }
+        guard String(cString: buf).hasPrefix("/System/") else { return false }
+        var code: SecCode?
+        guard SecCodeCopyGuestWithAttributes(nil, [kSecGuestAttributePid: pid] as CFDictionary, [], &code) == errSecSuccess,
+            let code
+        else { return false }
+        var req: SecRequirement?
+        guard SecRequirementCreateWithString("anchor apple" as CFString, [], &req) == errSecSuccess, let req,
+            SecCodeCheckValidity(code, [], req) == errSecSuccess
+        else { return false }
+        var staticCode: SecStaticCode?
+        guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode else { return false }
+        var info: CFDictionary?
+        guard SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSDynamicInformation), &info) == errSecSuccess,
+            let dict = info as? [String: Any], let status = (dict[kSecCodeInfoStatus as String] as? NSNumber)?.uint32Value
+        else { return false }
+        return status & platformFlag != 0
+    }
+}
+
 /// Whether a window is fully in view: nothing on screen sits in front of any part of it.
 public enum WindowCoverage {
     /// A window in front of ours: where it is (screen points, top-left origin, as the
-    /// window server reports it) and how opaque.
+    /// window server reports it), how opaque, and which process owns it.
     public struct Other: Equatable {
         public var frame: CGRect
         public var alpha: Double
-        public init(frame: CGRect, alpha: Double) { self.frame = frame; self.alpha = alpha }
+        public var pid: Int32
+        public var ownerName: String?
+        public init(frame: CGRect, alpha: Double, pid: Int32 = 0, ownerName: String? = nil) {
+            self.frame = frame; self.alpha = alpha; self.pid = pid; self.ownerName = ownerName
+        }
     }
 
-    /// True when any window in front that is not see-through overlaps `frame`. A
-    /// see-through overlay that lets clicks pass could be showing the person
-    /// something else, so any visible overlap counts, not only a full cover.
-    public static func isCovered(_ frame: CGRect, by others: [Other]) -> Bool {
-        others.contains { $0.alpha > 0.05 && $0.frame.intersects(frame) }
+    /// The windows that really cover `frame`: visible, overlapping, and not a verified Apple
+    /// system overlay. A see-through overlay from anything else could be showing the person
+    /// something other than the truth, so any visible overlap counts, not only a full cover.
+    public static func covering(
+        _ frame: CGRect, by others: [Other], verifier: AppleOverlayVerifier = .shared
+    ) -> [Other] {
+        others.filter {
+            $0.alpha > 0.05 && $0.frame.intersects(frame)
+                && !verifier.isVerifiedOverlay(pid: $0.pid, ownerName: $0.ownerName)
+        }
     }
 
-    /// The windows in front of `window` from the window server (geometry and alpha only;
+    public static func isCovered(_ frame: CGRect, by others: [Other], verifier: AppleOverlayVerifier = .shared) -> Bool {
+        !covering(frame, by: others, verifier: verifier).isEmpty
+    }
+
+    /// Names of the apps owning the covering windows, each once, in front-to-back order.
+    public static func ownerNames(of covers: [Other]) -> [String] {
+        var seen = Set<String>(), out: [String] = []
+        for c in covers {
+            guard let n = c.ownerName, !n.isEmpty, seen.insert(n).inserted else { continue }
+            out.append(n)
+        }
+        return out
+    }
+
+    /// Who covers the window right now (empty when nobody, or when the list is unavailable).
+    public static func coveringOwners(of window: NSWindow) -> [String] {
+        guard let others = windowsInFront(of: window) else { return [] }
+        return ownerNames(of: covering(topLeftFrame(of: window), by: others))
+    }
+
+    static func topLeftFrame(of window: NSWindow) -> CGRect {
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+        let f = window.frame
+        return CGRect(x: f.minX, y: primaryHeight - f.maxY, width: f.width, height: f.height)
+    }
+
+    /// The windows in front of `window` from the window server (geometry, alpha and owner only;
     /// no screen-recording permission is involved). Windows of this process are skipped.
     static func windowsInFront(of window: NSWindow) -> [Other]? {
         let id = CGWindowID(window.windowNumber)
@@ -31,16 +125,21 @@ public enum WindowCoverage {
                 let b = w[kCGWindowBounds as String] as? [String: Any],
                 let rect = CGRect(dictionaryRepresentation: b as CFDictionary)
             else { return nil }
-            return Other(frame: rect, alpha: (w[kCGWindowAlpha as String] as? Double) ?? 1)
+            return Other(
+                frame: rect, alpha: (w[kCGWindowAlpha as String] as? Double) ?? 1,
+                pid: Int32(truncatingIfNeeded: (w[kCGWindowOwnerPID as String] as? Int) ?? 0),
+                ownerName: w[kCGWindowOwnerName as String] as? String)
         }
     }
 
     /// The verdict from what is known: the window is up on this space and not hidden, and the
     /// window server's list of windows in front is available and none of them overlaps. An
     /// unavailable list is NOT a pass: with nothing to check against, Confirm stays off.
-    static func verdict(onScreen: Bool, others: [Other]?, topLeftFrame: CGRect) -> Bool {
+    static func verdict(
+        onScreen: Bool, others: [Other]?, topLeftFrame: CGRect, verifier: AppleOverlayVerifier = .shared
+    ) -> Bool {
         guard onScreen, let others else { return false }
-        return !isCovered(topLeftFrame, by: others)
+        return !isCovered(topLeftFrame, by: others, verifier: verifier)
     }
 
     /// The window on screen, on this space, not minimised, not even partly hidden.
@@ -49,11 +148,28 @@ public enum WindowCoverage {
             window.isVisible && !window.isMiniaturized && window.occlusionState.contains(.visible)
             && window.isOnActiveSpace
         guard onScreen else { return false }
-        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
-        let f = window.frame
-        let topLeft = CGRect(x: f.minX, y: primaryHeight - f.maxY, width: f.width, height: f.height)
-        return verdict(onScreen: true, others: windowsInFront(of: window), topLeftFrame: topLeft)
+        return verdict(onScreen: true, others: windowsInFront(of: window), topLeftFrame: topLeftFrame(of: window))
     }
+}
+
+/// The pairing window. The helper is an agent app (no Dock icon), so a click in the window would
+/// otherwise leave it behind the app the person was using: a mouse press anywhere in it brings
+/// it to the front. Only the person's own press does this; a device arriving never does.
+final class FrontOnClickWindow: NSWindow {
+    /// Called for every mouse press before it is handled (tests).
+    var onPress: () -> Void = {}
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDown || event.type == .rightMouseDown {
+            bringToFront()
+        }
+        super.sendEvent(event)
+    }
+    func bringToFront() {
+        onPress()
+        orderFrontRegardless()
+        makeKey()
+    }
+    override var canBecomeKey: Bool { true }
 }
 
 /// A push button that tells the window when the mouse goes down on it, before the click
@@ -112,6 +228,8 @@ public final class PairingWindowController: NSWindowController, NSWindowDelegate
     public var now: () -> Double = { ProcessInfo.processInfo.systemUptime }
     /// Whether the window can be seen in full (tests replace it).
     public var isFullyVisible: (NSWindow) -> Bool = WindowCoverage.isFullyVisible
+    /// Names of the apps whose windows cover the window (tests replace it).
+    public var coveringOwners: (NSWindow) -> [String] = WindowCoverage.coveringOwners
 
     static let width: CGFloat = 420
     private static let inset: CGFloat = 20
@@ -145,7 +263,7 @@ public final class PairingWindowController: NSWindowController, NSWindowDelegate
     private var visibleAtMouseDown: Bool?
 
     public init() {
-        let window = NSWindow(
+        let window = FrontOnClickWindow(
             contentRect: NSRect(x: 0, y: 0, width: Self.width, height: 300), styleMask: [.titled, .closable],
             backing: .buffered, defer: false)
         window.title = PairingText.windowTitle
@@ -295,9 +413,14 @@ public final class PairingWindowController: NSWindowController, NSWindowDelegate
     /// menu item: it is the one place that activates the app. The caller has
     /// already opened the pairing window in the coordinator.
     public func presentFromOwnerClick() {
-        NSApp.activate(ignoringOtherApps: true)
+        if #available(macOS 14.0, *) {
+            NSApp.activate()
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
+        }
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
+        window?.orderFrontRegardless()
     }
 
     /// Redraws for a new status. Never orders the window front or takes focus.
@@ -466,7 +589,7 @@ public final class PairingWindowController: NSWindowController, NSWindowDelegate
         // A click within a second of the code appearing was aimed at something else.
         if let since = shownSince, now() - since < PairingCoordinator.minConfirmDelay { return }
         if downVisible == false || window.map({ !isFullyVisible($0) }) ?? true {
-            localRefusal = .windowCovered
+            localRefusal = .windowCovered(by: window.map(coveringOwners) ?? [])
             render()
             return
         }

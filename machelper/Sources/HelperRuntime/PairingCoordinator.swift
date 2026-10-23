@@ -73,8 +73,9 @@ public enum ConfirmRefusal: Equatable, Sendable {
     case sessionActive
     /// The pending device's name looks like that of a device already paired.
     case nameCollision(String)
-    /// Another window covers the pairing window (checked by the window).
-    case windowCovered
+    /// Another window covers the pairing window (checked by the window); the apps that own
+    /// the covering windows, when known.
+    case windowCovered(by: [String])
 }
 
 /// The Mac side of the pairing flow, without any AppKit: opens the pairing

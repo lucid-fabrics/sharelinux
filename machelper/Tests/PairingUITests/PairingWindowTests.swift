@@ -148,7 +148,7 @@ final class PairingWindowTests: XCTestCase {
         clock += 5
         controller.confirmClicked()
         XCTAssertTrue(confirmed.isEmpty)
-        XCTAssertEqual(controller.noticeText, PairingText.refusal(.windowCovered))
+        XCTAssertEqual(controller.noticeText, PairingText.refusal(.windowCovered(by: [])))
         XCTAssertTrue(controller.noticeText.lowercased().contains("covering"))
         controller.isFullyVisible = { _ in true }
         controller.confirmClicked()
@@ -173,7 +173,7 @@ final class PairingWindowTests: XCTestCase {
         controller.isFullyVisible = { _ in true }  // uncovered by mouse-up
         controller.confirmClicked()
         XCTAssertTrue(confirmed.isEmpty, "covered at mouse-down")
-        XCTAssertEqual(controller.noticeText, PairingText.refusal(.windowCovered))
+        XCTAssertEqual(controller.noticeText, PairingText.refusal(.windowCovered(by: [])))
     }
 
     func testAWindowThatCoversConfirmAtMouseUpBlocksTheClickEvenIfClearAtMouseDown() {
@@ -195,6 +195,87 @@ final class PairingWindowTests: XCTestCase {
         controller.confirmMouseDown()
         controller.confirmClicked()
         XCTAssertEqual(confirmed.count, 1)
+    }
+
+    // MARK: Apple system overlays
+
+    private let full = CGRect(x: 0, y: 0, width: 5120, height: 1440)
+    private let mine = CGRect(x: 100, y: 100, width: 420, height: 300)
+
+    private func verifier(_ trusted: Set<Int32>) -> (AppleOverlayVerifier, () -> Int) {
+        var calls = 0
+        let v = AppleOverlayVerifier(check: { pid in calls += 1; return trusted.contains(pid) })
+        return (v, { calls })
+    }
+
+    func testAVerifiedAppleOverlayDoesNotCover() {
+        let (v, _) = verifier([10, 11])
+        let others = [
+            WindowCoverage.Other(frame: full, alpha: 1, pid: 10, ownerName: "Dock"),
+            WindowCoverage.Other(frame: full, alpha: 1, pid: 11, ownerName: "Notification Center"),
+        ]
+        XCTAssertFalse(WindowCoverage.isCovered(mine, by: others, verifier: v))
+        XCTAssertTrue(WindowCoverage.verdict(onScreen: true, others: others, topLeftFrame: mine, verifier: v))
+    }
+
+    func testTheSameNameFromAnUnverifiedPidStillCovers() {
+        let (v, _) = verifier([10])
+        let fake = WindowCoverage.Other(frame: full, alpha: 1, pid: 999, ownerName: "Dock")
+        XCTAssertTrue(WindowCoverage.isCovered(mine, by: [fake], verifier: v))
+        XCTAssertEqual(WindowCoverage.ownerNames(of: WindowCoverage.covering(mine, by: [fake], verifier: v)), ["Dock"])
+    }
+
+    func testAnAppleAppThatIsNotAnOverlayStillCoversEvenWhenItsPidIsVerified() {
+        let (v, _) = verifier([20])
+        let other = WindowCoverage.Other(frame: mine, alpha: 1, pid: 20, ownerName: "Safari")
+        XCTAssertTrue(WindowCoverage.isCovered(mine, by: [other], verifier: v), "only the overlay processes are ignorable")
+    }
+
+    func testANormalAppWindowOverlappingStillCoversAndIsNamed() {
+        let (v, _) = verifier([10])
+        let others = [
+            WindowCoverage.Other(frame: full, alpha: 1, pid: 10, ownerName: "Dock"),
+            WindowCoverage.Other(frame: CGRect(x: 300, y: 200, width: 800, height: 600), alpha: 1, pid: 50, ownerName: "Google Chrome"),
+            WindowCoverage.Other(frame: CGRect(x: 320, y: 220, width: 100, height: 100), alpha: 1, pid: 50, ownerName: "Google Chrome"),
+        ]
+        XCTAssertTrue(WindowCoverage.isCovered(mine, by: others, verifier: v))
+        XCTAssertEqual(WindowCoverage.ownerNames(of: WindowCoverage.covering(mine, by: others, verifier: v)), ["Google Chrome"])
+    }
+
+    func testAnUnidentifiedWindowCoversAndTheVerdictIsCachedPerPid() {
+        let (v, calls) = verifier([10])
+        let unknown = WindowCoverage.Other(frame: full, alpha: 1)
+        XCTAssertTrue(WindowCoverage.isCovered(mine, by: [unknown], verifier: v), "no pid, fail closed")
+        let dock = WindowCoverage.Other(frame: full, alpha: 1, pid: 10, ownerName: "Dock")
+        for _ in 0..<5 { XCTAssertFalse(WindowCoverage.isCovered(mine, by: [dock], verifier: v)) }
+        XCTAssertEqual(calls(), 1)
+    }
+
+    func testTheCoveredNoticeNamesTheApp() {
+        controller.isFullyVisible = { _ in false }
+        controller.coveringOwners = { _ in ["Google Chrome"] }
+        controller.update(confirmStatus())
+        clock += 5
+        controller.confirmClicked()
+        XCTAssertEqual(
+            controller.noticeText,
+            "Google Chrome is covering this window, so Confirm is off. Move it away and check the code again.")
+    }
+
+    // MARK: coming to the front
+
+    func testAMousePressInTheWindowBringsItToTheFrontButAnUpdateDoesNot() throws {
+        let window = try XCTUnwrap(controller.window as? FrontOnClickWindow)
+        var presses = 0
+        window.onPress = { presses += 1 }
+        controller.update(confirmStatus())
+        XCTAssertEqual(presses, 0, "a device arriving never pulls focus")
+        let down = try XCTUnwrap(
+            NSEvent.mouseEvent(
+                with: .leftMouseDown, location: NSPoint(x: 10, y: 10), modifierFlags: [], timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+        window.sendEvent(down)
+        XCTAssertEqual(presses, 1)
     }
 
     func testCoverageGeometry() {

@@ -87,6 +87,18 @@ public enum PairingText {
         ("This Mac's key: \(identity)", "Paired list: \(pairedList)")
     }
 
+    /// "A", "A and B", "A, B and C" (names are from other processes: control characters dropped,
+    /// length capped); nil when there is no usable name.
+    static func namesList(_ names: [String]) -> String? {
+        let n = names.map { String($0.unicodeScalars.filter { $0.value >= 0x20 && $0.value != 0x7f }.prefix(40).map(Character.init)) }
+            .filter { !$0.isEmpty }
+        switch n.count {
+        case 0: return nil
+        case 1: return n[0]
+        default: return n.dropLast().joined(separator: ", ") + " and " + n[n.count - 1]
+        }
+    }
+
     /// One sentence for a refused Confirm.
     public static func refusal(_ r: ConfirmRefusal) -> String {
         switch r {
@@ -98,8 +110,11 @@ public enum PairingText {
             return "A Linux device could move the mouse right now. Turn off Allow raw mouse in the menu bar menu, then pair."
         case .nameCollision(let other):
             return "A device called \(other) is already paired and this name looks the same. Reject, rename this computer on the Linux side and pair again."
-        case .windowCovered:
-            return "Another window is covering this one, so Confirm is off. Move the other window away and check the code again."
+        case .windowCovered(let apps):
+            guard let list = namesList(apps) else {
+                return "Another window is covering this one, so Confirm is off. Move the other window away and check the code again."
+            }
+            return "\(list) \(apps.count == 1 ? "is" : "are") covering this window, so Confirm is off. Move \(apps.count == 1 ? "it" : "them") away and check the code again."
         }
     }
 

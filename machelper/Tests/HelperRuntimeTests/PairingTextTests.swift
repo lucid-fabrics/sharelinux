@@ -36,6 +36,20 @@ final class PairingTextTests: XCTestCase {
         return out
     }
 
+    func testTheCoveredNoticeNamesWhatCoversAndFallsBack() {
+        XCTAssertEqual(
+            PairingText.refusal(.windowCovered(by: ["Google Chrome"])),
+            "Google Chrome is covering this window, so Confirm is off. Move it away and check the code again.")
+        XCTAssertEqual(
+            PairingText.refusal(.windowCovered(by: ["Slack", "Zoom"])),
+            "Slack and Zoom are covering this window, so Confirm is off. Move them away and check the code again.")
+        XCTAssertEqual(
+            PairingText.refusal(.windowCovered(by: [])),
+            "Another window is covering this one, so Confirm is off. Move the other window away and check the code again.")
+        XCTAssertEqual(PairingText.refusal(.windowCovered(by: ["\n\u{7}"])), PairingText.refusal(.windowCovered(by: [])))
+        XCTAssertFalse(PairingText.refusal(.windowCovered(by: ["A", "B", "C"])).contains("\u{2014}"))
+    }
+
     func testNoEmDashesAndNoJargon() {
         for s in allStrings() {
             XCTAssertFalse(s.contains("\u{2014}"), s)
