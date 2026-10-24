@@ -124,6 +124,21 @@ func (v *sessionView) followVideoDisplay() {
 	vid.do(func() { _ = client.StopMediaStream() })
 }
 
+// streamPlan is the plan for one start of the stream. The decoder rate in its offer is the one of the
+// format asked for this time, so a restart without 4:4:4 gets the full 4:2:0 rate and not the halved one
+// that the connection (and its virtual display) was made with.
+func (a *app) streamPlan(caps videoCaps, hasVideo, hdr, no444 bool) videoPlan {
+	plan := planVideo(a.videoMode(), caps, hasVideo)
+	if hdr {
+		plan = plan.withHDR(a.videoMode(), caps)
+	}
+	if !no444 && a.chroma444Wanted() {
+		plan = plan.with444(a.videoMode(), caps)
+	}
+	plan.Offer.DecoderMaxPixelRate = plan.decoderPixelRate(videoThreads())
+	return plan
+}
+
 // startVideo plans the stream and asks the Mac for it.
 func (v *sessionView) startVideo() {
 	vid := &v.vid
@@ -133,13 +148,7 @@ func (v *sessionView) startVideo() {
 	}
 	info := v.client.Info()
 	caps := app.videoCapabilities()
-	plan := planVideo(app.videoMode(), caps, serverHasVideo(&info))
-	if v.hdr {
-		plan = plan.withHDR(app.videoMode(), caps)
-	}
-	if !vid.no444 && app.chroma444Wanted() {
-		plan = plan.with444(app.videoMode(), caps)
-	}
+	plan := app.streamPlan(caps, serverHasVideo(&info), v.hdr, vid.no444)
 	plan = plan.withSound(app.soundWanted(&v.live.req.opts), soundDecoderAvailable != nil && soundDecoderAvailable())
 	if !plan.enabled() {
 		app.logger.Info("video", "plan", "tiles", "reason", plan.Reason)

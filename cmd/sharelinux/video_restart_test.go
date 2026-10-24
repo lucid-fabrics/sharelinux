@@ -132,3 +132,26 @@ func (p *refusingPresenter) present(frame *videoFrame) outputKind {
 	}
 	return p.countingPresenter.present(frame)
 }
+
+// The rate in the offer follows the format asked for at each (re)start: 4:4:4 counts every picture
+// twice, and the 4:2:0 fallback after the GPU could not decode it gets the full rate again.
+func TestStreamPlanRateFollowsTheFormatAskedFor(t *testing.T) {
+	t.Setenv("SHARELINUX_444", "")
+	t.Setenv("SHARELINUX_THREADS", "4")
+	a := &app{}
+	caps := plan444Caps()
+	with := a.streamPlan(caps, true, false, false)
+	if !with.Chroma444 {
+		t.Fatalf("the first start does not ask for 4:4:4: %+v", with)
+	}
+	without := a.streamPlan(caps, true, false, true)
+	if without.Chroma444 {
+		t.Fatalf("the fallback still asks for 4:4:4: %+v", without)
+	}
+	if with.Offer.DecoderMaxPixelRate != rateVAAPI/2 {
+		t.Fatalf("4:4:4 rate %d, want %d", with.Offer.DecoderMaxPixelRate, rateVAAPI/2)
+	}
+	if without.Offer.DecoderMaxPixelRate != rateVAAPI {
+		t.Fatalf("4:2:0 fallback rate %d, want the full %d", without.Offer.DecoderMaxPixelRate, rateVAAPI)
+	}
+}
