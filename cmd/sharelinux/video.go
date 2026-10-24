@@ -125,6 +125,11 @@ func videoPoolForTest() int {
 	return int(C.oss_video_test_pool())
 }
 
+// videoPoolOrphansForTest is how many output surfaces a texture still holds after the pool let them go.
+func videoPoolOrphansForTest() int {
+	return int(C.oss_video_test_pool_orphans())
+}
+
 // fullAnswersForTest makes the next sends of a packet to libavcodec answer "full" without taking it.
 func fullAnswersForTest(sends int) {
 	C.oss_video_test_eagain(C.int(sends))

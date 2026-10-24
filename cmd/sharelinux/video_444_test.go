@@ -148,6 +148,9 @@ func TestVAAPIShows444OnTheGPU(t *testing.T) {
 		if n := videoPoolForTest(); n != 0 {
 			t.Errorf("%d output surfaces left after the decoder closed", n)
 		}
+		if n := videoPoolOrphansForTest(); n != 0 {
+			t.Errorf("%d output surfaces still held by textures after the decoder closed", n)
+		}
 	})
 	frames := decode444(t, decoderVAAPI, clip, 3)
 	frame := frames[len(frames)-1]

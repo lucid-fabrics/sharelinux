@@ -174,6 +174,9 @@ gsize oss_video_test_vpp_owner(void);
 // oss_video_test_pool is how many output surfaces of the GPU's video processor are kept for reuse.
 int oss_video_test_pool(void);
 
+// oss_video_test_pool_orphans is how many of them a texture still holds after the pool let them go.
+int oss_video_test_pool_orphans(void);
+
 // oss_video_test_hdr_gpu chooses whether HDR pictures go through the GPU's video processor to P010
 // DMA-BUFs: -1 by picture size, 0 never, 1 always.
 void oss_video_test_hdr_gpu(int mode);
