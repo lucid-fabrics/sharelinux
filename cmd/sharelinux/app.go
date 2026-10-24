@@ -117,6 +117,16 @@ func (a *app) soundWanted(opts *options) bool {
 	return opts == nil || !opts.NoSound
 }
 
+// chroma444Wanted says whether the video offer may name 4:4:4 8-bit: SHARELINUX_444=off keeps it to
+// 4:2:0, to compare the two or to spare a GPU that decodes 4:4:4 slowly.
+func (a *app) chroma444Wanted() bool {
+	switch strings.ToLower(os.Getenv("SHARELINUX_444")) {
+	case "off", "0", "false", "no":
+		return false
+	}
+	return true
+}
+
 // videoCapabilities probes the decoders once. SHARELINUX_VAAPI_DEVICE names the
 // VA-API render node to use when the machine has more than one GPU.
 func (a *app) videoCapabilities() videoCaps {

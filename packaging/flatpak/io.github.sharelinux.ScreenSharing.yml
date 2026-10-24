@@ -30,6 +30,9 @@ finish-args:
   # starts and draws picture tiles. The GPU's own Mesa (Vulkan, VA-API for AMD) comes from
   # org.freedesktop.Platform.GL.default.
   - --device=dri
+  # The Mac's sound is decoded with libavcodec (the AAC decoder is in the runtime) and played through
+  # the sound server's PulseAudio socket, which PipeWire answers too (pipewire-pulse).
+  - --socket=pulseaudio
   # Saved Mac passwords live in the system keyring (Secret Service).
   - --talk-name=org.freedesktop.secrets
   # The default folder for "Files from the Mac" is Downloads. Any other folder is

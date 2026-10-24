@@ -168,3 +168,138 @@ func TestVAAPIShows444OnTheGPU(t *testing.T) {
 		t.Fatalf("left behind: %+v, before %+v", videoLive(), before)
 	}
 }
+
+// plan444Software is a plan that decodes 4:4:4 8-bit in software. A real session never has one (with444 leaves
+// the CPU out), but the stream path is tried on it where there is no GPU decoder.
+func plan444Software() videoPlan {
+	plan := planVideo(videoAuto, videoCaps{HEVCSoftware: true}, true)
+	plan.Chroma444 = true
+	plan.Kinds444 = []decoderKind{decoderSoftware}
+	plan.Offer.PixelFormats |= media.PixelFormat444FullRange
+	return plan
+}
+
+// The Mac's 4:4:4 8-bit stream against the mock: offered, negotiated, decoded, and the stats card says so.
+func TestMock444StreamEndToEnd(t *testing.T) {
+	before := videoLive()
+	clip := clip444(t)
+	client, mac, closeAll := openMockMac(t, clip)
+	defer closeAll()
+	plan := plan444Software()
+	presenter := &countingPresenter{}
+	stream := newVideoStream(quiet, plan, "", 1, presenter, clientKeyframe(client))
+	if err := client.StartMediaStream(plan.Offer, stream); err != nil {
+		stream.close()
+		t.Fatal(err)
+	}
+	waitFor(t, "4:4:4 pictures", 20*time.Second, func() bool { return presenter.count() >= 10 })
+	if formats := mac.pixelFormats.Load(); media.PixelFormats(formats)&media.PixelFormat444FullRange == 0 {
+		t.Fatalf("the offer did not name 4:4:4 8-bit: %v", media.PixelFormats(formats))
+	}
+	stats := stream.stats()
+	if !is444EightBit(stats.Color) || stats.Kind != decoderSoftware {
+		t.Fatalf("stats %+v", stats)
+	}
+	stats.Active = true
+	rows := applyVideoRows([]statRow{{"Codec", "x"}}, stats)
+	if rows[0].Value != "HEVC 4:4:4 (software)" {
+		t.Fatalf("codec row %q", rows[0].Value)
+	}
+	stream.close()
+	_ = client.StopMediaStream()
+	if live := videoLive(); live != before {
+		t.Fatalf("left behind: %+v, before %+v", live, before)
+	}
+}
+
+// A plan that did not offer 4:4:4 refuses a 4:4:4 stream, and a plan that did takes it.
+func TestPlanWithout444RefusesA444Stream(t *testing.T) {
+	stream := newVideoStream(quiet, planVideo(videoAuto, videoCaps{HEVCSoftware: true}, true), "", 1, &countingPresenter{}, func() {})
+	defer stream.close()
+	stream.VideoFormat(format444(clip444(t)))
+	select {
+	case event := <-stream.events:
+		if event.Kind != videoFailed {
+			t.Fatalf("%+v", event)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a stream the plan did not ask for was taken")
+	}
+}
+
+// When the GPU decoder dies on a 4:4:4 stream nothing else may take it, and the failure says that asking for 4:2:0
+// would help, so the session starts over with that offer instead of giving up on video.
+func TestFailedGPUOn444AsksFor420(t *testing.T) {
+	caps := probeVideo("")
+	if !caps.HEVC444x8VAAPI {
+		t.Skip("no VA-API HEVC 4:4:4 8-bit decoder")
+	}
+	defer failDecodersForTest()
+	clip := clip444(t)
+	plan := planVideo(videoAuto, caps, true).with444(videoAuto, caps)
+	if !plan.Chroma444 {
+		t.Fatal("the plan has no 4:4:4")
+	}
+	stream := newVideoStream(quiet, plan, caps.Device, 1, &countingPresenter{}, func() {})
+	defer stream.close()
+	failDecodersForTest(decoderVAAPI)
+	stream.VideoFormat(format444(clip))
+	stream.VideoAccessUnit(clipUnit(clip, 0))
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case event := <-stream.events:
+			if event.Kind != videoFailed {
+				continue
+			}
+			if !event.Without444 {
+				t.Fatalf("the failure does not say 4:2:0 would help: %+v", event)
+			}
+			return
+		case <-deadline:
+			t.Fatal("no failure reported")
+		}
+	}
+}
+
+// A machine with no sound server must not break the stream: the player fails on its own goroutine, the network side
+// never waits, mute and close still work.
+func TestStreamSoundWithoutASoundServer(t *testing.T) {
+	t.Setenv("PULSE_SERVER", "unix:/nonexistent/oss-test-pulse")
+	t.Setenv("PIPEWIRE_REMOTE", "/nonexistent/oss-test-pipewire")
+	plan := planVideo(videoAuto, videoCaps{HEVCSoftware: true}, true).withSound(true, true)
+	stream := newVideoStream(quiet, plan, "", 1, &countingPresenter{}, func() {})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		stream.AudioFormat(media.AudioFormat{FormatID: 0x61616365, SampleRate: 48000, Channels: 2, FramesPerPacket: 480, AudioSpecificConfig: []byte{0xf8, 0xe6, 0x50, 0x00}})
+		for range 200 {
+			stream.AudioPacket(media.AudioPacket{Data: []byte{1, 2, 3, 4}})
+		}
+		stream.setMuted(true)
+		stream.setMuted(false)
+		stream.close()
+		// A format announced after the stream is closed must not leave a player behind.
+		stream.AudioFormat(media.AudioFormat{SampleRate: 48000, Channels: 2, FramesPerPacket: 480, AudioSpecificConfig: []byte{0xf8, 0xe6, 0x50, 0x00}})
+		stream.AudioPacket(media.AudioPacket{Data: []byte{1}})
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the stream waited for the sound")
+	}
+	if _, ok := stream.soundStats(); ok {
+		t.Fatal("a closed stream still has a player")
+	}
+}
+
+// A plan without sound ignores the Mac's sound altogether.
+func TestStreamWithoutSoundPlansIgnoresAudio(t *testing.T) {
+	stream := newVideoStream(quiet, planVideo(videoAuto, videoCaps{HEVCSoftware: true}, true), "", 1, &countingPresenter{}, func() {})
+	defer stream.close()
+	stream.AudioFormat(media.AudioFormat{SampleRate: 48000, Channels: 2, FramesPerPacket: 480, AudioSpecificConfig: []byte{0xf8, 0xe6, 0x50, 0x00}})
+	stream.AudioPacket(media.AudioPacket{Data: []byte{1}})
+	if _, ok := stream.soundStats(); ok {
+		t.Fatal("a plan without sound started a player")
+	}
+}

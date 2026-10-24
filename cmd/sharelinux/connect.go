@@ -48,6 +48,9 @@ func (a *app) decoderPixelRate(hdr bool) int64 {
 	if hdr {
 		plan = plan.withHDR(a.videoMode(), a.videoCapabilities())
 	}
+	if a.chroma444Wanted() {
+		plan = plan.with444(a.videoMode(), a.videoCapabilities())
+	}
 	return plan.decoderPixelRate(videoThreads())
 }
 

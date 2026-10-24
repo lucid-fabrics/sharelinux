@@ -226,3 +226,15 @@ func TestStatsRowForTheSound(t *testing.T) {
 		}
 	}
 }
+
+func TestChroma444WantedHonoursTheEnvironment(t *testing.T) {
+	a := &app{}
+	t.Setenv("SHARELINUX_444", "")
+	if !a.chroma444Wanted() {
+		t.Fatal("4:4:4 should be wanted by default")
+	}
+	t.Setenv("SHARELINUX_444", "off")
+	if a.chroma444Wanted() {
+		t.Fatal("SHARELINUX_444=off ignored")
+	}
+}

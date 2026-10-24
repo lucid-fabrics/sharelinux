@@ -137,7 +137,7 @@ func (v *sessionView) startVideo() {
 	if v.hdr {
 		plan = plan.withHDR(app.videoMode(), caps)
 	}
-	if !vid.no444 {
+	if !vid.no444 && app.chroma444Wanted() {
 		plan = plan.with444(app.videoMode(), caps)
 	}
 	plan = plan.withSound(app.soundWanted(&v.live.req.opts), soundDecoderAvailable != nil && soundDecoderAvailable())
