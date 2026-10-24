@@ -74,7 +74,7 @@ type cDevice struct {
 }
 
 func openAudioDevice(format media.AudioFormat) (*cDevice, error) {
-	name := C.CString("Screen Sharing")
+	name := C.CString("sharelinux")
 	defer C.free(unsafe.Pointer(name))
 	var message [200]C.char
 	handle := C.oss_audio_out_open(C.int(format.SampleRate), C.int(format.Channels), C.int(audioDeviceLatency.Milliseconds()), name, &message[0], C.int(len(message)))

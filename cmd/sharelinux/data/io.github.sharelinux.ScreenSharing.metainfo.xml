@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
   <id>io.github.sharelinux.ScreenSharing</id>
-  <name>Screen Sharing</name>
+  <name>sharelinux</name>
   <summary>View and control the screen of a Mac</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
@@ -11,7 +11,7 @@
   <developer id="io.github.sharelinux">
     <name>sharelinux</name>
   </developer>
-  <url type="homepage">https://github.com/nekohasekai/open-screen-sharing</url>
+  <url type="homepage">https://github.com/lucid-fabrics/sharelinux</url>
   <launchable type="desktop-id">io.github.sharelinux.ScreenSharing.desktop</launchable>
   <content_rating type="oars-1.1"/>
   <requires>

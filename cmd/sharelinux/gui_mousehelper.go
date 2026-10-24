@@ -44,7 +44,7 @@ func (g *gui) mouseHelperGroup() *adw.PreferencesGroup {
 
 	pair := adw.NewActionRow()
 	pair.SetTitle("Pair with this Mac...")
-	pair.SetSubtitle("Needs OSS Mouse Helper running on the Mac, with its pairing window open")
+	pair.SetSubtitle("Needs sharelinux Mouse Helper running on the Mac, with its pairing window open")
 	pair.AddSuffix(gtk.NewImageFromIconName("go-next-symbolic"))
 	pair.SetActivatable(true)
 	pair.ConnectActivated(func() { g.pairHelperDialog(h.refresh) })
@@ -89,7 +89,7 @@ func (h *helperGroup) apply(macs []pairedMac, err error) {
 
 func (h *helperGroup) confirmRemove(mac pairedMac) {
 	dialog := adw.NewAlertDialog("Remove "+mac.Name+"?",
-		"This computer stops using the mouse helper on that Mac. The Mac keeps this computer in its own list until you remove it there, in OSS Mouse Helper's pairing window.")
+		"This computer stops using the mouse helper on that Mac. The Mac keeps this computer in its own list until you remove it there, in sharelinux Mouse Helper's pairing window.")
 	dialog.AddResponse("cancel", "Cancel")
 	dialog.AddResponse("remove", "Remove")
 	dialog.SetResponseAppearance("remove", adw.ResponseDestructive)
@@ -212,7 +212,7 @@ func (p *pairDialog) build() {
 		row.ConnectEntryActivated(p.begin)
 	}
 	form := page(
-		wrapLabel("On the Mac, open the OSS Mouse Helper menu and choose Pair a Linux device. Then start here. The Mac shows a six-digit code and so will this computer.", "dim-label"),
+		wrapLabel("On the Mac, open the sharelinux Mouse Helper menu and choose Pair a Linux device. Then start here. The Mac shows a six-digit code and so will this computer.", "dim-label"),
 		list, p.problem, p.start)
 
 	// 2. waiting for the Mac

@@ -92,7 +92,7 @@ final class ResourcesTests: XCTestCase {
         let template = try String(contentsOf: root.appendingPathComponent("Resources/io.github.sharelinux.mousehelper.plist"), encoding: .utf8)
         XCTAssertEqual(template.components(separatedBy: "__APP_EXECUTABLE__").count - 1, 1, "the placeholder appears once, not in the comment")
         for exe in [
-            "/Users/Plain Name/Applications/OSS Mouse Helper.app/Contents/MacOS/MouseHelper",
+            "/Users/Plain Name/Applications/sharelinux Mouse Helper.app/Contents/MacOS/MouseHelper",
             "/Users/a&b|c/App/MouseHelper", "/Users/back\\slash\\1/x", "/Users/<angle>/x", "/Users/$HOME`id`/x", "/Users/it's \"q\"/x",
             "/Users/dash--dash/x", "/Users/a&amp;b/x",
         ] {

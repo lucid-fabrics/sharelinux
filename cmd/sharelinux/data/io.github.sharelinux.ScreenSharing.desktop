@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=Screen Sharing
+Name=sharelinux
 Comment=View and control the screen of a Mac
 Exec=sharelinux %u
 Icon=io.github.sharelinux.ScreenSharing

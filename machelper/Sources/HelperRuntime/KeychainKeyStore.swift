@@ -150,7 +150,7 @@ public final class KeychainKeyStore: KeyStore {
         var raw = Data(Array(key.rawRepresentation))
         defer { raw.wipe() }
         try add(
-            service: Self.identityService, account: Self.identityAccount, label: "OSS Mouse Helper identity key",
+            service: Self.identityService, account: Self.identityAccount, label: "sharelinux Mouse Helper identity key",
             data: raw)
         macKeyCache = Self.macKey(from: raw)
         return key
@@ -253,7 +253,7 @@ public final class KeychainKeyStore: KeyStore {
         let payload = try JSONEncoder().encode(
             RevokedSet(v: 1, count: count, macs: macs.map(\.hex), mac: tag.hex))
         try delete(service: Self.revokedService, account: Self.revokedAccount)
-        try add(service: Self.revokedService, account: Self.revokedAccount, label: "OSS Mouse Helper removed devices", data: payload)
+        try add(service: Self.revokedService, account: Self.revokedAccount, label: "sharelinux Mouse Helper removed devices", data: payload)
     }
 
     private func authentic(_ data: Data, account: String, macKey: SymmetricKey, revoked: Revoked) -> PairedDevice? {
@@ -332,7 +332,7 @@ public final class KeychainKeyStore: KeyStore {
         let payload = try JSONEncoder().encode(
             Record(v: 3, name: device.name, key: account, created: created, nonce: nonce.hex, gen: count, mac: mac.hex))
         try delete(service: Self.pairedService, account: account)  // re-pairing replaces the name
-        try add(service: Self.pairedService, account: account, label: "OSS Mouse Helper: " + device.name, data: payload)
+        try add(service: Self.pairedService, account: account, label: "sharelinux Mouse Helper: " + device.name, data: payload)
     }
 
     /// Revokes the record's MAC first, then deletes the record. If the revocation cannot be written

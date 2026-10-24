@@ -1,8 +1,8 @@
-# Open Screen Sharing for Linux
+# sharelinux
 
-This is an unofficial fork of [nekohasekai/open-screen-sharing](https://github.com/nekohasekai/open-screen-sharing) that adds a Linux client for the macOS Screen Sharing server. It is a GTK 4 and libadwaita app named `sharelinux`, plus an optional small helper app for the Mac that gives games and 3D tools a real relative mouse.
+sharelinux is a Linux client for the macOS Screen Sharing server, built as a fork of [nekohasekai/open-screen-sharing](https://github.com/nekohasekai/open-screen-sharing). It is a GTK 4 and libadwaita app, plus an optional small helper app for the Mac that gives games and 3D tools a real relative mouse.
 
-All the groundwork is the upstream author's: the reverse-engineered protocol work, the Go core (`internal/rfb`, `libsharing`) and the iOS and macOS Swift apps. This fork adds the Linux client on top of that core without changing its APIs. If you want the Apple apps, go to upstream; their original README is kept below.
+All the groundwork is the upstream author's: the reverse-engineered protocol work, the Go core (`internal/rfb`, `libsharing`) and the iOS and macOS Swift apps. This fork adds the Linux client on top of that core without changing its APIs. If you want the Apple apps, go to upstream.
 
 This project is not affiliated with or endorsed by Apple or by the upstream author, and Linux support is not part of upstream. If the upstream author wants it, it will be offered there in small pieces. The license is GPLv3, the same as upstream (see [LICENSE](LICENSE)).
 
@@ -97,76 +97,9 @@ A program that already runs as your macOS user can delete and replace those Keyc
 
 Two more things to know. Restoring an old copy of your whole keychain (a backup) brings back devices you removed since then, so look at the paired list after a restore. And if the helper says its list of removed devices is damaged, or you do not trust its keys any more, choose **Reset helper keys...** in its menu: it deletes the helper's key and the list of paired devices and starts fresh, and every Linux device has to pair again. You never need Keychain Access for that.
 
-## The upstream apps (iOS and macOS)
+## The Apple apps
 
-The rest of this file is the upstream README for the Swift apps, lightly edited. Links point at upstream releases; nothing in this fork publishes them.
-
-### Installation
-
-#### iOS
-
-[![Download on the App Store](assets/readme/app-store-badge.svg)](https://apps.apple.com/us/app/open-screen-sharing/id6818992574)
-
-The App Store version is **\$1 through October 31, 2026**, then **\$2**. Your purchase supports my work.
-
-The App Store version excludes the following features due to App Store restrictions:
-
-* **Apple VNC server:** relies on background keep-alive mechanisms and a lockdown exploit.
-* **Dragging files directly from a remote Mac into other iOS/iPadOS apps:** relies on a private API.
-
-To use these features, sideload the app by adding the source to SideStore or AltStore:
-
-```
-https://github.com/nekohasekai/open-screen-sharing/releases/latest/download/altstore.json
-```
-
-Or download [OpenScreenSharing.ipa](https://github.com/nekohasekai/open-screen-sharing/releases/latest/download/OpenScreenSharing.ipa) and sideload it.
-
-#### macOS
-
-Download and install [OpenScreenSharing.pkg](https://github.com/nekohasekai/open-screen-sharing/releases/latest/download/OpenScreenSharing.pkg).
-
-#### Nightly builds
-
-You can download and install nightly builds from the [Nightly release](https://github.com/nekohasekai/open-screen-sharing/releases/tag/nightly). For AltStore or SideStore on iOS, the source URL is:
-
-```
-https://github.com/nekohasekai/open-screen-sharing/releases/download/nightly/altstore.json
-```
-
-You can also switch to the Nightly track in the App settings of the macOS app and update directly.
-
-### Features
-
-1. Compared to the original ScreenSharing.app:
-
-* Optimized for local networks
-* Optimized for public networks (runs smoothly with Tailscale P2P)
-* Fixed language switching
-* Exclusive mouse support
-* Debug HUD support
-* Interactions optimized for iOS and iPadOS
-
-2. Apple VNC server implementation on iOS and iPadOS
-
-* Requires iOS 27 (Xcode DeviceHub); no jailbreak or TrollStore required (though sideloading is obviously necessary)
-* Based on the iOS developer debugging protocol (requires [LocalDevVPN](https://apps.apple.com/app/id6755608044), or [sing-box](https://sing-box.sagernet.org) with `loopback_address`; For reference, an example of a usable configuration: [LocalDevVPN.json](examples/sing-box-loopback-example/LocalDevVPN.json))
-* It can be connected to using the native macOS ScreenSharing.app (note: due to an Apple bug, you must go to Settings > Quality and disable "Full Quality" before adding the configuration)
-* Our client is optimized for it
-
-
-### Roadmap
-
-* [x] Add support for macOS
-* [x] Add support for RDP
-* [x] Publish to iOS App Store
-* [ ] Publish to Homebrew
-* [ ] Add support for other operating systems, such as Android and Windows (Linux: see `cmd/sharelinux`)
-* [ ] Add a jailbreak version to provide numerous privilege-based improvements
-* [ ] Create a protocol extension to support high refresh rates on Mac, touch passthrough on Mac (similar to Sidecar), Smaller scaling at native quality on Mac, multi-touch support on iOS, and further protocol optimizations
-
-Given the complexity of custom protocols, we are currently focusing on improving the existing experience and expanding support based entirely on the Apple VNC protocol
-
+The iOS and macOS apps are the upstream author's work, not part of this fork. For their features, installation and releases see [nekohasekai/open-screen-sharing](https://github.com/nekohasekai/open-screen-sharing).
 
 ## License
 

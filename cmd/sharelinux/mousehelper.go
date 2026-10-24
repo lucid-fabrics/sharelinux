@@ -391,9 +391,9 @@ func pairingProblem(err error) string {
 	case errors.Is(err, machelper.ErrCancelled):
 		return ""
 	case errors.Is(err, machelper.ErrNoAnswer):
-		return "The Mac did not answer. Check the address, that OSS Mouse Helper is running on the Mac, and that its pairing window is open (menu bar icon, then Pair a Linux device)."
+		return "The Mac did not answer. Check the address, that sharelinux Mouse Helper is running on the Mac, and that its pairing window is open (menu bar icon, then Pair a Linux device)."
 	case errors.Is(err, machelper.ErrRefused):
-		return "Nothing is listening at that address. Is OSS Mouse Helper running on the Mac?"
+		return "Nothing is listening at that address. Is sharelinux Mouse Helper running on the Mac?"
 	case errors.Is(err, machelper.ErrBadAddress):
 		return "That address does not look right."
 	case errors.Is(err, machelper.ErrBadDeviceName):

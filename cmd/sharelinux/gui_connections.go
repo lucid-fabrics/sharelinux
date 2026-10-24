@@ -62,7 +62,7 @@ func newConnectionsPage(g *gui) *connectionsPage {
 
 	menu := gio.NewMenu()
 	menu.Append("Preferences", "win.preferences")
-	menu.Append("About Screen Sharing", "win.about")
+	menu.Append("About sharelinux", "win.about")
 	menu.Append("Quit", "win.quit")
 	menuButton := gtk.NewMenuButton()
 	menuButton.SetIconName("open-menu-symbolic")

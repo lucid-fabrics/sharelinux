@@ -1,4 +1,4 @@
-# OSS Mouse Helper (Mac)
+# sharelinux Mouse Helper (Mac)
 
 A small menu bar app for the Mac that lets a paired Linux computer move the Mac's mouse with real, relative motion while you control the Mac from the Linux Screen Sharing viewer in Exclusive mode.
 
@@ -25,17 +25,17 @@ You need macOS 13 or later and the Xcode command line tools (`xcode-select --ins
    scripts/bundle.sh
    ```
 
-   This makes `build/OSS Mouse Helper.app` (signed ad hoc, no developer account) and a LaunchAgent file next to it. It installs nothing, launches nothing and asks for no permission.
+   This makes `build/sharelinux Mouse Helper.app` (signed ad hoc, no developer account) and a LaunchAgent file next to it. It installs nothing, launches nothing and asks for no permission.
 
-2. Put the app where it will live: copy it to `~/Applications/OSS Mouse Helper.app`. That is the path the LaunchAgent file was filled in for.
+2. Put the app where it will live: copy it to `~/Applications/sharelinux Mouse Helper.app`. That is the path the LaunchAgent file was filled in for.
 
    ```
-   mkdir -p ~/Applications && cp -R "build/OSS Mouse Helper.app" ~/Applications/
+   mkdir -p ~/Applications && cp -R "build/sharelinux Mouse Helper.app" ~/Applications/
    ```
 
-3. Open it once (`open "$HOME/Applications/OSS Mouse Helper.app"`). A pointer icon appears in the menu bar. If your menu bar is crowded the icon can hide behind the notch; the always-on-top badge and the shortcut below work without it.
+3. Open it once (`open "$HOME/Applications/sharelinux Mouse Helper.app"`). A pointer icon appears in the menu bar. If your menu bar is crowded the icon can hide behind the notch; the always-on-top badge and the shortcut below work without it.
 
-4. Give it Accessibility access. In its menu choose **Request Accessibility access...**, then in System Settings, Privacy & Security, Accessibility, switch **OSS Mouse Helper** on. Nothing asks for this by itself. Because the build is signed ad hoc, macOS treats every rebuild as a new program and asks again: approve it only right after you rebuilt the helper yourself.
+4. Give it Accessibility access. In its menu choose **Request Accessibility access...**, then in System Settings, Privacy & Security, Accessibility, switch **sharelinux Mouse Helper** on. Nothing asks for this by itself. Because the build is signed ad hoc, macOS treats every rebuild as a new program and asks again: approve it only right after you rebuilt the helper yourself.
 
    **Keychain prompts after a rebuild.** For the same reason macOS may ask whether the new build may use the helper's items in your login Keychain. Click **Allow**, not **Always Allow**, and only right after a rebuild you did yourself. If the prompt shows up at any other time, click **Deny** and treat it as an alarm: something other than your rebuild is asking for the helper's keys.
 
@@ -49,7 +49,7 @@ You need macOS 13 or later and the Xcode command line tools (`xcode-select --ins
      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.github.sharelinux.mousehelper.plist
      ```
 
-     If you moved the app, make the file again with `scripts/fill-launchagent.sh Resources/io.github.sharelinux.mousehelper.plist "/full/path/to/OSS Mouse Helper.app/Contents/MacOS/MouseHelper" ~/Library/LaunchAgents/io.github.sharelinux.mousehelper.plist`.
+     If you moved the app, make the file again with `scripts/fill-launchagent.sh Resources/io.github.sharelinux.mousehelper.plist "/full/path/to/sharelinux Mouse Helper.app/Contents/MacOS/MouseHelper" ~/Library/LaunchAgents/io.github.sharelinux.mousehelper.plist`.
 
 6. Pair the Linux computer. At the Mac choose **Pair a Linux device...** (the window stays open for 2 minutes). On the Linux computer open Preferences, Keyboard, Mouse helper, and choose Pair with this Mac. Both screens show the same six digits. Check that they match, then click **Confirm** at the Mac. Nobody can confirm for you: there is no default button, a click in the first second is ignored, and a window covering the dialog switches Confirm off. If macOS asks whether the app may accept incoming connections, allow it (it listens on UDP port 5961).
 
@@ -100,8 +100,8 @@ Do these in order.
 5. **Delete the app and what it kept on disk** (no secrets or trust in the files; they hold handshake timestamps, the pairing failure counter and two remembered fingerprints):
 
    ```
-   rm -rf "$HOME/Applications/OSS Mouse Helper.app"
-   rm -rf "$HOME/Library/Application Support/OSS Mouse Helper"
+   rm -rf "$HOME/Applications/sharelinux Mouse Helper.app"
+   rm -rf "$HOME/Library/Application Support/sharelinux Mouse Helper"
    defaults delete io.github.sharelinux.mousehelper
    rm -f "$HOME/Library/Preferences/io.github.sharelinux.mousehelper.plist"
    ```

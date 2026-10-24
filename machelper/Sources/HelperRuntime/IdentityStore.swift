@@ -22,7 +22,7 @@ public final class IdentityStore {
 
     public static func defaultDirectory() -> URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("OSS Mouse Helper", isDirectory: true)
+            .appendingPathComponent("sharelinux Mouse Helper", isDirectory: true)
     }
 
     private var keyURL: URL { dir.appendingPathComponent("identity.key") }

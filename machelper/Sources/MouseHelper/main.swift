@@ -8,7 +8,7 @@ import PairingUI
 import UserNotifications
 import os
 
-// OSS Mouse Helper: menu bar app that posts relative mouse motion for a paired
+// sharelinux Mouse Helper: menu bar app that posts relative mouse motion for a paired
 // Linux client while a Screen Sharing session from the same address is live
 // (design sections 2 and 3).
 //
@@ -185,7 +185,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func apply(_ s: RuntimeState) {
         state = s
         let name = s.injecting ? "cursorarrow.click.2" : "cursorarrow"
-        statusItem.button?.image = NSImage(systemSymbolName: name, accessibilityDescription: "OSS Mouse Helper")
+        statusItem.button?.image = NSImage(systemSymbolName: name, accessibilityDescription: "sharelinux Mouse Helper")
         statusItem.button?.alphaValue = s.allowRawMouse ? 1.0 : 0.5
         badge.update(text: s.badgeText)
         helperMenu.update(menuEntries(for: s))

@@ -20,7 +20,7 @@ import (
 // project whose protocol code it reuses.
 const applicationID = "io.github.sharelinux.ScreenSharing"
 
-const windowName = "Screen Sharing"
+const windowName = "sharelinux"
 
 // gui is the one application window and everything that hangs off it.
 type gui struct {

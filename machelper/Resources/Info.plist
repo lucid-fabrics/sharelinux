@@ -5,9 +5,9 @@
 	<key>CFBundleIdentifier</key>
 	<string>io.github.sharelinux.mousehelper</string>
 	<key>CFBundleName</key>
-	<string>OSS Mouse Helper</string>
+	<string>sharelinux Mouse Helper</string>
 	<key>CFBundleDisplayName</key>
-	<string>OSS Mouse Helper</string>
+	<string>sharelinux Mouse Helper</string>
 	<key>CFBundleExecutable</key>
 	<string>MouseHelper</string>
 	<key>CFBundlePackageType</key>
