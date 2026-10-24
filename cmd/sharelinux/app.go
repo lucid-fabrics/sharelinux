@@ -3,6 +3,7 @@ package main
 import (
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -104,6 +105,16 @@ func (a *app) videoMode() videoMode {
 		return parseVideoMode(a.opts.Video)
 	}
 	return parseVideoMode(a.preferences().Video)
+}
+
+// soundWanted says whether a connection asks the Mac for its sound: the environment turns it off,
+// then the flag, then the preference (which settings.apply has put into the options).
+func (a *app) soundWanted(opts *options) bool {
+	switch strings.ToLower(os.Getenv("SHARELINUX_SOUND")) {
+	case "off", "0", "false", "no":
+		return false
+	}
+	return opts == nil || !opts.NoSound
 }
 
 // videoCapabilities probes the decoders once. SHARELINUX_VAAPI_DEVICE names the

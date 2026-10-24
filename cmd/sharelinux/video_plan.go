@@ -18,6 +18,9 @@ import (
 // stays nil where there is no decoder code.
 var videoProbe func(device string) videoCaps
 
+// soundDecoderAvailable says whether this build can decode the Mac's sound. The Linux build sets it.
+var soundDecoderAvailable func() bool
+
 // serverHasVideo reports whether the Mac offers the media stream: the same two
 // client messages the Swift apps check before they ask for High Performance: the
 // media stream (0x1c) and the display configuration (0x1d).
@@ -123,6 +126,9 @@ type videoCaps struct {
 	// HEVC444x10VAAPI and HEVC444x10Software say whether a decoder really decoded a tiny
 	// HEVC 4:4:4 10-bit stream, the profile of HDR video.
 	HEVC444x10VAAPI, HEVC444x10Software bool
+	// HEVC444x8VAAPI and HEVC444x8Software say the same for a 4:4:4 8-bit stream, the picture the
+	// Mac sends in standard range when it is offered.
+	HEVC444x8VAAPI, HEVC444x8Software bool
 	// Device is the VA-API node that was probed, Driver what the driver calls itself.
 	Device, Driver string
 	// Error says why VA-API is missing, when it is.
@@ -187,6 +193,12 @@ type videoPlan struct {
 	// take such a stream; Kinds minus them still decode the 4:2:0 one.
 	HDR      bool
 	HDRKinds []decoderKind
+	// Chroma444 is set when the offer asks for HEVC 4:4:4 8-bit too. Kinds444 are the decoders that
+	// take such a stream.
+	Chroma444 bool
+	Kinds444  []decoderKind
+	// Sound is set when the offer asks for the Mac's sound.
+	Sound bool
 }
 
 func (p videoPlan) enabled() bool { return len(p.Kinds) > 0 }
@@ -256,14 +268,57 @@ func (p videoPlan) withHDR(mode videoMode, caps videoCaps) videoPlan {
 	return p
 }
 
+// with444 adds 4:4:4 8-bit to a plan: standard range video keeps the full resolution of the colors,
+// which is what fine colored text and thin lines need. The Mac sends it whenever the offer allows.
+// Only the GPU decoder is trusted with it, and only when it decoded a probe stream of the profile: a
+// 4:4:4 picture has twice the samples of a 4:2:0 one, which the CPU of this machine may not keep up
+// with. A plan whose codec is not HEVC, or whose machine has no such GPU decoder, stays as it is.
+func (p videoPlan) with444(mode videoMode, caps videoCaps) videoPlan {
+	if !p.enabled() || p.Codec != media.CodecHEVC {
+		return p
+	}
+	if !caps.HEVC444x8VAAPI || mode == videoSoftware || !slices.Contains(p.Kinds, decoderVAAPI) {
+		return p
+	}
+	p.Chroma444 = true
+	p.Kinds444 = []decoderKind{decoderVAAPI}
+	p.Offer.PixelFormats |= media.PixelFormat444FullRange
+	return p
+}
+
+// without444 takes 4:4:4 8-bit out of the offer again, for a machine whose GPU decoder failed on it.
+func (p videoPlan) without444() videoPlan {
+	p.Chroma444 = false
+	p.Kinds444 = nil
+	p.Offer.PixelFormats &^= media.PixelFormat444FullRange
+	return p
+}
+
+// withSound asks the Mac for its sound as well: the offer stops being receive-only. It does nothing
+// where the sound is off or this machine has no AAC decoder.
+func (p videoPlan) withSound(wanted, decoder bool) videoPlan {
+	if !p.enabled() || !wanted || !decoder {
+		return p
+	}
+	p.Sound = true
+	p.Offer.Audio = true
+	return p
+}
+
 // kindsFor are the decoders to try for a stream, best first: HDR video only goes to the ones
-// that handle 4:4:4 10-bit.
+// that handle 4:4:4 10-bit, and 4:4:4 8-bit to the ones that handle that.
 func (p videoPlan) kindsFor(color media.Color) []decoderKind {
-	if !is444TenBit(color) {
+	var allowed []decoderKind
+	switch {
+	case is444TenBit(color):
+		allowed = p.HDRKinds
+	case is444EightBit(color):
+		allowed = p.Kinds444
+	default:
 		return p.Kinds
 	}
-	kinds := make([]decoderKind, 0, len(p.HDRKinds))
-	for _, kind := range p.HDRKinds {
+	kinds := make([]decoderKind, 0, len(allowed))
+	for _, kind := range allowed {
 		if slices.Contains(p.Kinds, kind) {
 			kinds = append(kinds, kind)
 		}
@@ -285,6 +340,7 @@ func (p videoPlan) withoutKind(kind decoderKind) videoPlan {
 	kept := drop(p.Kinds)
 	p.Kinds = kept
 	p.HDRKinds = drop(p.HDRKinds)
+	p.Kinds444 = drop(p.Kinds444)
 	if len(kept) == 0 {
 		p.Reason = kind.String() + " decoding failed"
 	}
@@ -305,7 +361,9 @@ const (
 )
 
 // decoderPixelRate is what the first decoder of the plan can keep up with, given the threads
-// software decoding may use.
+// software decoding may use. A plan that offers 4:4:4 8-bit counts every picture twice, as it has
+// twice the samples of a 4:2:0 one: the Mac then picks a lower frame rate for a display that is too
+// big for the GPU at 4:4:4.
 func (p videoPlan) decoderPixelRate(threads int) int64 {
 	if !p.enabled() {
 		return 0
@@ -316,6 +374,9 @@ func (p videoPlan) decoderPixelRate(threads int) int64 {
 		first = p.HDRKinds[0]
 	}
 	if first == decoderVAAPI {
+		if p.Chroma444 && !p.HDR {
+			return rateVAAPI / 2
+		}
 		return rateVAAPI
 	}
 	return rateSoftwareThread * int64(max(1, min(threads, softwareThreads)))
@@ -353,6 +414,9 @@ type videoStats struct {
 	// Age is how old a picture was, from its first packet to being drawn.
 	AgeAvg, AgeLast time.Duration
 	Width, Height   int
+	// Sound is the Mac's sound, when the stream carries it (SoundOn).
+	Sound   soundStats
+	SoundOn bool
 }
 
 // applyVideoRows changes a stats card for a running video stream: the Codec row
@@ -372,11 +436,23 @@ func applyVideoRows(rows []statRow, v videoStats) []statRow {
 				statRow{"Output", v.Output.String()},
 				statRow{"Dropped", fmt.Sprint(v.Dropped)},
 			)
+			if v.SoundOn {
+				out = append(out, statRow{"Sound", soundRow(v.Sound)})
+			}
 			continue
 		}
 		out = append(out, row)
 	}
 	return out
+}
+
+// soundRow is the stats card's Sound row: the delay from the network to the speakers, and the gaps
+// and drops so far.
+func soundRow(s soundStats) string {
+	if s.Muted {
+		return "Muted"
+	}
+	return fmt.Sprintf("%.0f ms, %d gaps, %d dropped", float64(s.Delay())/float64(time.Millisecond), s.Counters.Underruns, s.Counters.Dropped)
 }
 
 func formatMillis(d time.Duration) string {

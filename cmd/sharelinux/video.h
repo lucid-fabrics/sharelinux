@@ -42,6 +42,8 @@ typedef struct {
 	char error[192];      // why VA-API is missing, empty when it works
 	gboolean vaapi_444_10;    // VA-API decoded the HEVC 4:4:4 10-bit probe stream
 	gboolean software_444_10; // libavcodec decoded it in software
+	gboolean vaapi_444_8;     // VA-API decoded the HEVC 4:4:4 8-bit probe stream
+	gboolean software_444_8;  // libavcodec decoded it in software
 } OssVideoProbe;
 
 // oss_video_probe opens VA-API on device (NULL: the first render node) and
@@ -52,6 +54,10 @@ void oss_video_probe(OssVideoProbe *out, const char *device);
 // parameter sets, on each decoder and fills vaapi_444_10 and software_444_10. Call it after
 // oss_video_probe, which tells whether VA-API opens at all.
 void oss_video_probe_hdr(OssVideoProbe *out, const char *device, const guint8 *stream, gsize length);
+
+// oss_video_probe_444 does the same for stream, a tiny HEVC 4:4:4 8-bit keyframe, and fills vaapi_444_8 and
+// software_444_8.
+void oss_video_probe_444(OssVideoProbe *out, const char *device, const guint8 *stream, gsize length);
 
 // OssColor is what the stream's sequence header says about its colors.
 typedef struct {

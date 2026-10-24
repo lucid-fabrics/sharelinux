@@ -36,6 +36,8 @@ type videoSession struct {
 	gaveUp bool
 	policy restartPolicy
 	retry  coreglib.SourceHandle
+	// no444 is set when the GPU could not decode a 4:4:4 stream: the rest of the session asks for 4:2:0 only.
+	no444 bool
 	// hold is set after the stream ended: the widget keeps its last picture and the
 	// tiles wait for the Mac's next update.
 	hold        bool
@@ -135,6 +137,10 @@ func (v *sessionView) startVideo() {
 	if v.hdr {
 		plan = plan.withHDR(app.videoMode(), caps)
 	}
+	if !vid.no444 {
+		plan = plan.with444(app.videoMode(), caps)
+	}
+	plan = plan.withSound(app.soundWanted(&v.live.req.opts), soundDecoderAvailable != nil && soundDecoderAvailable())
 	if !plan.enabled() {
 		app.logger.Info("video", "plan", "tiles", "reason", plan.Reason)
 		vid.gaveUp = true
@@ -156,11 +162,12 @@ func (v *sessionView) startVideo() {
 	}
 	app.logger.Info("video", "renderer", renderer.Name, "gl", renderer.GL, "accelerated", renderer.Accelerated, "dmabuf", v.screen.dmabuf)
 	stream := newVideoStream(app.logger, plan, caps.Device, videoThreads(), v.screen, keyframe)
+	stream.setMuted(v.muted)
 	vid.stream = stream
 	vid.changes = 0
 	vid.heard = heardWatch{}
 	app.logger.Info("video", "plan", "stream", "codec", codecName(plan.Codec), "decoders", decoderNames(plan.Kinds), "device", caps.Device, "driver", caps.Driver,
-		"hdr", plan.HDR, "hdr-decoders", decoderNames(plan.HDRKinds))
+		"hdr", plan.HDR, "hdr-decoders", decoderNames(plan.HDRKinds), "chroma444", plan.Chroma444, "sound", plan.Sound)
 	vid.do(func() {
 		err := client.StartMediaStream(plan.Offer, stream)
 		if err != nil {
@@ -265,6 +272,13 @@ func (v *sessionView) pollVideo() {
 			"decode_ms", float64(stats.DecodeAvg.Microseconds())/1000, "decode_max_ms", float64(stats.DecodeMax.Microseconds())/1000,
 			"age_ms", float64(stats.AgeAvg.Microseconds())/1000, "size", fmt.Sprintf("%dx%d", stats.Width, stats.Height),
 			"quiet_ms", pulse.QuietFor.Milliseconds(), "heard_ms", pulse.HeardFor.Milliseconds(), "reports", v.videoReports())
+		if stats.SoundOn {
+			c := stats.Sound.Counters
+			v.g.app.logger.Info("sound stats", "received", c.Received, "played", c.Played, "dropped", c.Dropped, "discarded", c.Discarded,
+				"lost", c.Lost, "underruns", c.Underruns, "silence", c.Silence, "depth", c.Depth, "max_depth", c.MaxDepth,
+				"device_ms", float64(stats.Sound.Device.Microseconds())/1000, "delay_ms", float64(stats.Sound.Delay().Microseconds())/1000,
+				"muted", stats.Sound.Muted)
+		}
 	}
 }
 
@@ -283,6 +297,17 @@ func (v *sessionView) handleVideoEvent(stream *videoStream, event videoEvent) {
 		logger.Info("video", "state", "decoder changed", "reason", event.Text)
 	case videoFailed:
 		logger.Warn("video", "state", "failed", "reason", event.Text)
+		if event.Without444 && vid.plan.Chroma444 && !vid.no444 {
+			// The GPU could not decode full resolution colors: ask for 4:2:0 instead of giving up.
+			vid.no444 = true
+			logger.Info("video", "state", "restarting", "reason", "no 4:4:4 decoding, asking for 4:2:0")
+			v.leaveVideo()
+			v.closeVideo()
+			client := v.client
+			vid.do(func() { _ = client.StopMediaStream() })
+			v.retryVideoAfter(videoSettle)
+			return
+		}
 		v.giveUpVideo("Video is not available here: " + event.Text)
 	case videoStopped:
 		kind := classifyStop(event.Err)

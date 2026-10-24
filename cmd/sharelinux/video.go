@@ -33,6 +33,12 @@ import (
 //go:embed hdr_probe.hevc
 var hdrProbeStream []byte
 
+// chroma444ProbeStream is the same for HEVC 4:4:4 8-bit, the profile of standard range video at full
+// chroma resolution.
+//
+//go:embed chroma444_probe.hevc
+var chroma444ProbeStream []byte
+
 func init() {
 	videoProbe = probeVideo
 	hdrEnvironment = probeHDREnvironment
@@ -46,6 +52,7 @@ func probeVideo(device string) videoCaps {
 	defer C.free(unsafe.Pointer(cDevice))
 	C.oss_video_probe(&probe, cDevice)
 	C.oss_video_probe_hdr(&probe, cDevice, (*C.guint8)(unsafe.Pointer(&hdrProbeStream[0])), C.gsize(len(hdrProbeStream)))
+	C.oss_video_probe_444(&probe, cDevice, (*C.guint8)(unsafe.Pointer(&chroma444ProbeStream[0])), C.gsize(len(chroma444ProbeStream)))
 	caps := videoCaps{
 		HEVCVAAPI:    probe.vaapi[C.OSS_VIDEO_HEVC] != 0,
 		HEVCSoftware: probe.software[C.OSS_VIDEO_HEVC] != 0,
@@ -54,6 +61,8 @@ func probeVideo(device string) videoCaps {
 
 		HEVC444x10VAAPI:    probe.vaapi_444_10 != 0,
 		HEVC444x10Software: probe.software_444_10 != 0,
+		HEVC444x8VAAPI:     probe.vaapi_444_8 != 0,
+		HEVC444x8Software:  probe.software_444_8 != 0,
 		Device:             C.GoString(&probe.device[0]),
 		Driver:             C.GoString(&probe.driver[0]),
 		Error:              C.GoString(&probe.error[0]),
@@ -388,6 +397,9 @@ type videoEvent struct {
 	Kind videoEventKind
 	Err  error
 	Text string
+	// Without444 is set on a failure that asking for 4:2:0 instead may cure: the stream was 4:4:4
+	// and no decoder took it.
+	Without444 bool
 }
 
 // videoStream is one run of the media stream: the sink the core delivers into, a
@@ -395,11 +407,13 @@ type videoEvent struct {
 type videoStream struct {
 	logger *slog.Logger
 	plan   videoPlan
-	// hdr is whether the offer asked for HDR; it never changes, so the core's goroutine may read it.
-	hdr     bool
-	options decoderOptions
-	queue   *unitQueue
-	out     presenter
+	// hdr and chroma444 are whether the offer asked for HDR and for 4:4:4 8-bit; they never change, so
+	// the core's goroutine may read them.
+	hdr       bool
+	chroma444 bool
+	options   decoderOptions
+	queue     *unitQueue
+	out       presenter
 	// keyframe asks the Mac for a keyframe.
 	keyframe func()
 	events   chan videoEvent
@@ -409,6 +423,13 @@ type videoStream struct {
 	tracker changeTracker
 	// lastUnit is when the core last delivered an access unit, in Unix nanoseconds.
 	lastUnit atomic.Int64
+
+	// The Mac's sound, if the offer asked for it: one player, made when the Mac announces the
+	// sound and gone with the stream.
+	audioAccess sync.Mutex
+	audio       *audioPlayer
+	audioClosed bool
+	muted       atomic.Bool
 
 	access  sync.Mutex
 	gate    keyframeGate
@@ -426,16 +447,17 @@ const queueDepth = 6
 
 func newVideoStream(logger *slog.Logger, plan videoPlan, device string, threads int, out presenter, keyframe func()) *videoStream {
 	s := &videoStream{
-		logger:   logger,
-		plan:     plan,
-		hdr:      plan.HDR,
-		options:  decoderOptions{Codec: plan.Codec, Device: device, Threads: threads},
-		queue:    newUnitQueue(queueDepth),
-		out:      out,
-		keyframe: keyframe,
-		events:   make(chan videoEvent, 16),
-		done:     make(chan struct{}),
-		gate:     keyframeGate{interval: 400 * time.Millisecond},
+		logger:    logger,
+		plan:      plan,
+		hdr:       plan.HDR,
+		chroma444: plan.Chroma444,
+		options:   decoderOptions{Codec: plan.Codec, Device: device, Threads: threads},
+		queue:     newUnitQueue(queueDepth),
+		out:       out,
+		keyframe:  keyframe,
+		events:    make(chan videoEvent, 16),
+		done:      make(chan struct{}),
+		gate:      keyframeGate{interval: 400 * time.Millisecond},
 	}
 	s.snap.Codec = plan.Codec
 	go s.run()
@@ -455,7 +477,7 @@ func (s *videoStream) VideoFormat(format media.VideoFormat) {
 		s.event(videoEvent{Kind: videoFailed, Text: "the stream is cut into " + strconv.Itoa(format.Bands) + " strips"})
 		return
 	}
-	if !streamSupported(format.Color, s.hdr) {
+	if !streamSupported(format.Color, s.hdr, s.chroma444) {
 		s.event(videoEvent{Kind: videoFailed, Text: "the stream is " + strconv.Itoa(format.Color.BitDepth) + " bit, chroma " + strconv.Itoa(format.Color.ChromaFormat)})
 		return
 	}
@@ -485,9 +507,76 @@ func (s *videoStream) VideoAccessUnit(unit media.VideoAccessUnit) {
 	}
 }
 
-func (s *videoStream) AudioFormat(media.AudioFormat) {}
+// AudioFormat is called by the core when the Mac announces its sound. It starts a player, which opens
+// the decoder and the sound device on its own goroutine, so the network goroutine is not held up.
+func (s *videoStream) AudioFormat(format media.AudioFormat) {
+	if !s.plan.Sound {
+		return
+	}
+	s.logger.Info("sound format", "format", "AAC-ELD", "rate", format.SampleRate, "channels", format.Channels, "frames", format.FramesPerPacket)
+	logger := s.logger
+	player := openSoundPlayer(format, func(err error) { logger.Warn("sound", "state", "stopped", "error", err) })
+	player.setMuted(s.muted.Load())
+	s.audioAccess.Lock()
+	old := s.audio
+	closed := s.audioClosed
+	if !closed {
+		s.audio = player
+	}
+	s.audioAccess.Unlock()
+	if old != nil {
+		old.close()
+	}
+	if closed {
+		player.close()
+	}
+}
 
-func (s *videoStream) AudioPacket(media.AudioPacket) {}
+// AudioPacket queues a packet of sound for the player. It never waits.
+func (s *videoStream) AudioPacket(packet media.AudioPacket) {
+	s.audioAccess.Lock()
+	player := s.audio
+	s.audioAccess.Unlock()
+	if player != nil {
+		player.push(audioUnit{Data: packet.Data, Lost: packet.Lost})
+	}
+}
+
+// setMuted mutes or unmutes the Mac's sound. The stream keeps running: only what is played changes.
+func (s *videoStream) setMuted(muted bool) {
+	s.muted.Store(muted)
+	s.audioAccess.Lock()
+	player := s.audio
+	s.audioAccess.Unlock()
+	if player != nil {
+		player.setMuted(muted)
+	}
+}
+
+// soundStats are the player's counters, and whether there is a player at all.
+func (s *videoStream) soundStats() (stats soundStats, ok bool) {
+	s.audioAccess.Lock()
+	player := s.audio
+	s.audioAccess.Unlock()
+	if player == nil {
+		return soundStats{}, false
+	}
+	return soundStats{Counters: player.stats(), Device: player.deviceLatency(), Muted: s.muted.Load()}, true
+}
+
+// closeAudio stops the player. A player announced later is closed on arrival.
+func (s *videoStream) closeAudio() {
+	s.audioAccess.Lock()
+	s.audioClosed = true
+	player := s.audio
+	s.audio = nil
+	s.audioAccess.Unlock()
+	if player != nil {
+		// A sound server that has stopped answering must not hold the window: the player is joined
+		// on its own goroutine.
+		go player.close()
+	}
+}
 
 func (s *videoStream) StreamStopped(err error) {
 	s.event(videoEvent{Kind: videoStopped, Err: err})
@@ -559,7 +648,7 @@ func (s *videoStream) reopen(format *media.VideoFormat) {
 	if reason == "" {
 		reason = "no decoder takes the HDR stream (HEVC 4:4:4 10-bit)"
 	}
-	s.event(videoEvent{Kind: videoFailed, Text: reason})
+	s.event(videoEvent{Kind: videoFailed, Text: reason, Without444: is444EightBit(format.Color)})
 }
 
 func (s *videoStream) decodeUnit(item videoItem) {
@@ -648,6 +737,7 @@ func (s *videoStream) stats() videoStats {
 	snap := s.snap
 	s.access.Unlock()
 	snap.Dropped = s.queue.droppedCount()
+	snap.Sound, snap.SoundOn = s.soundStats()
 	return snap
 }
 
@@ -683,6 +773,7 @@ func (s *videoStream) close() {
 	}
 	s.queue.close()
 	<-s.done
+	s.closeAudio()
 }
 
 // probeHDREnvironment asks the open display what it offers for HDR. It is called on the GTK thread.

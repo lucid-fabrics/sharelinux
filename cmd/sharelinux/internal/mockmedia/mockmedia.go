@@ -70,6 +70,17 @@ func BuiltinP3PQ() (*Clip, error) {
 	return ParseAnnexB(builtinP3)
 }
 
+//go:embed testdata/clip_444.hevc
+var builtin444 []byte
+
+// Builtin444 is a 320x192 HEVC 4:4:4 8-bit clip of 24 frames, a keyframe every 12, in BT.709 full
+// range: the standard range picture the Mac sends at full chroma resolution, coded losslessly. The
+// first 159 columns are neutral gray (128, 128, 128), the rest pure red (255, 0, 0): an edge on an
+// odd column, which 4:2:0 would blur.
+func Builtin444() (*Clip, error) {
+	return ParseAnnexB(builtin444)
+}
+
 const (
 	payloadTypeHEVC = 100
 	rtpClockRate    = 24000

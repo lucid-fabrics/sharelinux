@@ -17,6 +17,11 @@
 #define FOURCC(a, b, c, d) ((guint32)(a) | ((guint32)(b) << 8) | ((guint32)(c) << 16) | ((guint32)(d) << 24))
 #define DRM_FORMAT_NV12 FOURCC('N', 'V', '1', '2')
 #define DRM_FORMAT_Y410 FOURCC('Y', '4', '1', '0')
+#define DRM_FORMAT_AYUV FOURCC('A', 'Y', 'U', 'V')
+#define DRM_FORMAT_XYUV8888 FOURCC('X', 'Y', 'U', 'V')
+#define DRM_FORMAT_XRGB8888 FOURCC('X', 'R', '2', '4')
+#define DRM_FORMAT_XRGB2101010 FOURCC('X', 'R', '3', '0')
+#define DRM_FORMAT_ARGB2101010 FOURCC('A', 'R', '3', '0')
 
 // What is alive, process wide, for the leak checks.
 static gint live_decoders, live_frames, live_av_frames, live_fds, live_textures;
@@ -103,7 +108,7 @@ static enum AVPixelFormat hardware_format(AVCodecContext *context, const enum AV
 
 // probe_decodes decodes a stream of one keyframe with the decoder of this kind and says whether a
 // picture came out.
-static gboolean probe_decodes(OssDecoderKind kind, const char *device, const guint8 *stream, gsize length) {
+static gboolean probe_decodes(OssDecoderKind kind, const char *device, const guint8 *stream, gsize length, enum AVPixelFormat software_format) {
 	const AVCodec *codec = avcodec_find_decoder(AV_CODEC_ID_HEVC);
 	if (codec == NULL || length == 0 || length > G_MAXINT - AV_INPUT_BUFFER_PADDING_SIZE) {
 		return FALSE;
@@ -135,7 +140,7 @@ static gboolean probe_decodes(OssDecoderKind kind, const char *device, const gui
 	// The end of the stream makes the decoder give out what it holds back.
 	avcodec_send_packet(context, NULL);
 	while (avcodec_receive_frame(context, frame) >= 0) {
-		decoded = decoded || (kind == OSS_DECODER_VAAPI ? frame->format == AV_PIX_FMT_VAAPI : frame->format == AV_PIX_FMT_YUV444P10LE);
+		decoded = decoded || (kind == OSS_DECODER_VAAPI ? frame->format == AV_PIX_FMT_VAAPI : frame->format == software_format);
 		av_frame_unref(frame);
 	}
 done:
@@ -150,9 +155,17 @@ void oss_video_probe_hdr(OssVideoProbe *out, const char *device, const guint8 *s
 	if (device != NULL && device[0] == '\0') {
 		device = NULL;
 	}
-	out->software_444_10 = probe_decodes(OSS_DECODER_SOFTWARE, NULL, stream, length);
+	out->software_444_10 = probe_decodes(OSS_DECODER_SOFTWARE, NULL, stream, length, AV_PIX_FMT_YUV444P10LE);
 	// VA-API opened in oss_video_probe when the driver told its name.
-	out->vaapi_444_10 = out->driver[0] != '\0' && probe_decodes(OSS_DECODER_VAAPI, device, stream, length);
+	out->vaapi_444_10 = out->driver[0] != '\0' && probe_decodes(OSS_DECODER_VAAPI, device, stream, length, AV_PIX_FMT_YUV444P10LE);
+}
+
+void oss_video_probe_444(OssVideoProbe *out, const char *device, const guint8 *stream, gsize length) {
+	if (device != NULL && device[0] == '\0') {
+		device = NULL;
+	}
+	out->software_444_8 = probe_decodes(OSS_DECODER_SOFTWARE, NULL, stream, length, AV_PIX_FMT_YUV444P);
+	out->vaapi_444_8 = out->driver[0] != '\0' && probe_decodes(OSS_DECODER_VAAPI, device, stream, length, AV_PIX_FMT_YUV444P);
 }
 
 // ---- the decoder ---------------------------------------------------------
@@ -800,9 +813,12 @@ static gboolean hdr_gpu_wanted(int width, int height) {
 	return (gsize)width * height > HDR_GPU_PIXELS;
 }
 
-// vpp_to_p010 converts a 4:4:4 10-bit surface into a new P010 surface of the same size; it returns
-// VA_INVALID_ID when the GPU cannot.
-static VASurfaceID vpp_to_p010(VADisplay display, VASurfaceID input, int width, int height, OssColor color) {
+// vpp_convert has the GPU's video processor make a new surface of another pixel format from a 4:4:4
+// surface, of the same size and the same colors. For a YUV output (P010) the matrix, range and transfer
+// function stay what they were; for an RGB output the processor applies the matrix, and the range comes out
+// full. It returns VA_INVALID_ID when the GPU cannot.
+static VASurfaceID vpp_convert(VADisplay display, VASurfaceID input, int width, int height, OssColor color, unsigned int rt_format,
+                               guint32 va_fourcc, gboolean rgb) {
 	VASurfaceID output = VA_INVALID_ID;
 	g_mutex_lock(&vpp_lock);
 	if (vpp_prepare_locked(display, width, height)) {
@@ -811,7 +827,7 @@ static VASurfaceID vpp_to_p010(VADisplay display, VASurfaceID input, int width, 
 		attrib.type = VASurfaceAttribPixelFormat;
 		attrib.flags = VA_SURFACE_ATTRIB_SETTABLE;
 		attrib.value.type = VAGenericValueTypeInteger;
-		attrib.value.value.i = VA_FOURCC_P010;
+		attrib.value.value.i = va_fourcc;
 		VAProcPipelineParameterBuffer params;
 		memset(&params, 0, sizeof params);
 		params.surface = input;
@@ -819,12 +835,12 @@ static VASurfaceID vpp_to_p010(VADisplay display, VASurfaceID input, int width, 
 		               : color.matrix == 5 || color.matrix == 6 ? VAProcColorStandardBT601
 		                                                        : VAProcColorStandardBT709;
 		params.surface_color_standard = standard;
-		params.output_color_standard = standard;
+		params.output_color_standard = rgb ? VAProcColorStandardSRGB : standard;
 		params.input_color_properties.color_range = color.full_range ? VA_SOURCE_RANGE_FULL : VA_SOURCE_RANGE_REDUCED;
-		params.output_color_properties.color_range = params.input_color_properties.color_range;
+		params.output_color_properties.color_range = rgb ? VA_SOURCE_RANGE_FULL : params.input_color_properties.color_range;
 		VABufferID buffer = VA_INVALID_ID;
 		gboolean done = FALSE;
-		if (vaCreateSurfaces(display, VA_RT_FORMAT_YUV420_10, width, height, &output, 1, &attrib, 1) == VA_STATUS_SUCCESS) {
+		if (vaCreateSurfaces(display, rt_format, width, height, &output, 1, &attrib, 1) == VA_STATUS_SUCCESS) {
 			if (vaCreateBuffer(display, vpp.context, VAProcPipelineParameterBufferType, sizeof params, 1, &params, &buffer) ==
 			    VA_STATUS_SUCCESS) {
 				done = vaBeginPicture(display, vpp.context, output) == VA_STATUS_SUCCESS;
@@ -847,6 +863,11 @@ static VASurfaceID vpp_to_p010(VADisplay display, VASurfaceID input, int width, 
 	return output;
 }
 
+// vpp_to_p010 converts a 4:4:4 10-bit surface into a new P010 surface of the same size.
+static VASurfaceID vpp_to_p010(VADisplay display, VASurfaceID input, int width, int height, OssColor color) {
+	return vpp_convert(display, input, width, height, color, VA_RT_FORMAT_YUV420_10, VA_FOURCC_P010, FALSE);
+}
+
 #define DRM_FORMAT_P010 FOURCC('P', '0', '1', '0')
 
 // dmabuf_color_state is the state for the planes of a format GDK is given: NULL for one it is not.
@@ -857,12 +878,26 @@ static GdkColorState *dmabuf_color_state(guint32 fourcc, OssColor color) {
 	case DRM_FORMAT_Y410:
 	case DRM_FORMAT_P010:
 		return oss_yuv_color_state(color);
+	case DRM_FORMAT_XRGB8888:
+	case DRM_FORMAT_XRGB2101010:
+	case DRM_FORMAT_ARGB2101010:
+		return oss_rgb_color_state(color);
 	}
 	return NULL;
 }
 
 static int dmabuf_planes(guint32 fourcc) {
-	return fourcc == DRM_FORMAT_NV12 || fourcc == DRM_FORMAT_P010 ? 2 : fourcc == DRM_FORMAT_Y410 ? 1 : 0;
+	switch (fourcc) {
+	case DRM_FORMAT_NV12:
+	case DRM_FORMAT_P010:
+		return 2;
+	case DRM_FORMAT_Y410:
+	case DRM_FORMAT_XRGB8888:
+	case DRM_FORMAT_XRGB2101010:
+	case DRM_FORMAT_ARGB2101010:
+		return 1;
+	}
+	return 0;
 }
 
 // dmabuf_import hands an exported surface to GDK. It takes the descriptor's file descriptors whatever
@@ -930,6 +965,28 @@ static DmabufResult dmabuf_import(GdkDisplay *display, VADRMPRIMESurfaceDescript
 	return result;
 }
 
+// import_converted has the GPU make a surface of another format from the decoded one, exports it and
+// hands it to GDK. The converted surface is not kept: its buffer lives on in the descriptors the export gave.
+static DmabufResult import_converted(const OssFrame *frame, GdkDisplay *display, VADisplay va, int width, int height, unsigned int rt_format,
+                                     guint32 va_fourcc, gboolean rgb, GdkTexture **texture) {
+	VASurfaceID converted = vpp_convert(va, hardware_surface(frame->av), width, height, frame->info.color, rt_format, va_fourcc, rgb);
+	if (converted == VA_INVALID_ID) {
+		return DMABUF_UNSUPPORTED;
+	}
+	VADRMPRIMESurfaceDescriptor descriptor;
+	memset(&descriptor, 0, sizeof descriptor);
+	VAStatus exported = vaExportSurfaceHandle(va, converted, VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2,
+	                                          VA_EXPORT_SURFACE_READ_ONLY | VA_EXPORT_SURFACE_COMPOSED_LAYERS, &descriptor);
+	vaDestroySurfaces(va, &converted, 1);
+	if (exported != VA_STATUS_SUCCESS) {
+		return DMABUF_FAILED;
+	}
+	return dmabuf_import(display, &descriptor, NULL, frame->info.color, texture);
+}
+
+// rgb10_refused is set once GDK turned down a 10 bit RGB surface of the GPU's video processor.
+static gint rgb10_refused;
+
 static DmabufResult texture_from_surface(const OssFrame *frame, GdkDisplay *display, GdkTexture **texture) {
 	const AVFrame *av = frame->av;
 	VADisplay va = hardware_display(av);
@@ -942,23 +999,30 @@ static DmabufResult texture_from_surface(const OssFrame *frame, GdkDisplay *disp
 	guint32 fourcc = descriptor.num_layers == 1 ? descriptor.layers[0].drm_format : 0;
 	int width = descriptor.width, height = descriptor.height;
 	DmabufResult result = dmabuf_import(display, &descriptor, av, frame->info.color, texture);
-	if (result != DMABUF_UNSUPPORTED || fourcc != DRM_FORMAT_Y410 || !hdr_gpu_wanted(width, height)) {
+	if (result != DMABUF_UNSUPPORTED) {
 		return result;
 	}
-	// GDK has no import for the 4:4:4 surface itself: the GPU makes a P010 one of it.
-	VASurfaceID converted = vpp_to_p010(va, hardware_surface(av), width, height, frame->info.color);
-	if (converted == VA_INVALID_ID) {
-		return DMABUF_UNSUPPORTED;
+	// GDK has no import for a 4:4:4 surface itself: the GPU makes an RGB one of it, which keeps every
+	// chroma sample. HDR 4:4:4 10-bit goes to 10 bit RGB, standard range 4:4:4 8-bit to 8 bit RGB.
+	if (fourcc == DRM_FORMAT_AYUV || fourcc == DRM_FORMAT_XYUV8888) {
+		return import_converted(frame, display, va, width, height, VA_RT_FORMAT_RGB32, VA_FOURCC_BGRX, TRUE, texture);
 	}
-	memset(&descriptor, 0, sizeof descriptor);
-	VAStatus exported = vaExportSurfaceHandle(va, converted, VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2,
-	                                          VA_EXPORT_SURFACE_READ_ONLY | VA_EXPORT_SURFACE_COMPOSED_LAYERS, &descriptor);
-	// The buffer lives on in the descriptors the export gave; the surface object is no longer needed.
-	vaDestroySurfaces(va, &converted, 1);
-	if (exported != VA_STATUS_SUCCESS) {
-		return DMABUF_FAILED;
+	if (fourcc != DRM_FORMAT_Y410 || !hdr_gpu_wanted(width, height)) {
+		return result;
 	}
-	return dmabuf_import(display, &descriptor, NULL, frame->info.color, texture);
+	if (!g_atomic_int_get(&rgb10_refused)) {
+		result = import_converted(frame, display, va, width, height, VA_RT_FORMAT_RGB32_10, VA_FOURCC_A2R10G10B10, TRUE, texture);
+		if (result == DMABUF_OK) {
+			return result;
+		}
+		if (result == DMABUF_UNSUPPORTED) {
+			// The processor writes linear surfaces, and Mesa's GL offers no linear 10 bit RGB to GDK: do not
+			// make the conversion again for every picture.
+			g_atomic_int_set(&rgb10_refused, 1);
+		}
+	}
+	// Without 10 bit RGB the processor still makes P010, which has half the chroma resolution.
+	return import_converted(frame, display, va, width, height, VA_RT_FORMAT_YUV420_10, VA_FOURCC_P010, FALSE, texture);
 }
 
 typedef struct {

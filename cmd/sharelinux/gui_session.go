@@ -59,6 +59,7 @@ type sessionView struct {
 	qualityAction *gio.SimpleAction
 	statsAction   *gio.SimpleAction
 	hdrAction     *gio.SimpleAction
+	muteAction    *gio.SimpleAction
 
 	stats      *gtk.Box
 	statValues []*gtk.Label
@@ -73,9 +74,11 @@ type sessionView struct {
 	copyPulse bool
 	copyHide  coreglib.SourceHandle
 
-	mode      rfb.Mode
-	quality   rfb.Quality
-	hdr       bool
+	mode    rfb.Mode
+	quality rfb.Quality
+	hdr     bool
+	// muted is the session's choice to silence the Mac's sound; it holds across stream restarts.
+	muted     bool
 	showStats bool
 	keyboard  *keyboardLearner
 	held      map[uint32]macKey
@@ -363,6 +366,10 @@ func (v *sessionView) installActions() {
 	v.statsAction.ConnectActivate(func(*glib.Variant) { v.setStats(!v.showStats) })
 	v.actions.AddAction(v.statsAction)
 
+	v.muteAction = gio.NewSimpleActionStateful("mute", nil, glib.NewVariantBoolean(v.muted))
+	v.muteAction.ConnectActivate(func(*glib.Variant) { v.setMuted(!v.muted) })
+	v.actions.AddAction(v.muteAction)
+
 	v.hdrAction = gio.NewSimpleActionStateful("hdr", nil, glib.NewVariantBoolean(v.hdr))
 	v.hdrAction.ConnectActivate(func(*glib.Variant) { v.runCommand(commandToggleHDR) })
 	v.actions.AddAction(v.hdrAction)
@@ -408,6 +415,7 @@ func (v *sessionView) installActions() {
 	first.Append("Save a screenshot", "session.screenshot")
 	second := gio.NewMenu()
 	second.Append("Virtual display at window size", "session.virtual")
+	second.Append("Mute sound", "session.mute")
 	second.Append("HDR", "session.hdr")
 	third := gio.NewMenu()
 	third.Append("Preferences", "win.preferences")
@@ -439,6 +447,16 @@ func (v *sessionView) setQuality(quality rfb.Quality) {
 	v.qualityText.SetLabel(qualityLabel(quality))
 	v.qualityAction.SetState(glib.NewVariantString(quality.String()))
 	v.report("", v.client.SetQuality(quality))
+}
+
+// setMuted mutes the Mac's sound for this session, or plays it again. The stream keeps running.
+func (v *sessionView) setMuted(muted bool) {
+	v.muted = muted
+	v.muteAction.SetState(glib.NewVariantBoolean(muted))
+	if stream := v.vid.stream; stream != nil {
+		stream.setMuted(muted)
+	}
+	v.notify(map[bool]string{true: "Sound muted", false: "Sound on"}[muted])
 }
 
 func (v *sessionView) setStats(on bool) {

@@ -761,7 +761,7 @@ func TestStreamSupported(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := streamSupported(tt.color, tt.hdr); got != tt.want {
+			if got := streamSupported(tt.color, tt.hdr, false); got != tt.want {
 				t.Fatalf("streamSupported(%#v, %v) = %v, want %v",
 					tt.color, tt.hdr, got, tt.want)
 			}

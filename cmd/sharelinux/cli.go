@@ -40,6 +40,7 @@ type options struct {
 	Virtual      *virtualDisplay
 	HDR          bool
 	NoClipboard  bool
+	NoSound      bool
 	NoGrab       bool
 	Fullscreen   bool
 	HUD          bool
@@ -130,6 +131,7 @@ func parseArgs(args []string, output io.Writer) (*options, error) {
 	set.StringVar(&virtual, "virtual", "", "ask for a virtual display WxH[@DENSITY] in points, density 1 or 2")
 	set.BoolVar(&opts.HDR, "hdr", false, "ask for HDR video (Wayland with color management); the virtual display follows")
 	set.BoolVar(&opts.NoClipboard, "no-clipboard", false, "do not share the clipboard")
+	set.BoolVar(&opts.NoSound, "no-sound", false, "do not play the Mac's sound (it comes with the video stream); SHARELINUX_SOUND=off does the same")
 	set.BoolVar(&opts.NoGrab, "no-grab", false, "do not grab the keyboard in control mode")
 	set.BoolVar(&opts.Fullscreen, "fullscreen", false, "start fullscreen")
 	set.BoolVar(&opts.HUD, "hud", false, "start with the stats overlay on")

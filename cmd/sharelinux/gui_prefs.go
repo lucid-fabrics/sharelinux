@@ -92,6 +92,9 @@ func (g *gui) generalPage(prefs settings, change func(func(*settings))) *adw.Pre
 	sharing.Add(switchRow("Shared clipboard", "Copy on one side, paste on the other", prefs.SharedClipboard, func(on bool) {
 		change(func(s *settings) { s.SharedClipboard = on })
 	}))
+	sharing.Add(switchRow("Sound from the Mac", "Plays what the Mac plays on this computer", prefs.Sound, func(on bool) {
+		change(func(s *settings) { s.Sound = on })
+	}))
 	folder := adw.NewActionRow()
 	folder.SetTitle("Files from the Mac")
 	folder.SetSubtitle("Where files dragged out of the Mac are saved")

@@ -37,6 +37,8 @@ type settings struct {
 	// MouseHelper lets a paired Mac helper carry the locked pointer. It starts
 	// on: pairing is the person's opt-in, and a file without the key keeps it on.
 	MouseHelper bool `json:"mouse_helper"`
+	// Sound plays the Mac's sound on this computer. It starts on: a file without the key keeps it on.
+	Sound bool `json:"sound"`
 }
 
 func defaultSettings() settings {
@@ -49,6 +51,7 @@ func defaultSettings() settings {
 		VirtualSize:      virtualSizeWindow,
 		Video:            string(videoAuto),
 		MouseHelper:      true,
+		Sound:            true,
 	}
 }
 
@@ -80,6 +83,9 @@ func (s settings) apply(opts *options) {
 	}
 	if !opts.Explicit["no-clipboard"] {
 		opts.NoClipboard = !s.SharedClipboard
+	}
+	if !opts.Explicit["no-sound"] {
+		opts.NoSound = !s.Sound
 	}
 	if !opts.Explicit["hud"] {
 		opts.HUD = s.ShowStats

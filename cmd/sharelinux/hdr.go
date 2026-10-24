@@ -290,10 +290,19 @@ func is444TenBit(color media.Color) bool {
 	return color.BitDepth == 10 && color.ChromaFormat == 3
 }
 
+// is444EightBit reports whether a stream is HEVC RExt 4:4:4 8-bit, the full resolution standard range one.
+func is444EightBit(color media.Color) bool {
+	return color.BitDepth == 8 && color.ChromaFormat == 3
+}
+
 // streamSupported reports whether the viewer decodes a stream of this color description:
-// standard range 4:2:0 8-bit always, 4:4:4 10-bit when HDR was asked for.
-func streamSupported(color media.Color, hdr bool) bool {
+// standard range 4:2:0 8-bit always, 4:4:4 10-bit when HDR was asked for and 4:4:4 8-bit when the
+// offer named it.
+func streamSupported(color media.Color, hdr, chroma444 bool) bool {
 	if color.BitDepth == 8 && color.ChromaFormat == 1 {
+		return true
+	}
+	if chroma444 && is444EightBit(color) {
 		return true
 	}
 	return hdr && is444TenBit(color)
@@ -301,6 +310,9 @@ func streamSupported(color media.Color, hdr bool) bool {
 
 // streamLabel is the stats card's Codec row: HEVC 4:4:4 10-bit HDR (PQ, VA-API) for HDR video.
 func streamLabel(codec media.Codec, color media.Color, kind decoderKind) string {
+	if is444EightBit(color) {
+		return fmt.Sprintf("%s 4:4:4 (%s)", codecName(codec), kind)
+	}
 	if !is444TenBit(color) {
 		return videoLabel(codec, kind)
 	}
