@@ -60,6 +60,20 @@ func pixelNear(pixel [4]byte, r, g, b, slack int) bool {
 	return abs(int(pixel[2])-r) <= slack && abs(int(pixel[1])-g) <= slack && abs(int(pixel[0])-b) <= slack
 }
 
+// A missing GPU cannot decode 4:4:4, and the plan then keeps to 4:2:0; the software probe does not depend on the GPU.
+func TestProbe444WithoutGPU(t *testing.T) {
+	caps := probeVideo("/dev/dri/not-a-device")
+	if caps.HEVC444x8VAAPI {
+		t.Fatalf("a missing device cannot decode: %+v", caps)
+	}
+	if caps.HEVCSoftware && !caps.HEVC444x8Software {
+		t.Fatalf("the software decoder does not depend on the GPU: %+v", caps)
+	}
+	if plan := planVideo(videoAuto, caps, true).with444(videoAuto, caps); plan.Chroma444 {
+		t.Fatalf("a machine without a GPU decoder offered 4:4:4: %+v", plan)
+	}
+}
+
 // The software decoder gives the full resolution picture and the texture shows it in the stream's colors: the left
 // half is gray (128), the right half red, with the edge between them one pixel wide.
 func TestSoftwareDecodes444Clip(t *testing.T) {
