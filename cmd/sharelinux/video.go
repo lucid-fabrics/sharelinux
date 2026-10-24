@@ -120,6 +120,13 @@ func hdrGPUForTest(mode int) {
 	C.oss_video_test_hdr_gpu(C.int(mode))
 }
 
+// rgb10OutcomeForTest feeds one outcome of a 10 bit RGB picture to the refusal rule and says whether the
+// process now refuses the format. converted: the video processor made the surface. result: 0 ok,
+// 1 the display has no import for it, 2 something failed.
+func rgb10OutcomeForTest(reset, converted bool, result int) bool {
+	return C.oss_video_test_rgb10(boolToC(reset), boolToC(converted), C.int(result)) != 0
+}
+
 // videoPoolForTest is how many output surfaces of the GPU's video processor are kept for reuse.
 func videoPoolForTest() int {
 	return int(C.oss_video_test_pool())

@@ -181,6 +181,10 @@ int oss_video_test_pool_orphans(void);
 // DMA-BUFs: -1 by picture size, 0 never, 1 always.
 void oss_video_test_hdr_gpu(int mode);
 
+// oss_video_test_rgb10 feeds one outcome (processor converted or not, dmabuf result) of a 10 bit RGB
+// picture to the rule that decides whether the display refuses the format for the process; reset clears it first.
+gboolean oss_video_test_rgb10(gboolean reset, gboolean converted, int result);
+
 // oss_frame_test_texture: see video.c.
 gboolean oss_frame_test_texture(OssFrame *frame, int crop_left, int crop_top, int x, int y, OssColor expect, guint8 pixel[4],
                                 gboolean *matches);

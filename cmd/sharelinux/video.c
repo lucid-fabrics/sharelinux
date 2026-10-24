@@ -1179,19 +1179,57 @@ static DmabufResult dmabuf_import(GdkDisplay *display, VADRMPRIMESurfaceDescript
 }
 
 // import_converted has the GPU make a surface of another format from the decoded one and hands it to GDK.
+// converted, if given, says whether the processor made the surface: UNSUPPORTED without it is a processor
+// that could not (a context or surface that failed, which may pass), with it the display's own refusal.
 static DmabufResult import_converted(const OssFrame *frame, GdkDisplay *display, VADisplay va, int width, int height, unsigned int rt_format,
-                                     guint32 va_fourcc, gboolean rgb, GdkTexture **texture) {
+                                     guint32 va_fourcc, gboolean rgb, GdkTexture **texture, gboolean *converted) {
 	VADRMPRIMESurfaceDescriptor descriptor;
 	PoolSurface *pooled = NULL;
 	memset(&descriptor, 0, sizeof descriptor);
+	if (converted != NULL) {
+		*converted = FALSE;
+	}
 	if (!vpp_convert(va, hardware_surface(frame->av), width, height, frame->info.color, rt_format, va_fourcc, rgb, &descriptor, &pooled)) {
 		return DMABUF_UNSUPPORTED;
+	}
+	if (converted != NULL) {
+		*converted = TRUE;
 	}
 	return dmabuf_import(display, &descriptor, NULL, frame->info.color, pooled, texture);
 }
 
 // rgb10_refused is set once GDK turned down a 10 bit RGB surface of the GPU's video processor.
 static gint rgb10_refused;
+
+// rgb10_refusal says whether a failed 10 bit RGB picture means the display turns the format down for good:
+// only when the processor made the surface and GDK still had no import for it. A processor that could not
+// make it (the context or the surface failed) may manage the next picture, so that one only falls back.
+static gboolean rgb10_refusal(gboolean converted, DmabufResult result) {
+	return converted && result == DMABUF_UNSUPPORTED;
+}
+
+// rgb10_note remembers a refusal and drops the pooled 10 bit surfaces, which nothing will use again.
+static void rgb10_note(gboolean converted, DmabufResult result) {
+	if (!rgb10_refusal(converted, result)) {
+		return;
+	}
+	// The processor writes linear surfaces, and Mesa's GL offers no linear 10 bit RGB to GDK: do not
+	// make the conversion again for every picture.
+	g_atomic_int_set(&rgb10_refused, 1);
+	g_mutex_lock(&vpp_lock);
+	pool_drop_format_locked(VA_FOURCC_A2R10G10B10);
+	g_mutex_unlock(&vpp_lock);
+}
+
+// oss_video_test_rgb10 feeds one outcome of a 10 bit RGB picture to the refusal rule, for tests, and says
+// whether the process now refuses the format. reset clears it first.
+gboolean oss_video_test_rgb10(gboolean reset, gboolean converted, int result) {
+	if (reset) {
+		g_atomic_int_set(&rgb10_refused, 0);
+	}
+	rgb10_note(converted, (DmabufResult)result);
+	return g_atomic_int_get(&rgb10_refused) != 0;
+}
 
 static DmabufResult texture_from_surface(const OssFrame *frame, GdkDisplay *display, GdkTexture **texture) {
 	const AVFrame *av = frame->av;
@@ -1211,27 +1249,21 @@ static DmabufResult texture_from_surface(const OssFrame *frame, GdkDisplay *disp
 	// GDK has no import for a 4:4:4 surface itself: the GPU makes an RGB one of it, which keeps every
 	// chroma sample. HDR 4:4:4 10-bit goes to 10 bit RGB, standard range 4:4:4 8-bit to 8 bit RGB.
 	if (fourcc == DRM_FORMAT_AYUV || fourcc == DRM_FORMAT_XYUV8888) {
-		return import_converted(frame, display, va, width, height, VA_RT_FORMAT_RGB32, VA_FOURCC_BGRX, TRUE, texture);
+		return import_converted(frame, display, va, width, height, VA_RT_FORMAT_RGB32, VA_FOURCC_BGRX, TRUE, texture, NULL);
 	}
 	if (fourcc != DRM_FORMAT_Y410 || !hdr_gpu_wanted(width, height)) {
 		return result;
 	}
 	if (!g_atomic_int_get(&rgb10_refused)) {
-		result = import_converted(frame, display, va, width, height, VA_RT_FORMAT_RGB32_10, VA_FOURCC_A2R10G10B10, TRUE, texture);
+		gboolean converted = FALSE;
+		result = import_converted(frame, display, va, width, height, VA_RT_FORMAT_RGB32_10, VA_FOURCC_A2R10G10B10, TRUE, texture, &converted);
 		if (result == DMABUF_OK) {
 			return result;
 		}
-		if (result == DMABUF_UNSUPPORTED) {
-			// The processor writes linear surfaces, and Mesa's GL offers no linear 10 bit RGB to GDK: do not
-			// make the conversion again for every picture.
-			g_atomic_int_set(&rgb10_refused, 1);
-			g_mutex_lock(&vpp_lock);
-			pool_drop_format_locked(VA_FOURCC_A2R10G10B10);
-			g_mutex_unlock(&vpp_lock);
-		}
+		rgb10_note(converted, result);
 	}
 	// Without 10 bit RGB the processor still makes P010, which has half the chroma resolution.
-	return import_converted(frame, display, va, width, height, VA_RT_FORMAT_YUV420_10, VA_FOURCC_P010, FALSE, texture);
+	return import_converted(frame, display, va, width, height, VA_RT_FORMAT_YUV420_10, VA_FOURCC_P010, FALSE, texture, NULL);
 }
 
 typedef struct {

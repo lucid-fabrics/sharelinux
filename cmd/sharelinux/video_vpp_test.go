@@ -64,3 +64,30 @@ func TestVideoProcessorGoesWithItsDecoder(t *testing.T) {
 		t.Fatalf("video processor owner at the end is %#x", got)
 	}
 }
+
+// A 10 bit RGB picture that failed because the video processor could not make the surface (its context
+// or surface failed) falls back for that picture only; only the display's own refusal of the format, after
+// the processor made it, locks the process to P010.
+func TestRGB10RefusalNeedsTheDisplayToTurnItDown(t *testing.T) {
+	const (
+		ok          = 0
+		unsupported = 1
+		failed      = 2
+	)
+	defer rgb10OutcomeForTest(true, false, ok)
+	if rgb10OutcomeForTest(true, false, unsupported) {
+		t.Fatal("a processor that could not make the surface locked HDR to P010")
+	}
+	if rgb10OutcomeForTest(false, true, failed) {
+		t.Fatal("a failed import locked HDR to P010")
+	}
+	if rgb10OutcomeForTest(false, true, ok) {
+		t.Fatal("a good picture locked HDR to P010")
+	}
+	if !rgb10OutcomeForTest(false, true, unsupported) {
+		t.Fatal("the display's refusal of the format was not remembered")
+	}
+	if !rgb10OutcomeForTest(false, false, unsupported) {
+		t.Fatal("the refusal was forgotten by a later transient failure")
+	}
+}
