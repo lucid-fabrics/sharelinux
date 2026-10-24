@@ -283,7 +283,7 @@ func (t *transfers) drop(paths []string, x, y int) {
 			t.failDrop("Cannot drop: " + err.Error())
 			return
 		}
-		dropGesture(t.client.SendPointer, time.Sleep, x, y)
+		dropGesture(plainPointer(t.client), time.Sleep, x, y)
 		t.gesture.End()
 		destination, err := t.waitDestination(id)
 		if err != nil {
@@ -401,4 +401,10 @@ func (t *transfers) fetch(drag *rfb.RemoteDrag) {
 		}
 		t.handler.setTransfer(transferState{Name: pluralize(len(files), "item"), Phase: phaseDone, Folder: filepath.Base(directory), Percent: 100, Active: true})
 	}()
+}
+
+// plainPointer sends pointer events that carry no click count, which is what
+// hovers and the synthetic drop gesture want.
+func plainPointer(client *rfb.Client) func(x, y int, buttons uint8) error {
+	return func(x, y int, buttons uint8) error { return client.SendPointer(x, y, buttons, 0) }
 }

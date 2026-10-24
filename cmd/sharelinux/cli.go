@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/nekohasekai/open-screen-sharing/cmd/internal/ctl"
 	"github.com/nekohasekai/open-screen-sharing/internal/rfb"
 	E "github.com/sagernet/sing/common/exceptions"
 )
@@ -73,7 +72,7 @@ func (v virtualDisplay) String() string {
 
 func parseVirtual(value string) (*virtualDisplay, error) {
 	size, densityText, _ := strings.Cut(value, "@")
-	width, height, err := ctl.ParseSize(size)
+	width, height, err := parseSize(size)
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +194,7 @@ func parseArgs(args []string, output io.Writer) (*options, error) {
 		return nil, E.New("display id ", display, " is out of range")
 	}
 	opts.Display = uint32(display)
-	opts.WindowWidth, opts.WindowHeight, err = ctl.ParseSize(size)
+	opts.WindowWidth, opts.WindowHeight, err = parseSize(size)
 	if err != nil || opts.WindowWidth < 320 || opts.WindowHeight < 200 {
 		return nil, E.New("window size ", strconv.Quote(size), " must be WxH, at least 320x200")
 	}

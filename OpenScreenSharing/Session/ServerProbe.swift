@@ -26,6 +26,11 @@ nonisolated struct ProbedServer: Hashable, Sendable {
     var fingerprint: String
 }
 
+nonisolated struct LoginCheck: Sendable {
+    var supportsHighPerformance: Bool
+    var fingerprint: String
+}
+
 nonisolated enum ServerProber {
     static func probe(host: String, port: Int?, remoteProtocol: RemoteProtocol?) async -> Result<ProbedServer, SessionFailure> {
         let request = UncheckedSendable(value: LibsharingNewProbeRequest()!)
@@ -60,10 +65,10 @@ nonisolated enum ServerProber {
         }
     }
 
-    static func checkLogin(_ server: ProbedServer, credentials: SessionCredentials) async -> Result<Bool, SessionFailure> {
+    static func checkLogin(_ server: ProbedServer, credentials: SessionCredentials) async -> Result<LoginCheck, SessionFailure> {
         let request = UncheckedSendable(value: LibsharingNewProbeRequest()!)
         return await withTaskCancellationHandler {
-            await Task.detached(priority: .userInitiated) { () -> Result<Bool, SessionFailure> in
+            await Task.detached(priority: .userInitiated) { () -> Result<LoginCheck, SessionFailure> in
                 LibsharingLog.installed
                 let options = LibsharingNewSessionOptions()!
                 options.protocol = server.remoteProtocol == .rdp ? LibsharingProtocolRDP : LibsharingProtocolRFB
@@ -75,7 +80,7 @@ nonisolated enum ServerProber {
                 guard check.errorCode == LibsharingErrorNone else {
                     return .failure(failure(code: check.errorCode, message: check.errorMessage, fingerprint: check.fingerprint))
                 }
-                return .success(check.supportsHighPerformance)
+                return .success(LoginCheck(supportsHighPerformance: check.supportsHighPerformance, fingerprint: check.fingerprint))
             }.value
         } onCancel: {
             request.value.cancel()
@@ -91,6 +96,7 @@ nonisolated enum ServerProber {
         case LibsharingErrorNetwork: SessionFailure(.unreachable, message: message)
         case LibsharingErrorUnsupportedServer: SessionFailure(.unsupported, message: message)
         case LibsharingErrorCertificateChanged: SessionFailure(.certificateChanged(fingerprint: fingerprint), message: message)
+        case LibsharingErrorUnverifiedServer: SessionFailure(.unverifiedServer, message: message)
         default: SessionFailure(.other, message: message)
         }
     }

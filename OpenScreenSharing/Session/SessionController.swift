@@ -226,6 +226,8 @@ final class SessionController: Identifiable {
     @PerceptionIgnored private var pictureSize = CGSize.zero
     @PerceptionIgnored private var pictureTurns = PictureTurns.none
     @PerceptionIgnored private(set) var pointerButtons: PointerButtons = []
+    @PerceptionIgnored private var clickCount = 0
+    @PerceptionIgnored private var lastPress: (buttons: PointerButtons, position: CGPoint, time: TimeInterval)?
     @PerceptionIgnored private var pointerModifiers: Set<ModifierKey> = []
     @PerceptionIgnored private var nativeTouchIDs: Set<Int64> = []
     @PerceptionIgnored private var lastPointerMoveTime: TimeInterval = 0
@@ -271,6 +273,7 @@ final class SessionController: Identifiable {
     @PerceptionIgnored private var server: ServerAuthentication?
     @PerceptionIgnored private var probeTask: Task<Void, Never>?
     @PerceptionIgnored private var trustedFingerprint = ""
+    @PerceptionIgnored private var allowsUnverifiedLogin = false
     @PerceptionIgnored private var passwordUpdate = PasswordUpdate.keep
     @PerceptionIgnored private var usedSavedPassword = false
     @PerceptionIgnored private var device: DeviceInfo?
@@ -506,6 +509,7 @@ final class SessionController: Identifiable {
             remoteProtocol: route.remoteProtocol,
             platform: route.knownPlatform,
             trustedFingerprint: trustedFingerprint,
+            allowsUnverifiedLogin: allowsUnverifiedLogin,
             keyboardLayout: WindowsKeyboardLayout.current,
             clientName: route.remoteProtocol == .rdp || credentials.username.isEmpty ? Self.deviceName : credentials.username,
             credentials: credentials,
@@ -579,6 +583,11 @@ final class SessionController: Identifiable {
         if let computerID {
             save { try $0.setTrustedFingerprint(fingerprint, for: computerID) }
         }
+        retry()
+    }
+
+    func allowUnverifiedLogin() {
+        allowsUnverifiedLogin = true
         retry()
     }
 
@@ -783,10 +792,12 @@ final class SessionController: Identifiable {
                 hasConnected = true
                 recordConnection()
             }
-            if info.fingerprint != trustedFingerprint, let computerID {
-                save { try $0.setTrustedFingerprint(info.fingerprint, for: computerID) }
+            if !info.fingerprint.isEmpty, info.fingerprint != trustedFingerprint {
+                if let computerID {
+                    save { try $0.setTrustedFingerprint(info.fingerprint, for: computerID) }
+                }
+                trustedFingerprint = info.fingerprint
             }
-            trustedFingerprint = info.fingerprint
             pipeline.setExpectsVideo(usesHighPerformance)
             let sendsClipboard = sendChangedClipboard { [weak self] sent in
                 guard let self, !sent else { return }
@@ -1821,10 +1832,24 @@ final class SessionController: Identifiable {
     private func sendPointer(buttons: PointerButtons) {
         guard !holdsPointer else { return }
         let point = serverPoint(pointerPosition)
-        session?.sendPointer(x: Int(point.x.rounded(.down)), y: Int(point.y.rounded(.down)), buttons: buttons)
+        session?.sendPointer(x: Int(point.x.rounded(.down)), y: Int(point.y.rounded(.down)), buttons: buttons, clickCount: clickCount)
     }
 
-    func press(_ button: PointerButtons) {
+    private static let multiClickInterval: TimeInterval = 0.5
+    private static let multiClickDistance: CGFloat = 4
+
+    func press(_ button: PointerButtons, clickCount count: Int? = nil) {
+        let now = CACurrentMediaTime()
+        if let count {
+            clickCount = count
+        } else if let lastPress, lastPress.buttons == button, now - lastPress.time <= Self.multiClickInterval,
+            hypot(pointerPosition.x - lastPress.position.x, pointerPosition.y - lastPress.position.y) <= Self.multiClickDistance
+        {
+            clickCount += 1
+        } else {
+            clickCount = 1
+        }
+        lastPress = (button, pointerPosition, now)
         beginPointerInput()
         setButtons(pointerButtons.union(button))
     }
@@ -2664,8 +2689,8 @@ nonisolated final class SessionEventSink: @unchecked Sendable {
             output: { [weak self, pipeline] frame in
                 guard let self, !self.isDetached else { return }
                 let timing = frame.timing
-                pipeline.setVideoFrame(frame) { [weak self] picture, held in
-                    self?.pictureReady(picture, arrival: timing.arrival, hold: timing.libraryHold + held, decode: timing.decode)
+                pipeline.setVideoFrame(frame) { [weak self] picture in
+                    self?.pictureReady(picture, arrival: timing.arrival, capture: timing.capture, composed: timing.composed)
                 }
             },
             failure: { [weak self] in self?.session?.requestKeyframe() },
@@ -2712,9 +2737,9 @@ nonisolated final class SessionEventSink: @unchecked Sendable {
         }
     }
 
-    private func pictureReady(_ picture: Int, arrival: CFTimeInterval, hold: TimeInterval, decode: TimeInterval) {
+    private func pictureReady(_ picture: Int, arrival: CFTimeInterval, capture: CFTimeInterval?, composed: CFTimeInterval?) {
         guard debugInfo.isRunning.load(ordering: .relaxed) else { return }
-        onMain { $0.debugInfo.pictureReady(picture, arrival: arrival, hold: hold, decode: decode) }
+        onMain { $0.debugInfo.pictureReady(picture, arrival: arrival, capture: capture, composed: composed) }
     }
 
     func sessionPhaseChanged(_ phase: SessionPhase) {
@@ -2735,12 +2760,11 @@ nonisolated final class SessionEventSink: @unchecked Sendable {
         return framebuffer
     }
 
-    func sessionFramebufferUpdated(_ dirtyRect: CGRect) {
+    func sessionFramebufferUpdated(_ dirtyRect: CGRect, arrival: CFTimeInterval) {
         guard !isDetached else { return }
-        let arrival = CACurrentMediaTime()
         do {
             if let picture = try pipeline.updateFramebuffer(dirtyRect) {
-                pictureReady(picture, arrival: arrival, hold: 0, decode: 0)
+                pictureReady(picture, arrival: arrival, capture: nil, composed: nil)
             }
         } catch {
             onMain { $0.drawingFailed(error) }

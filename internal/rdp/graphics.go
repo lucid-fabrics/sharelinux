@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/nekohasekai/open-screen-sharing/internal/bgra"
 	"github.com/nekohasekai/open-screen-sharing/internal/rdp/codec/bulk"
@@ -138,6 +139,8 @@ type graphics struct {
 	fragmenting  bool
 	inFrame      bool
 	dirty        image.Rectangle
+	received     time.Time
+	frameStart   time.Time
 }
 
 func newGraphics(events Events, logger *slog.Logger, width, height int, client *Client) *graphics {
@@ -205,17 +208,6 @@ func (g *graphics) attach(framebuffer *bgra.Image) error {
 	return nil
 }
 
-func (g *graphics) snapshot() *bgra.Image {
-	g.framebufferAccess.Lock()
-	defer g.framebufferAccess.Unlock()
-	if g.framebuffer == nil {
-		return nil
-	}
-	frame := bgra.New(g.framebuffer.Width, g.framebuffer.Height)
-	frame.Copy(image.Point{}, g.framebuffer, g.framebuffer.Bounds())
-	return frame
-}
-
 func (g *graphics) close() {
 	g.framebufferAccess.Lock()
 	g.framebuffer = nil
@@ -233,14 +225,18 @@ func (g *graphics) dropUpdate(err error) {
 func (g *graphics) beginFrame() {
 	g.endFrame()
 	g.inFrame = true
+	g.frameStart = g.received
 }
 
 func (g *graphics) endFrame() {
-	dirty := g.dirty
+	dirty, start := g.dirty, g.received
+	if g.inFrame {
+		start = g.frameStart
+	}
 	g.dirty, g.inFrame = image.Rectangle{}, false
 	if !dirty.Empty() {
 		g.frames.Add(1)
-		g.events.FramebufferUpdated(dirty)
+		g.events.FramebufferUpdated(Update{Rectangle: dirty, Hold: time.Since(start)})
 	}
 }
 
@@ -287,6 +283,7 @@ func (g *graphics) palettePointer() *[paletteSize]uint32 {
 }
 
 func (g *graphics) processFastPathUpdates(data []byte) error {
+	g.received = time.Now()
 	r := reader{data: data}
 	for r.remaining() != 0 {
 		header := r.u8()
@@ -375,6 +372,7 @@ func (g *graphics) processFastPathUpdate(code byte, data []byte) error {
 }
 
 func (g *graphics) processSlowPathUpdate(data []byte) error {
+	g.received = time.Now()
 	r := reader{data: data}
 	updateType := r.u16()
 	if r.err != nil {

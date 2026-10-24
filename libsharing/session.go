@@ -7,6 +7,7 @@ import (
 	"math"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,7 +28,7 @@ type SessionHandler interface {
 
 	OnFramebufferResize(width int32, height int32)
 
-	OnFramebufferUpdate(x int32, y int32, width int32, height int32)
+	OnFramebufferUpdate(update *FramebufferUpdate)
 	OnCursorImage(cursor *CursorImage)
 	OnCursorPosition(x int32, y int32)
 	OnDisplays(displays *DisplayList)
@@ -112,7 +113,7 @@ type remote interface {
 	SetVirtualDisplay(width, height int, density float64, maximumWidth, maximumHeight int) error
 	RequestRefresh() error
 
-	SendPointer(x, y int, buttons uint8) error
+	SendPointer(x, y int, buttons uint8, clickCount int) error
 	SendScroll(x, y int, deltaX, deltaY float64) error
 	SendKey(keysym uint32, down bool) error
 	SendKeyCode(keyCode uint16, keyboardType int32, keysym uint32, down bool) error
@@ -206,7 +207,7 @@ func (s *Session) Connect() error {
 			return connected, nil
 		}
 	default:
-		options, err := rfbOptions(&s.options)
+		options, err := rfbOptions(&s.options, s.handler.OnServerCertificate)
 		if err != nil {
 			return err
 		}
@@ -229,12 +230,21 @@ func (s *Session) Connect() error {
 	return nil
 }
 
-func rfbOptions(o *SessionOptions) (rfb.Options, error) {
+func rfbOptions(o *SessionOptions, seen func(fingerprint string)) (rfb.Options, error) {
+	trusted := o.TrustedFingerprint
 	options := rfb.Options{
-		Address:             net.JoinHostPort(o.Host, strconv.Itoa(int(o.Port))),
-		Username:            o.Username,
-		Password:            o.Password,
-		ClientName:          o.ClientName,
+		Address:              net.JoinHostPort(o.Host, strconv.Itoa(int(o.Port))),
+		Username:             o.Username,
+		Password:             o.Password,
+		ClientName:           o.ClientName,
+		AllowUnverifiedLogin: o.AllowUnverifiedLogin,
+		VerifyServerKey: func(fingerprint string) error {
+			seen(fingerprint)
+			if trusted != "" && !strings.EqualFold(fingerprint, trusted) {
+				return E.Extend(rfb.ErrServerKeyChanged, "fingerprint ", fingerprint, " is not the trusted ", trusted)
+			}
+			return nil
+		},
 		Quality:             rfb.Quality(o.Quality),
 		Mode:                rfb.Mode(o.Mode),
 		Clipboard:           o.SharedClipboard,
@@ -246,7 +256,7 @@ func rfbOptions(o *SessionOptions) (rfb.Options, error) {
 	}
 	switch o.LoginType {
 	case LoginAccount:
-		options.SecurityTypes = rfb.SecurityAccount
+		options.SecurityTypes = rfb.AccountSecurityTypes(o.Host)
 	case LoginRequestControl:
 		options.SecurityTypes = rfb.SecurityAskPermission
 	case LoginRequestObserve:
@@ -377,7 +387,7 @@ func classifyError(err error) (int32, string) {
 		return ErrorUnsupportedServer, err.Error()
 	case errors.Is(err, rfb.ErrUnverifiedServer):
 		return ErrorUnverifiedServer, err.Error()
-	case errors.Is(err, rdp.ErrCertificateChanged):
+	case E.IsMulti(err, rdp.ErrCertificateChanged, rfb.ErrServerKeyChanged):
 		return ErrorCertificateChanged, err.Error()
 	case E.IsMulti(err, rdp.ErrSessionEnded, rdp.ErrSessionReplaced):
 		return ErrorSessionEnded, err.Error()
@@ -497,12 +507,12 @@ func rfbClient(connected remote) (*rfb.Client, error) {
 	return client.Client, nil
 }
 
-func (s *Session) SendPointer(x int32, y int32, buttons int32) error {
+func (s *Session) SendPointer(x int32, y int32, buttons int32, clickCount int32) error {
 	client, err := s.connectedRemote()
 	if err != nil {
 		return err
 	}
-	return client.SendPointer(int(x), int(y), uint8(buttons))
+	return client.SendPointer(int(x), int(y), uint8(buttons), int(clickCount))
 }
 
 func (s *Session) SendScroll(x int32, y int32, deltaX float64, deltaY float64) error {
@@ -765,7 +775,7 @@ func (e *sessionEvents) FramebufferUpdated(update rfb.Update) {
 		e.session.pictureEncoding.Store(int64(largest.Encoding) + 1)
 	}
 	dirty := update.Dirty
-	e.session.handler.OnFramebufferUpdate(int32(dirty.X), int32(dirty.Y), int32(dirty.Width), int32(dirty.Height))
+	e.session.handler.OnFramebufferUpdate(&FramebufferUpdate{X: int32(dirty.X), Y: int32(dirty.Y), Width: int32(dirty.Width), Height: int32(dirty.Height)})
 }
 
 func (e *sessionEvents) CursorChanged(cursor *rfb.Cursor) {

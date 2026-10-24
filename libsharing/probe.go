@@ -97,7 +97,8 @@ func (r *ProbeRequest) CheckLogin(options *SessionOptions) *LoginCheck {
 		code, message := classifyError(err)
 		return &LoginCheck{Fingerprint: fingerprint, ErrorCode: code, ErrorMessage: message}
 	}
-	rfbOptions, err := rfbOptions(options)
+	var fingerprint string
+	rfbOptions, err := rfbOptions(options, func(seen string) { fingerprint = seen })
 	if err != nil {
 		code, message := classifyError(err)
 		return &LoginCheck{ErrorCode: code, ErrorMessage: message}
@@ -110,7 +111,7 @@ func (r *ProbeRequest) CheckLogin(options *SessionOptions) *LoginCheck {
 	info, err := rfb.CheckLogin(r.ctx, rfbOptions)
 	if err != nil {
 		code, message := classifyError(err)
-		return &LoginCheck{ErrorCode: code, ErrorMessage: message}
+		return &LoginCheck{Fingerprint: fingerprint, ErrorCode: code, ErrorMessage: message}
 	}
-	return &LoginCheck{SupportsHighPerformance: newServerInfo(info, options.Platform).SupportsHighPerformance}
+	return &LoginCheck{SupportsHighPerformance: newServerInfo(info, options.Platform).SupportsHighPerformance, Fingerprint: fingerprint}
 }

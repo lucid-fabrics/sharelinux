@@ -118,6 +118,8 @@ type SessionOptions struct {
 
 	TrustedFingerprint string
 
+	AllowUnverifiedLogin bool
+
 	KeyboardLayout int32
 
 	Audio bool
@@ -276,6 +278,14 @@ func newDisplayList(layout *rfb.DisplayLayout) *DisplayList {
 		list.Current = AllDisplays
 	}
 	return list
+}
+
+type FramebufferUpdate struct {
+	X               int32
+	Y               int32
+	Width           int32
+	Height          int32
+	HoldNanoseconds int64
 }
 
 type CursorImage struct {

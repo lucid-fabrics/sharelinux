@@ -62,7 +62,7 @@ func (c *Client) releaseInput() error {
 	return nil
 }
 
-func (c *Client) SendPointer(x, y int, buttons uint8) error {
+func (c *Client) SendPointer(x, y int, buttons uint8, clickCount int) error {
 	c.access.Lock()
 	if c.mode == ModeObserve {
 		c.access.Unlock()
@@ -73,7 +73,7 @@ func (c *Client) SendPointer(x, y int, buttons uint8) error {
 	wireX, wireY := c.wirePositionLocked(x, y)
 	c.access.Unlock()
 	if !motion && c.info.Accepts(0x10) {
-		message, err := encryptedPointerMessage(c.wrapKey, c.wireButtons(buttons), wireX, wireY)
+		message, err := encryptedPointerMessage(c.wrapKey, c.wireButtons(buttons), clickCount, wireX, wireY)
 		if err != nil {
 			return err
 		}
@@ -89,9 +89,19 @@ func (c *Client) SendPointer(x, y int, buttons uint8) error {
 // sub_100036680 0x10003df9c..0x10003dfd4, 0x10003f51c..0x10003f528 and 0x10003e5fc..0x10003e61c,
 // sub_100041964 0x100041f3c..0x100041f48, sub_1000415bc 0x100041644..0x100041650,
 // sub_100007630 0x100007740..0x100007764).
-func encryptedPointerMessage(key [16]byte, buttons uint8, x, y int) ([]byte, error) {
+// It takes the click count from bits 1-3 of message byte 1 when bit 0 is set. Otherwise
+// ScreensharingAgent counts a press at the previous event's exact position as the next click
+// whenever the times in block bytes 6-9 of the press and the last release sum to at most the
+// double-click interval, so zero there makes every press at an unmoved pointer a multi-click
+// (screensharingd sub_100036680 0x10003dfd8..0x10003dfe4, 0x10003f3fc..0x10003f40c and
+// 0x10003f548; ScreensharingAgent 756.36.5.2, UUID DA1CD9BA-97A1-3758-B425-00FA34B428A3,
+// sub_100024c78 0x100025050..0x1000250fc).
+func encryptedPointerMessage(key [16]byte, buttons uint8, clickCount, x, y int) ([]byte, error) {
 	message := make([]byte, 18)
 	message[0] = 0x10
+	if clickCount > 0 {
+		message[1] = 1 | byte(min(clickCount, 7))<<1
+	}
 	block := message[2:]
 	block[10] = 0xff
 	block[11] = buttons

@@ -32,7 +32,6 @@ type Options struct {
 	KeepAlive          bool
 	DisableUDP         bool
 	GraphicsCache      string
-	DialTimeout        time.Duration
 	Logger             *slog.Logger
 }
 
@@ -42,11 +41,16 @@ type AudioFormat struct {
 	BitsPerSample int
 }
 
+type Update struct {
+	Rectangle image.Rectangle
+	Hold      time.Duration
+}
+
 type Events interface {
 	StateChanged(State)
 	InfoChanged(Info)
 	ResizeFramebuffer(width, height int) (*bgra.Image, error)
-	FramebufferUpdated(rectangle image.Rectangle)
+	FramebufferUpdated(Update)
 	CursorChanged(*bgra.Cursor)
 	CursorMoved(x, y int)
 	ClipboardReceived(string)
@@ -86,12 +90,14 @@ type Touch struct {
 }
 
 type Statistics struct {
-	BytesRead    uint64
-	BytesWritten uint64
-	Frames       uint64
-	Encoding     string
-	RoundTrip    time.Duration
-	UDP          bool
+	BytesRead       uint64
+	BytesWritten    uint64
+	Frames          uint64
+	Encoding        string
+	RoundTrip       time.Duration
+	UDP             bool
+	PacketsExpected uint64
+	PacketsMissed   uint64
 }
 
 const (

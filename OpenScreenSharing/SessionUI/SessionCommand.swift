@@ -268,7 +268,7 @@ struct SessionCommandView: View {
         case .lock:
             Button { controller.sendChord(.sideButton) } label: { label }
         case .clipboard:
-            items { ClipboardMenuItems(controller: controller) }
+            items(isOn: controller.clipboardSharing) { ClipboardMenuItems(controller: controller) }
         case .debugInfo:
             toggle(isOn: Binding(get: { settings.showsDebugInfo }, set: { settings.showsDebugInfo = $0 }))
         }
@@ -288,13 +288,14 @@ struct SessionCommandView: View {
     }
 
     @ViewBuilder
-    private func items(@ViewBuilder _ items: () -> some View) -> some View {
+    private func items(isOn: Bool = false, @ViewBuilder _ items: () -> some View) -> some View {
         if style.isBar {
             Menu {
                 items()
             } label: {
                 label
             }
+            .barItemSelected(style == .barItem && isOn)
         } else {
             items()
         }
@@ -307,12 +308,18 @@ struct BarToggleStyle: ToggleStyle {
             configuration.isOn.toggle()
         } label: {
             configuration.label
-                .background {
-                    if configuration.isOn {
-                        Circle().fill(Color.accentColor).padding(3)
-                    }
-                }
         }
-        .accessibilityAddTraits(configuration.isOn ? .isSelected : [])
+        .barItemSelected(configuration.isOn)
+    }
+}
+
+extension View {
+    func barItemSelected(_ isSelected: Bool) -> some View {
+        background {
+            if isSelected {
+                Circle().fill(Color.accentColor).padding(3)
+            }
+        }
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }

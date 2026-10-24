@@ -775,7 +775,7 @@ final class RemoteScreenNSView: NSView, RemoteScreen {
             controller.movePointer(to: imagePoint(for: location))
         }
         clickedButtons.insert(button)
-        controller.press(button)
+        controller.press(button, clickCount: event.clickCount)
     }
 
 

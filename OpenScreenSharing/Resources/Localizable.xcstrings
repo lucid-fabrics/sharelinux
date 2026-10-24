@@ -8015,28 +8015,6 @@
         }
       }
     },
-    "Automatic unlock was turned off. Stop sharing and check the device passcode before trying again." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Automatic unlock was turned off. Stop sharing and check the device passcode before trying again."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "自动解锁已关闭。请先停止共享，检查设备锁屏密码，再重试。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "自動解鎖已關閉。請先停止共享，檢查裝置鎖定畫面密碼，再重試。"
-          }
-        }
-      }
-    },
     "Available" : {
       "localizations" : {
         "ar" : {
@@ -8337,6 +8315,310 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "可使用"
+          }
+        }
+      }
+    },
+    "Back" : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "السابق"
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Назад"
+          }
+        },
+        "bn" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "পূর্ববর্তী"
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enrere"
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zpět"
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tilbage"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zurück"
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Πίσω"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Atrás"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Atrás"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Takaisin"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retour"
+          }
+        },
+        "fr-CA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retour"
+          }
+        },
+        "gu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "પાછળ"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "הקודם"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पीछे"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Natrag"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vissza"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kembali"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Indietro"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "戻る"
+          }
+        },
+        "kk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Артқа"
+          }
+        },
+        "kn" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ಹಿಂದೆ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이전"
+          }
+        },
+        "lt" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Atgal"
+          }
+        },
+        "ml" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "മുമ്പത്തേത്"
+          }
+        },
+        "mr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "मागे"
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kembali"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tilbake"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vorige"
+          }
+        },
+        "or" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ପୂର୍ବବର୍ତ୍ତୀ"
+          }
+        },
+        "pa" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ਪਿੱਛੇ"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wstecz"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voltar"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voltar"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Înapoi"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Назад"
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Späť"
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nazaj"
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tillbaka"
+          }
+        },
+        "ta" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "முந்தையது"
+          }
+        },
+        "te" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "మునుపటి"
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ย้อนกลับ"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Geri"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Назад"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "پچھلا"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quay lại"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上一步"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上一步"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上一步"
           }
         }
       }
@@ -26577,6 +26859,310 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "無法登入「%@」"
+          }
+        }
+      }
+    },
+    "Couldn’t Verify “%@”" : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "تعذر التحقق من \"%@\""
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Неуспешна проверка на „%@“"
+          }
+        },
+        "bn" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@” যাচাই করা যায়নি"
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No s’ha pogut verificar “%@”."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nepodařilo se ověřit „%@“"
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kunne ikke bekræfte “%@”"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "„%@“ konnte nicht überprüft werden"
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Δεν ήταν δυνατή η επαλήθευση του «%@»"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se ha podido verificar “%@”"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo verificar “%@”"
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kohdetta “%@” ei voitu vahvistaa"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de vérifier « %@ »"
+          }
+        },
+        "fr-CA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de vérifier « %@ »"
+          }
+        },
+        "gu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@” ચકાસી શકાયું નહીં"
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "לא ניתן לאמת את ״%@״"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@” को सत्यापित नहीं किया जा सका"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nije moguće provjeriti računalo „%@“"
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nem sikerült ellenőrizni: „%@”"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tidak Dapat Memverifikasi “%@”"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossibile verificare “%@”"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@”を確認できませんでした"
+          }
+        },
+        "kk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "«%@» компьютерін тексеру мүмкін болмады"
+          }
+        },
+        "kn" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@” ಕಂಪ್ಯೂಟರ್ ಅನ್ನು ಪರಿಶೀಲಿಸಲು ಸಾಧ್ಯವಾಗಲಿಲ್ಲ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "‘%@’을(를) 확인할 수 없음"
+          }
+        },
+        "lt" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nepavyko patikrinti „%@”"
+          }
+        },
+        "ml" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "‘%@’ പരിശോധിക്കാനായില്ല"
+          }
+        },
+        "mr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "‘%@’ ची पडताळणी करता आली नाही"
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tidak Dapat Mengesahkan “%@”"
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kunne ikke bekrefte «%@»"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kon '%@' niet verifiëren"
+          }
+        },
+        "or" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@” ଯାଞ୍ଚ କରାଯାଇପାରିଲା ନାହିଁ"
+          }
+        },
+        "pa" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@” ਦੀ ਪੁਸ਼ਟੀ ਨਹੀਂ ਕੀਤੀ ਜਾ ਸਕੀ"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nie udało się zweryfikować „%@”"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível verificar “%@”"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível verificar “%@”"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verificarea „%@” nu a reușit"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось проверить «%@»"
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nepodarilo sa overiť „%@“"
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Računalnika »%@« ni bilo mogoče preveriti"
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Det gick inte att verifiera “%@”"
+          }
+        },
+        "ta" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@”-ஐச் சரிபார்க்க முடியவில்லை"
+          }
+        },
+        "te" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@”ను ధృవీకరించడం సాధ్యపడలేదు"
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ไม่สามารถยืนยัน “%@” ได้"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@” Doğrulanamadı"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не вдалося перевірити «%@»"
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“⁨%@⁩” کی تصدیق نہیں کی جا سکی"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Không thể xác minh “%@”"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法驗證「%@」"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法验证“%@”"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法驗證「%@」"
           }
         }
       }
@@ -101526,6 +102112,310 @@
         }
       }
     },
+    "This computer only offers an older sign-in method that can’t confirm its identity. If another device is pretending to be this computer, it could see your password." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "لا يوفر هذا الكمبيوتر سوى طريقة تسجيل دخول قديمة لا يمكنها تأكيد هويته. إذا كان جهاز آخر ينتحل صفة هذا الكمبيوتر، فقد يتمكن من رؤية كلمة السر."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Този компютър предлага само по-стар начин за влизане, който не може да потвърди самоличността му. Ако друго устройство се представя за този компютър, то може да види паролата ви."
+          }
+        },
+        "bn" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "এই কম্পিউটারে শুধু একটি পুরোনো সাইন-ইন পদ্ধতি আছে, যা এর পরিচয় নিশ্চিত করতে পারে না। অন্য কোনো ডিভাইস এই কম্পিউটার সেজে থাকলে, সেটি আপনার পাসওয়ার্ড দেখতে পারে।"
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aquest ordinador només ofereix un mètode d’inici de sessió antic que no pot confirmar la seva identitat. Si un altre dispositiu s’està fent passar per aquest ordinador, podria veure la teva contrasenya."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tento počítač nabízí jen starší způsob přihlášení, který nedokáže potvrdit jeho identitu. Pokud se za tento počítač vydává jiné zařízení, mohlo by vidět vaše heslo."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Denne computer tilbyder kun en ældre loginmetode, som ikke kan bekræfte dens identitet. Hvis en anden enhed udgiver sig for at være denne computer, kan den se din adgangskode."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieser Computer bietet nur eine ältere Anmeldemethode an, die seine Identität nicht bestätigen kann. Wenn sich ein anderes Gerät als dieser Computer ausgibt, könnte es dein Passwort sehen."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Αυτός ο υπολογιστής προσφέρει μόνο μια παλαιότερη μέθοδο εισόδου που δεν μπορεί να επιβεβαιώσει την ταυτότητά του. Αν κάποια άλλη συσκευή προσποιείται ότι είναι αυτός ο υπολογιστής, θα μπορούσε να δει το συνθηματικό σας."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este ordenador solo ofrece un método de inicio de sesión antiguo que no puede confirmar su identidad. Si otro dispositivo se está haciendo pasar por este ordenador, podría ver tu contraseña."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta computadora solo ofrece un método de inicio de sesión antiguo que no puede confirmar su identidad. Si otro dispositivo se está haciendo pasar por esta computadora, podría ver tu contraseña."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tämä tietokone tarjoaa vain vanhemman kirjautumistavan, joka ei voi vahvistaa sen henkilöllisyyttä. Jos jokin toinen laite esiintyy tänä tietokoneena, se voi nähdä salasanasi."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cet ordinateur ne propose qu’une ancienne méthode d’authentification qui ne permet pas de confirmer son identité. Si un autre appareil se fait passer pour cet ordinateur, il pourrait voir votre mot de passe."
+          }
+        },
+        "fr-CA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cet ordinateur ne propose qu’une ancienne méthode d’authentification qui ne permet pas de confirmer son identité. Si un autre appareil se fait passer pour cet ordinateur, il pourrait voir votre mot de passe."
+          }
+        },
+        "gu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "આ કંપ્યૂટર માત્ર એક જૂની સાઇન-ઇન પદ્ધતિ આપે છે, જે તેની ઓળખની પુષ્ટિ કરી શકતી નથી. જો બીજું કોઈ ડિવાઇસ આ કંપ્યૂટર હોવાનો ઢોંગ કરી રહ્યું હોય, તો તે તમારો પાસવર્ડ જોઈ શકે છે."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "המחשב הזה מציע רק שיטת כניסה ישנה שלא יכולה לאשר את זהותו. אם מכשיר אחר מתחזה למחשב הזה, הוא עלול לראות את הסיסמה שלך."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "यह कंप्यूटर सिर्फ़ एक पुराना साइन-इन तरीका देता है, जो इसकी पहचान की पुष्टि नहीं कर सकता। अगर कोई दूसरा डिवाइस इस कंप्यूटर होने का दिखावा कर रहा है, तो वह आपका पासवर्ड देख सकता है।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ovo računalo nudi samo stariji način prijave koji ne može potvrditi njegov identitet. Ako se neki drugi uređaj predstavlja kao ovo računalo, mogao bi vidjeti vašu lozinku."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ez a számítógép csak egy régebbi bejelentkezési módot kínál, amely nem tudja megerősíteni a személyazonosságát. Ha egy másik eszköz ennek a számítógépnek adja ki magát, láthatja a jelszavát."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Komputer ini hanya menawarkan metode masuk lama yang tidak dapat memastikan identitasnya. Jika perangkat lain sedang menyamar sebagai komputer ini, perangkat tersebut dapat melihat kata sandi Anda."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Questo computer offre solo un metodo di accesso meno recente che non può confermarne l’identità. Se un altro dispositivo si sta fingendo questo computer, potrebbe vedere la tua password."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このコンピュータは、身元を確認できない古いサインイン方法にのみ対応しています。別のデバイスがこのコンピュータになりすましている場合、パスワードが見られる可能性があります。"
+          }
+        },
+        "kk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Бұл компьютер өз жеке басын растай алмайтын ескі кіру әдісін ғана ұсынады. Егер басқа құрылғы өзін осы компьютер ретінде көрсетсе, ол құпиясөзіңізді көре алады."
+          }
+        },
+        "kn" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ಈ ಕಂಪ್ಯೂಟರ್ ತನ್ನ ಗುರುತನ್ನು ಖಚಿತಪಡಿಸಲು ಸಾಧ್ಯವಾಗದ ಹಳೆಯ ಸೈನ್ ಇನ್ ವಿಧಾನವನ್ನು ಮಾತ್ರ ನೀಡುತ್ತದೆ. ಬೇರೊಂದು ಸಾಧನವು ಈ ಕಂಪ್ಯೂಟರ್‌ನಂತೆ ನಟಿಸುತ್ತಿದ್ದರೆ, ಅದು ನಿಮ್ಮ ಪಾಸ್‌ವರ್ಡ್ ಅನ್ನು ನೋಡಬಹುದು."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 컴퓨터는 신원을 확인할 수 없는 이전 로그인 방식만 제공합니다. 다른 기기가 이 컴퓨터로 위장하고 있다면 암호를 볼 수 있습니다."
+          }
+        },
+        "lt" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Šis kompiuteris siūlo tik senesnį prisijungimo būdą, kuris negali patvirtinti jo tapatybės. Jei kitas įrenginys apsimeta šiuo kompiuteriu, jis galėtų pamatyti jūsų slaptažodį."
+          }
+        },
+        "ml" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ഈ കമ്പ്യൂട്ടർ അതിന്റെ ഐഡന്റിറ്റി സ്ഥിരീകരിക്കാൻ കഴിയാത്ത ഒരു പഴയ സൈൻ ഇൻ രീതി മാത്രമാണ് നൽകുന്നത്. മറ്റൊരു ഡിവൈസ് ഈ കമ്പ്യൂട്ടറായി നടിക്കുന്നുണ്ടെങ്കിൽ, അതിന് നിങ്ങളുടെ പാസ്‌വേഡ് കാണാനാകും."
+          }
+        },
+        "mr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "हा कॉंप्युटर फक्त एक जुनी साइन-इन पद्धत देतो, जी त्याच्या ओळखीची पुष्टी करू शकत नाही. दुसरे डिव्हाइस हा कॉंप्युटर असल्याचे भासवत असल्यास, ते तुमचा पासवर्ड पाहू शकते."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Komputer ini hanya menawarkan kaedah daftar masuk lama yang tidak dapat mengesahkan identitinya. Jika peranti lain menyamar sebagai komputer ini, peranti itu boleh melihat kata laluan anda."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Denne datamaskinen tilbyr bare en eldre påloggingsmetode som ikke kan bekrefte identiteten dens. Hvis en annen enhet utgir seg for å være denne datamaskinen, kan den se passordet ditt."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deze computer biedt alleen een oudere inlogmethode die zijn identiteit niet kan bevestigen. Als een ander apparaat zich voordoet als deze computer, kan het je wachtwoord zien."
+          }
+        },
+        "or" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ଏହି କମ୍ପ୍ୟୁଟର୍ କେବଳ ଏକ ପୁରୁଣା ସାଇନ୍ ଇନ୍ ପଦ୍ଧତି ପ୍ରଦାନ କରେ, ଯାହା ଏହାର ପରିଚୟ ନିଶ୍ଚିତ କରିପାରେ ନାହିଁ। ଯଦି ଅନ୍ୟ ଏକ ଡିଭାଇସ୍ ଏହି କମ୍ପ୍ୟୁଟର୍ ବୋଲି ଛଳନା କରୁଛି, ତେବେ ଏହା ଆପଣଙ୍କ ପାସ୍‌ୱର୍ଡ୍ ଦେଖିପାରେ।"
+          }
+        },
+        "pa" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ਇਹ ਕੰਪਿਊਟਰ ਸਿਰਫ਼ ਇੱਕ ਪੁਰਾਣਾ ਸਾਈਨ-ਇਨ ਤਰੀਕਾ ਦਿੰਦਾ ਹੈ, ਜੋ ਇਸਦੀ ਪਛਾਣ ਦੀ ਪੁਸ਼ਟੀ ਨਹੀਂ ਕਰ ਸਕਦਾ। ਜੇਕਰ ਕੋਈ ਹੋਰ ਡਿਵਾਈਸ ਇਹ ਕੰਪਿਊਟਰ ਹੋਣ ਦਾ ਦਿਖਾਵਾ ਕਰ ਰਿਹਾ ਹੈ, ਤਾਂ ਉਹ ਤੁਹਾਡਾ ਪਾਸਵਰਡ ਦੇਖ ਸਕਦਾ ਹੈ।"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ten komputer oferuje tylko starszą metodę logowania, która nie może potwierdzić jego tożsamości. Jeśli inne urządzenie podszywa się pod ten komputer, może zobaczyć Twoje hasło."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este computador oferece apenas um método de início de sessão antigo que não consegue confirmar a identidade dele. Se outro dispositivo estiver se passando por este computador, ele poderá ver sua senha."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este computador oferece apenas um método de início de sessão antigo que não consegue confirmar a sua identidade. Se outro dispositivo estiver a fazer-se passar por este computador, poderá ver a sua palavra‑passe."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Acest computer oferă doar o metodă de autentificare mai veche, care nu îi poate confirma identitatea. Dacă alt dispozitiv se dă drept acest computer, vă poate vedea parola."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Этот компьютер предлагает только устаревший способ входа, который не может подтвердить его подлинность. Если другое устройство выдает себя за этот компьютер, оно может увидеть ваш пароль."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tento počítač ponúka iba starší spôsob prihlásenia, ktorý nedokáže potvrdiť jeho identitu. Ak sa za tento počítač vydáva iné zariadenie, mohlo by vidieť vaše heslo."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ta računalnik ponuja le starejši način vpisa, ki ne more potrditi njegove identitete. Če se za ta računalnik izdaja druga naprava, bi lahko videla vaše geslo."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Den här datorn erbjuder bara en äldre inloggningsmetod som inte kan bekräfta dess identitet. Om en annan enhet utger sig för att vara den här datorn kan den se ditt lösenord."
+          }
+        },
+        "ta" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "இந்தக் கம்ப்யூட்டர் தனது அடையாளத்தை உறுதிப்படுத்த முடியாத பழைய உள்நுழைவு முறையை மட்டுமே வழங்குகிறது. வேறொரு சாதனம் இந்தக் கம்ப்யூட்டர் போல நடித்தால், அது உங்கள் கடவுச்சொல்லைப் பார்க்கக்கூடும்."
+          }
+        },
+        "te" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ఈ కంప్యూటర్ తన గుర్తింపును నిర్ధారించలేని పాత సైన్ ఇన్ పద్ధతిని మాత్రమే అందిస్తోంది. మరొక డివైజ్ ఈ కంప్యూటర్‌లా నటిస్తుంటే, అది మీ పాస్‌వర్డ్‌ను చూడగలదు."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "คอมพิวเตอร์เครื่องนี้มีเพียงวิธีลงชื่อเข้าแบบเก่าที่ยืนยันตัวตนของคอมพิวเตอร์ไม่ได้ หากมีอุปกรณ์อื่นแอบอ้างเป็นคอมพิวเตอร์เครื่องนี้ อุปกรณ์นั้นอาจเห็นรหัสผ่านของคุณ"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bu bilgisayar yalnızca kimliğini doğrulayamayan eski bir giriş yöntemi sunuyor. Başka bir aygıt kendini bu bilgisayar gibi gösteriyorsa parolanızı görebilir."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Цей компʼютер пропонує лише старіший спосіб входу, який не може підтвердити його справжність. Якщо інший пристрій видає себе за цей компʼютер, він може побачити ваш пароль."
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "یہ کمپیوٹر صرف ایک پرانا سائن اِن طریقہ پیش کرتا ہے جو اس کی شناخت کی تصدیق نہیں کر سکتا۔ اگر کوئی دوسری ڈیوائس خود کو یہ کمپیوٹر ظاہر کر رہی ہو تو وہ آپ کا پاس ورڈ دیکھ سکتی ہے۔"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Máy tính này chỉ cung cấp phương thức đăng nhập cũ không thể xác nhận danh tính của máy. Nếu một thiết bị khác đang giả mạo máy tính này, thiết bị đó có thể xem được mật khẩu của bạn."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這部電腦只提供無法確認其身分的舊登入方式。如果有其他裝置正在冒充這部電腦，它可能會看到你的密碼。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台电脑只提供一种无法确认其身份的旧登录方式。如果有其他设备正在冒充这台电脑，它可能会看到你的密码。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這部電腦只提供無法確認其身分的舊登入方式。如果有其他裝置正在冒充這部電腦，它可能會看到你的密碼。"
+          }
+        }
+      }
+    },
     "This device can’t read or write the file" : {
       "localizations" : {
         "ar" : {
@@ -101826,6 +102716,310 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "此裝置無法讀取或寫入該檔案"
+          }
+        }
+      }
+    },
+    "This is expected after the Mac is reinstalled. If it wasn’t, another device may be pretending to be this Mac." : {
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "هذا متوقع بعد إعادة تثبيت الـ Mac. إذا لم تتم إعادة تثبيته، فقد يكون جهاز آخر ينتحل صفة هذا الـ Mac."
+          }
+        },
+        "bg" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Това е очаквано след преинсталиране на Mac компютъра. Ако не е бил преинсталиран, друго устройство може да се представя за този Mac."
+          }
+        },
+        "bn" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac পুনরায় ইনস্টল করার পরে এমনটা হওয়াই স্বাভাবিক। যদি তা না হয়ে থাকে, তাহলে হয়তো অন্য কোনো ডিভাইস এই Mac সেজে রয়েছে।"
+          }
+        },
+        "ca" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "És normal després de reinstal·lar el Mac. Si no s’ha reinstal·lat, és possible que un altre dispositiu s’estigui fent passar per aquest Mac."
+          }
+        },
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "To je očekávané po přeinstalování Macu. Pokud k tomu nedošlo, může se za tento Mac vydávat jiné zařízení."
+          }
+        },
+        "da" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Det er forventet, efter at Mac’en er blevet geninstalleret. Hvis den ikke er det, kan en anden enhed udgive sig for at være denne Mac."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das ist normal, nachdem der Mac neu installiert wurde. Wenn das nicht der Fall ist, gibt sich möglicherweise ein anderes Gerät als dieser Mac aus."
+          }
+        },
+        "el" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Αυτό είναι αναμενόμενο μετά από επανεγκατάσταση του Mac. Αν δεν έγινε επανεγκατάσταση, ίσως κάποια άλλη συσκευή προσποιείται ότι είναι αυτό το Mac."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Es normal después de reinstalar el Mac. Si no se ha reinstalado, es posible que otro dispositivo se esté haciendo pasar por este Mac."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Es normal después de reinstalar la Mac. Si no se reinstaló, es posible que otro dispositivo se esté haciendo pasar por esta Mac."
+          }
+        },
+        "fi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tämä on odotettavaa, kun Mac on asennettu uudelleen. Jos niin ei ole tehty, jokin toinen laite saattaa esiintyä tänä Macina."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "C’est normal après une réinstallation du Mac. Si ce n’est pas le cas, un autre appareil se fait peut-être passer pour ce Mac."
+          }
+        },
+        "fr-CA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "C’est normal après une réinstallation du Mac. Si ce n’est pas le cas, un autre appareil se fait peut-être passer pour ce Mac."
+          }
+        },
+        "gu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac ફરીથી ઇન્સ્ટૉલ થયા પછી આવું થવું સામાન્ય છે. જો આવું ન થયું હોય, તો બીજું કોઈ ડિવાઇસ આ Mac હોવાનો ઢોંગ કરી રહ્યું હોઈ શકે છે."
+          }
+        },
+        "he" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "זה צפוי לאחר התקנה מחדש של ה‑Mac. אם הוא לא הותקן מחדש, ייתכן שמכשיר אחר מתחזה ל‑Mac הזה."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac को दोबारा इंस्टॉल करने के बाद ऐसा होना सामान्य है। अगर ऐसा नहीं हुआ है, तो हो सकता है कि कोई दूसरा डिवाइस इस Mac होने का दिखावा कर रहा हो।"
+          }
+        },
+        "hr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "To je očekivano nakon ponovne instalacije Maca. Ako nije ponovno instaliran, možda se neki drugi uređaj predstavlja kao ovaj Mac."
+          }
+        },
+        "hu" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ez várható a Mac újratelepítése után. Ha nem történt újratelepítés, lehet, hogy egy másik eszköz ennek a Macnek adja ki magát."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hal ini wajar setelah Mac diinstal ulang. Jika tidak, perangkat lain mungkin sedang menyamar sebagai Mac ini."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "È normale dopo una reinstallazione del Mac. Se non è stato reinstallato, un altro dispositivo potrebbe fingersi questo Mac."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Macを再インストールすると、このようになります。心当たりがない場合は、別のデバイスがこのMacになりすましている可能性があります。"
+          }
+        },
+        "kk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac қайта орнатылғаннан кейін бұл күтілетін жағдай. Егер ол қайта орнатылмаса, басқа құрылғы өзін осы Mac ретінде көрсетуі мүмкін."
+          }
+        },
+        "kn" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac ಅನ್ನು ಮರುಸ್ಥಾಪಿಸಿದ ನಂತರ ಹೀಗಾಗುವುದು ಸಾಮಾನ್ಯ. ಹಾಗೆ ಆಗಿಲ್ಲದಿದ್ದರೆ, ಬೇರೊಂದು ಸಾಧನವು ಈ Mac ನಂತೆ ನಟಿಸುತ್ತಿರಬಹುದು."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac을 다시 설치한 경우에는 정상입니다. 그렇지 않다면 다른 기기가 이 Mac으로 위장하고 있을 수 있습니다."
+          }
+        },
+        "lt" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Taip būna iš naujo įdiegus „Mac“ kompiuterį. Jei jis nebuvo įdiegtas iš naujo, gali būti, kad kitas įrenginys apsimeta šiuo „Mac“ kompiuteriu."
+          }
+        },
+        "ml" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac വീണ്ടും ഇൻസ്റ്റാൾ ചെയ്‌തതിന് ശേഷം ഇത് സാധാരണമാണ്. അങ്ങനെ ചെയ്തിട്ടില്ലെങ്കിൽ, മറ്റൊരു ഡിവൈസ് ഈ Mac ആയി നടിക്കുന്നുണ്ടാകാം."
+          }
+        },
+        "mr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac पुन्हा इंस्टॉल केल्यानंतर असे होणे अपेक्षित आहे. तसे झाले नसल्यास, दुसरे डिव्हाइस हा Mac असल्याचे भासवत असू शकते."
+          }
+        },
+        "ms" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ini dijangka selepas Mac dipasang semula. Jika tidak, peranti lain mungkin menyamar sebagai Mac ini."
+          }
+        },
+        "nb" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dette er forventet etter at Macen er installert på nytt. Hvis den ikke er det, kan en annen enhet utgi seg for å være denne Macen."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dit is normaal nadat de Mac opnieuw is geïnstalleerd. Als dat niet is gebeurd, doet een ander apparaat zich mogelijk voor als deze Mac."
+          }
+        },
+        "or" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac ପୁଣି ଇନଷ୍ଟଲ୍ କରିବା ପରେ ଏହା ସ୍ୱାଭାବିକ। ଯଦି ତାହା ହୋଇନାହିଁ, ତେବେ ଅନ୍ୟ ଏକ ଡିଭାଇସ୍ ଏହି Mac ବୋଲି ଛଳନା କରୁଥାଇପାରେ।"
+          }
+        },
+        "pa" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac ਨੂੰ ਮੁੜ-ਸਥਾਪਤ ਕਰਨ ਤੋਂ ਬਾਅਦ ਇਹ ਹੋਣਾ ਆਮ ਗੱਲ ਹੈ। ਜੇਕਰ ਅਜਿਹਾ ਨਹੀਂ ਹੋਇਆ, ਤਾਂ ਹੋ ਸਕਦਾ ਹੈ ਕਿ ਕੋਈ ਹੋਰ ਡਿਵਾਈਸ ਇਹ Mac ਹੋਣ ਦਾ ਦਿਖਾਵਾ ਕਰ ਰਿਹਾ ਹੋਵੇ।"
+          }
+        },
+        "pl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "To normalne po ponownej instalacji Maca. Jeśli do niej nie doszło, inne urządzenie może podszywać się pod tego Maca."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Isso é esperado depois que o Mac é reinstalado. Se ele não foi reinstalado, outro dispositivo pode estar se passando por este Mac."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Isto é normal depois de o Mac ser reinstalado. Se não foi reinstalado, outro dispositivo pode estar a fazer-se passar por este Mac."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Acest lucru este normal după reinstalarea Mac-ului. Dacă nu a fost reinstalat, este posibil ca alt dispozitiv să se dea drept acest Mac."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Это ожидаемо после переустановки Mac. Если его не переустанавливали, возможно, другое устройство выдает себя за этот Mac."
+          }
+        },
+        "sk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Je to očakávané po preinštalovaní Macu. Ak k tomu nedošlo, môže sa za tento Mac vydávať iné zariadenie."
+          }
+        },
+        "sl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "To je pričakovano po vnovični namestitvi Maca. Če ni bil znova nameščen, se morda za ta Mac izdaja druga naprava."
+          }
+        },
+        "sv" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Detta är väntat efter att Macen har installerats om. Om den inte har det kan en annan enhet utge sig för att vara den här Macen."
+          }
+        },
+        "ta" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac-ஐ மீண்டும் நிறுவிய பிறகு இது எதிர்பார்க்கப்படுவதே. அப்படி நடக்கவில்லை என்றால், வேறொரு சாதனம் இந்த Mac போல நடிக்கக்கூடும்."
+          }
+        },
+        "te" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Macను మళ్లీ ఇన్‌స్టాల్ చేసిన తర్వాత ఇలా జరగడం సహజం. అలా జరగకపోతే, మరొక డివైజ్ ఈ Macలా నటిస్తూ ఉండవచ్చు."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "เป็นเรื่องปกติหลังจากติดตั้ง Mac ใหม่ หากไม่ได้ติดตั้งใหม่ อาจมีอุปกรณ์อื่นกำลังแอบอ้างเป็น Mac เครื่องนี้"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac yeniden yüklendikten sonra bu beklenen bir durumdur. Yeniden yüklenmediyse başka bir aygıt kendini bu Mac gibi gösteriyor olabilir."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Це очікувано після перевстановлення Mac. Якщо його не перевстановлювали, можливо, інший пристрій видає себе за цей Mac."
+          }
+        },
+        "ur" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac کو دوبارہ انسٹال کرنے کے بعد ایسا ہونا متوقع ہے۔ اگر ایسا نہیں ہوا تو ممکن ہے کوئی دوسری ڈیوائس خود کو یہ Mac ظاہر کر رہی ہو۔"
+          }
+        },
+        "vi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Điều này là bình thường sau khi máy Mac được cài đặt lại. Nếu không phải vậy, một thiết bị khác có thể đang giả mạo máy Mac này."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新安裝 Mac 後會出現此情況。如果沒有重新安裝，可能有其他裝置正在冒充這部 Mac。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新安装 Mac 后会出现这种情况。如果没有重新安装，可能有其他设备正在冒充这台 Mac。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新安裝 Mac 後會出現此情況。如果沒有重新安裝，可能有其他裝置正在冒充這部 Mac。"
           }
         }
       }

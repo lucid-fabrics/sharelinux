@@ -12,11 +12,13 @@ import (
 	"crypto/subtle"
 	"crypto/x509"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"math/big"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 
 	E "github.com/sagernet/sing/common/exceptions"
@@ -117,45 +119,53 @@ func readSizedMessage(h *handshake, limit int) ([]byte, error) {
 	return h.stream.bytes(int(size))
 }
 
-func requestRSAKey(h *handshake) (*rsa.PublicKey, error) {
+func requestRSAKey(h *handshake) (*rsa.PublicKey, []byte, error) {
 	_, err := h.conn.Write(append([]byte{byte(SecurityAppleRSA)}, rsaEnvelope(0, []byte{0, 0})...))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	reply, err := readSizedMessage(h, 1<<16)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(reply) < 6 {
-		return nil, E.New("rfb: RSA key reply of ", len(reply), " bytes, want at least 6")
+		return nil, nil, E.New("rfb: RSA key reply of ", len(reply), " bytes, want at least 6")
 	}
 	length := int(binary.BigEndian.Uint16(reply[4:6]))
 	if 6+length > len(reply) {
-		return nil, E.New("rfb: truncated RSA key reply: ", 6+length, " bytes needed, ", len(reply), " received")
+		return nil, nil, E.New("rfb: truncated RSA key reply: ", 6+length, " bytes needed, ", len(reply), " received")
 	}
 	der := reply[6 : 6+length]
 	publicKey, err := x509.ParsePKIXPublicKey(der)
 	if err != nil {
 		rsaKey, pkcs1Err := x509.ParsePKCS1PublicKey(der)
 		if pkcs1Err != nil {
-			return nil, E.Cause(err, "parse RSA key")
+			return nil, nil, E.Cause(err, "parse RSA key")
 		}
-		return rsaKey, nil
+		return rsaKey, der, nil
 	}
 	rsaKey, isRSA := publicKey.(*rsa.PublicKey)
 	if !isRSA {
-		return nil, E.New("rfb: server key is ", reflect.TypeOf(publicKey))
+		return nil, nil, E.New("rfb: server key is ", reflect.TypeOf(publicKey))
 	}
-	return rsaKey, nil
+	return rsaKey, der, nil
 }
 
 func authenticateAppleRSA(h *handshake) ([]byte, error) {
-	publicKey, err := requestRSAKey(h)
+	publicKey, der, err := requestRSAKey(h)
 	if err != nil {
 		return nil, err
 	}
-	h.logger.Debug("server RSA key", "bits", publicKey.N.BitLen())
+	sum := sha256.Sum256(der)
+	fingerprint := strings.ToUpper(hex.EncodeToString(sum[:]))
+	h.logger.Debug("server RSA key", "bits", publicKey.N.BitLen(), "fingerprint", fingerprint)
 	if !slices.Contains(h.info.SecurityTypes, SecurityAppleSRP) {
+		if h.options.VerifyServerKey != nil {
+			err = h.options.VerifyServerKey(fingerprint)
+			if err != nil {
+				return nil, err
+			}
+		}
 		return authenticateAppleRSAPlain(h, publicKey)
 	}
 	identity := srpIdentityMessage(h.options.Username)

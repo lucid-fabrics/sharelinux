@@ -111,7 +111,10 @@ type sessionView struct {
 	pointerX, pointerY int
 	pointerInside      bool
 	pointerHeld        bool
-	drag               dragAsk
+	// clickCount is GTK's press count (1 single, 2 double...) of the button
+	// held now. The Mac reads it from the press and its release.
+	clickCount int
+	drag       dragAsk
 
 	transfer  *transfers
 	clip      *clipboardBridge
@@ -1058,7 +1061,7 @@ func (v *sessionView) releaseInput() {
 	}
 	if v.buttons != 0 {
 		v.buttons = 0
-		_ = v.client.SendPointer(v.pointerX, v.pointerY, 0)
+		_ = v.client.SendPointer(v.pointerX, v.pointerY, 0, 0)
 	}
 }
 
@@ -1088,8 +1091,8 @@ func (v *sessionView) installInput() {
 
 	click := gtk.NewGestureClick()
 	click.SetButton(0)
-	click.ConnectPressed(func(_ int, x, y float64) { v.onButton(&click.GestureSingle, x, y, true) })
-	click.ConnectReleased(func(_ int, x, y float64) { v.onButton(&click.GestureSingle, x, y, false) })
+	click.ConnectPressed(func(presses int, x, y float64) { v.onButton(&click.GestureSingle, presses, x, y, true) })
+	click.ConnectReleased(func(_ int, x, y float64) { v.onButton(&click.GestureSingle, 0, x, y, false) })
 	click.ConnectUnpairedRelease(func(x, y float64, button uint, _ *gdk.EventSequence) {
 		v.releaseButton(uint8(button), click.CurrentEventTime())
 	})
@@ -1241,7 +1244,7 @@ func (v *sessionView) sendPointer(x, y int) {
 	v.sent, v.sentReports = true, v.h.cursorReports()
 	v.pointerSends++
 	v.live.echo.Sent(time.Now())
-	err := v.client.SendPointer(x, y, v.buttons)
+	err := v.client.SendPointer(x, y, v.buttons, v.clickCount)
 	if err != nil {
 		v.g.app.logger.Debug("pointer", "error", err)
 	}
@@ -1277,7 +1280,7 @@ func buttonBit(button uint) uint8 {
 	return 0
 }
 
-func (v *sessionView) onButton(gesture *gtk.GestureSingle, x, y float64, down bool) {
+func (v *sessionView) onButton(gesture *gtk.GestureSingle, presses int, x, y float64, down bool) {
 	if !v.controlling() {
 		return
 	}
@@ -1302,6 +1305,7 @@ func (v *sessionView) onButton(gesture *gtk.GestureSingle, x, y float64, down bo
 			return
 		}
 		v.buttons |= bit
+		v.clickCount = presses
 		v.sendPointer(fx, fy)
 		return
 	}
@@ -1318,6 +1322,9 @@ func (v *sessionView) releaseButton(button uint8, _ uint32) {
 	}
 	v.buttons &^= bit
 	v.sendPointer(v.pointerX, v.pointerY)
+	if v.buttons == 0 {
+		v.clickCount = 0
+	}
 }
 
 func (v *sessionView) onScroll(dx, dy float64) bool {
@@ -1347,7 +1354,7 @@ func (v *sessionView) dropHover(x, y float64) gdk.DragAction {
 	if inside {
 		v.pointerX, v.pointerY = fx, fy
 		v.pointerInside = true
-		hoverPointer(&v.transfer.gesture, v.client.SendPointer, fx, fy)
+		hoverPointer(&v.transfer.gesture, plainPointer(v.client), fx, fy)
 	}
 	return gdk.ActionCopy
 }

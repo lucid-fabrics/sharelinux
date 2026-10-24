@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/nekohasekai/open-screen-sharing/cmd/internal/ctl"
 	"github.com/nekohasekai/open-screen-sharing/internal/rfb"
 	E "github.com/sagernet/sing/common/exceptions"
 )
@@ -94,7 +93,7 @@ func (s settings) apply(opts *options) {
 		opts.HDR = s.HDR
 	}
 	if !opts.Explicit["virtual"] && s.VirtualDisplay && s.VirtualSize != virtualSizeWindow {
-		width, height, err := ctl.ParseSize(s.VirtualSize)
+		width, height, err := parseSize(s.VirtualSize)
 		if err == nil {
 			density := 1.0
 			if s.HiDPI {

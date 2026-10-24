@@ -457,7 +457,7 @@ final class ScreenInput: NSObject, UIGestureRecognizerDelegate, UIPointerInterac
         holdTask?.cancel()
         holdTask = nil
         finger.phase = .dragging
-        controller.press(.primary)
+        controller.press(.primary, clickCount: 1)
         view.pressIndicator.press()
         if #available(iOS 17.5, *) {
             UIImpactFeedbackGenerator(style: .light).impactOccurred(at: finger.last)

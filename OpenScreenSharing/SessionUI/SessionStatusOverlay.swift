@@ -132,17 +132,32 @@ struct SessionStatusOverlay: View {
     }
 
     private func failureAlert(_ failure: SessionFailure) -> AlertState {
-        guard case .certificateChanged(let fingerprint) = failure.kind else {
+        let message: String
+        let connectAnyway: () -> Void
+        switch failure.kind {
+        case .certificateChanged(let fingerprint) where controller.route.remoteProtocol == .rdp:
+            message = String(
+                localized:
+                    "This is expected after the computer is reinstalled or renews its certificate. If neither happened, another device may be pretending to be this computer."
+            )
+            connectAnyway = { controller.trustCertificate(fingerprint) }
+        case .certificateChanged(let fingerprint):
+            message = String(localized: "This is expected after the Mac is reinstalled. If it wasn’t, another device may be pretending to be this Mac.")
+            connectAnyway = { controller.trustCertificate(fingerprint) }
+        case .unverifiedServer:
+            message = String(
+                localized:
+                    "This computer only offers an older sign-in method that can’t confirm its identity. If another device is pretending to be this computer, it could see your password."
+            )
+            connectAnyway = { controller.allowUnverifiedLogin() }
+        default:
             return AlertState(describe(failure), errorMessage: failure.message, closeLabel: String(localized: "Close"), onClose: onClose)
         }
         return AlertState(
             title: describe(failure),
-            message: String(
-                localized:
-                    "This is expected after the computer is reinstalled or renews its certificate. If neither happened, another device may be pretending to be this computer."
-            ),
+            message: message,
             actions: [
-                AlertState.Action(label: String(localized: "Connect Anyway"), role: nil) { controller.trustCertificate(fingerprint) },
+                AlertState.Action(label: String(localized: "Connect Anyway"), role: nil, perform: connectAnyway),
                 AlertState.Action(label: String(localized: "Close"), role: .cancel, isDefault: true, perform: onClose),
             ])
     }
@@ -161,7 +176,10 @@ struct SessionStatusOverlay: View {
             controller.route.remoteProtocol == .rdp
                 ? String(localized: "“\(name)” Ended the Session") : String(localized: "“\(name)” Ended Screen Sharing")
         case .unsupported: String(localized: "“\(name)” Isn’t Supported")
-        case .certificateChanged: String(localized: "“\(name)” Has a New Certificate")
+        case .certificateChanged:
+            controller.route.remoteProtocol == .rdp
+                ? String(localized: "“\(name)” Has a New Certificate") : String(localized: "Couldn’t Verify “\(name)”")
+        case .unverifiedServer: String(localized: "Couldn’t Verify “\(name)”")
         case .highPerformance(.busy): String(localized: "Another Device Is Using High Performance on “\(name)”")
         case .highPerformance(.unsupported): String(localized: "“\(name)” Doesn’t Support High Performance")
         case .highPerformance(.undecodable): String(localized: "This Device Can’t Play High Performance Video")

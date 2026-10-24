@@ -64,7 +64,7 @@ func exchange(ctx context.Context, options Options, steps func(h *handshake) err
 	stop := context.AfterFunc(ctx, func() {
 		conn.Close()
 	})
-	h := &handshake{conn: conn, stream: newStream(conn), options: &options, logger: logger}
+	h := &handshake{ctx: ctx, conn: conn, stream: newStream(conn), options: &options, logger: logger}
 	err = steps(h)
 	if !stop() {
 		err = E.Errors(ctx.Err(), err)

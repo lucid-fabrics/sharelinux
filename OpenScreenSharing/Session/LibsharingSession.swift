@@ -31,6 +31,7 @@ nonisolated final class LibsharingRemoteSession: @unchecked Sendable {
             case nil: LibsharingPlatformUnknown
             }
         options.trustedFingerprint = configuration.trustedFingerprint
+        options.allowUnverifiedLogin = configuration.allowsUnverifiedLogin
         options.keyboardLayout = Int32(configuration.keyboardLayout)
         options.audio = configuration.receivesAudio
         options.microphone = configuration.sendsAudio
@@ -101,12 +102,12 @@ nonisolated final class LibsharingRemoteSession: @unchecked Sendable {
         try? session?.answerPrompt(prompt.id, answer: answer)
     }
 
-    func sendPointer(x: Int, y: Int, buttons: PointerButtons) {
+    func sendPointer(x: Int, y: Int, buttons: PointerButtons, clickCount: Int) {
         var mask: Int32 = 0
         if buttons.contains(.primary) { mask |= LibsharingButtonLeft }
         if buttons.contains(.middle) { mask |= LibsharingButtonMiddle }
         if buttons.contains(.secondary) { mask |= LibsharingButtonRight }
-        try? session?.sendPointer(Int32(x), y: Int32(y), buttons: mask)
+        try? session?.sendPointer(Int32(x), y: Int32(y), buttons: mask, clickCount: Int32(clickCount))
     }
 
     func sendScroll(x: Int, y: Int, deltaX: Double, deltaY: Double) {
@@ -393,13 +394,8 @@ nonisolated final class LibsharingRemoteSession: @unchecked Sendable {
             roundTripMilliseconds: statistics.roundTripMilliseconds,
             receivedBytes: statistics.receivedBytes,
             encoding: statistics.encoding.isEmpty ? nil : statistics.encoding,
-            video: statistics.highPerformance
-                ? VideoStreamStatistics(
-                    packets: statistics.videoPackets,
-                    expectedPackets: statistics.videoPacketsExpected,
-                    keyframeRequests: statistics.keyframeRequests,
-                    queuingDelayMilliseconds: statistics.queueDelayMilliseconds
-                ) : nil
+            packets: statistics.udp ? PacketStatistics(received: statistics.packets, expected: statistics.packetsExpected) : nil,
+            video: statistics.highPerformance ? VideoStreamStatistics(losses: statistics.videoLosses) : nil
         )
     }
 
@@ -553,6 +549,8 @@ nonisolated private final class LibsharingHandler: NSObject, LibsharingSessionHa
             case LibsharingErrorCertificateChanged:
                 let fingerprint = locked { info.fingerprint }
                 delegate.sessionPhaseChanged(.failed(SessionFailure(.certificateChanged(fingerprint: fingerprint), message: text)))
+            case LibsharingErrorUnverifiedServer:
+                delegate.sessionPhaseChanged(.failed(SessionFailure(.unverifiedServer, message: text)))
             default:
                 let started = locked { info.framebufferWidth > 0 }
                 delegate.sessionPhaseChanged(.failed(SessionFailure(started ? .ended : .other, message: text)))
@@ -640,8 +638,11 @@ nonisolated private final class LibsharingHandler: NSObject, LibsharingSessionHa
         }
     }
 
-    func onFramebufferUpdate(_ x: Int32, y: Int32, width: Int32, height: Int32) {
-        delegate?.sessionFramebufferUpdated(CGRect(x: Int(x), y: Int(y), width: Int(width), height: Int(height)))
+    func onFramebufferUpdate(_ update: LibsharingFramebufferUpdate?) {
+        guard let update else { return }
+        delegate?.sessionFramebufferUpdated(
+            CGRect(x: Int(update.x), y: Int(update.y), width: Int(update.width), height: Int(update.height)),
+            arrival: CACurrentMediaTime() - Double(max(update.holdNanoseconds, 0)) / 1_000_000_000)
     }
 
     func onDisplays(_ displays: LibsharingDisplayList?) {
@@ -825,7 +826,7 @@ nonisolated private final class LibsharingHandler: NSObject, LibsharingSessionHa
 
     func onVideoAccessUnit(_ unit: LibsharingVideoAccessUnit?) {
         guard let unit, let data = unit.data else { return }
-        let hold = Double(max(unit.holdNanoseconds, 0)) / 1_000_000_000
+        let now = CACurrentMediaTime()
         delegate?.sessionReceivedVideo(
             VideoAccessUnit(
                 data: data,
@@ -838,8 +839,8 @@ nonisolated private final class LibsharingHandler: NSObject, LibsharingSessionHa
                 changedBands: Int(unit.changedBands),
                 discontinuity: unit.discontinuity,
                 turns: PictureTurns(Int(unit.turns)),
-                arrival: CACurrentMediaTime() - hold,
-                libraryHold: hold
+                arrival: now - Double(max(unit.holdNanoseconds, 0)) / 1_000_000_000,
+                composed: unit.composed ? now - Double(unit.composeNanoseconds) / 1_000_000_000 : nil
             ))
     }
 
