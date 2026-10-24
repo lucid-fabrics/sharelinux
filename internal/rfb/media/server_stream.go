@@ -23,14 +23,15 @@ const (
 )
 
 type ServerStreamConfig struct {
-	Logger        *slog.Logger
-	InitialTarget netip.Addr
-	VideoPort     uint16
-	AudioPort     uint16
-	ListenUDP     func(port uint16) (*net.UDPConn, error)
-	OpenVideo     ServerVideoOpener
-	OpenAudio     ServerAudioOpener
-	Send          func(payload []byte) error
+	Logger              *slog.Logger
+	InitialTarget       netip.Addr
+	AllowLoopbackTarget bool
+	VideoPort           uint16
+	AudioPort           uint16
+	ListenUDP           func(port uint16) (*net.UDPConn, error)
+	OpenVideo           ServerVideoOpener
+	OpenAudio           ServerAudioOpener
+	Send                func(payload []byte) error
 }
 
 type ServerStream struct {
@@ -73,7 +74,7 @@ func (s *serverSession) close() {
 
 func ListenServerStream(config ServerStreamConfig) (*ServerStream, error) {
 	initial := config.InitialTarget.Unmap()
-	if initial.IsLoopback() {
+	if initial.IsLoopback() && !config.AllowLoopbackTarget {
 		initial = netip.Addr{}
 	}
 	videoConn, err := config.ListenUDP(config.VideoPort)

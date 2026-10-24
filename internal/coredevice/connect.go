@@ -80,7 +80,12 @@ func ConnectLockdown(ctx context.Context, options LockdownOptions) (*Device, err
 		var dialer net.Dialer
 		return dialer.DialContext(ctx, "tcp", netip.AddrPortFrom(options.Address, port).String())
 	}
-	conn, err := lockdown.DialCoreDeviceProxy(ctx, options.Record, dial, logger)
+	identity := handshakeIdentity(options.Record.HostID)
+	return connectLockdown(ctx, options.Record, dial, identity, logger)
+}
+
+func connectLockdown(ctx context.Context, record *lockdown.PairRecord, dial lockdown.Dialer, identity uuid.UUID, logger *slog.Logger) (*Device, error) {
+	conn, err := lockdown.DialCoreDeviceProxy(ctx, record, dial, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +93,7 @@ func ConnectLockdown(ctx context.Context, options LockdownOptions) (*Device, err
 	if err != nil {
 		return nil, err
 	}
-	return newDevice(ctx, tun, nil, handshakeIdentity(options.Record.HostID), logger)
+	return newDevice(ctx, tun, nil, identity, logger)
 }
 
 // pymobiledevice3 sends a stable host UUID in RSD handshakes
