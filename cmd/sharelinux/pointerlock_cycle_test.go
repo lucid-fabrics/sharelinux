@@ -9,13 +9,14 @@ import (
 // cycle plays one leave and enter of Exclusive on X11: the unlock warps the
 // pointer to the Mac's cursor on a whole device pixel (round, the way x11.c
 // does), the display server reports that spot as a motion, and the session
-// either sends it to the Mac (without the echo guard) or not.
+// either sends it to the Mac (without the echo guard) or not. The decision is
+// the one onMotion makes.
 func cycle(port viewport, frameW, frameH int, scale float64, echo *warpEcho, x, y int, now time.Time) (int, int) {
 	wx, wy := port.toWindow(float64(x)+0.5, float64(y)+0.5, frameW, frameH)
 	echo.arm(float64(wx), float64(wy), now)
 	px := math.Round(float64(wx)*scale) / scale
 	py := math.Round(float64(wy)*scale) / scale
-	if echo.swallows(px, py, now) {
+	if !motionSends(echo, px, py, now, true, false, true) {
 		return x, y
 	}
 	fx, fy, _ := port.toFramebuffer(float32(px), float32(py), frameW, frameH)
@@ -88,5 +89,33 @@ func TestLockCycleWithoutGuardDrifts(t *testing.T) {
 	}
 	if y == 2077 && x == 3261 {
 		t.Fatal("expected the old mapping to drift")
+	}
+}
+
+// Leaving Exclusive and clicking without moving: the pointer still sits on the
+// rounded echo spot, and the click must go to the Mac's exact position.
+func TestClickOnPendingEchoUsesExactMacPosition(t *testing.T) {
+	now := time.Now()
+	port := fitViewport(1280, 727, 3456, 1962)
+	macX, macY := 3261, 2077
+	wx, wy := port.toWindow(float64(macX)+0.5, float64(macY)+0.5, 3456, 1962)
+	var echo warpEcho
+	echo.arm(float64(wx), float64(wy), now)
+	mx, my, inside := port.toFramebuffer(float32(wx), float32(wy), 3456, 1962)
+	for _, exclusive := range []bool{true, false} {
+		fx, fy, ok := clickTarget(&echo, float64(wx), float64(wy), now, exclusive, false, macX, macY, mx, my, inside)
+		if !ok || fx != macX || fy != macY {
+			t.Errorf("exclusive %v: click went to %d,%d (%v), want %d,%d", exclusive, fx, fy, ok, macX, macY)
+		}
+	}
+	// A real move ends the echo and the click follows the pointer again.
+	fx, fy, ok := clickTarget(&echo, float64(wx)+30, float64(wy), now, false, false, macX, macY, 5, 6, true)
+	if !ok || fx != 5 || fy != 6 {
+		t.Errorf("after a move the click went to %d,%d", fx, fy)
+	}
+	// Exclusive with a held lock always uses the Mac's position.
+	fx, fy, _ = clickTarget(&echo, 0, 0, now, true, true, macX, macY, 5, 6, true)
+	if fx != macX || fy != macY {
+		t.Errorf("held lock click went to %d,%d", fx, fy)
 	}
 }

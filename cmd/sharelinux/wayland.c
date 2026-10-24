@@ -235,9 +235,10 @@ void oss_wl_refresh(GtkWidget *widget) {
 	wl_display_flush(gdk_wayland_display_get_wl_display(display));
 }
 
-void oss_wl_unlock(GtkWidget *widget, gboolean has_hint, double x, double y) {
+gboolean oss_wl_unlock(GtkWidget *widget, gboolean has_hint, double x, double y) {
+	gboolean hinted = FALSE;
 	if (locked == NULL && relative == NULL) {
-		return;
+		return FALSE;
 	}
 	GdkDisplay *display = gdk_display_get_default();
 	if (has_hint && locked != NULL) {
@@ -253,6 +254,7 @@ void oss_wl_unlock(GtkWidget *widget, gboolean has_hint, double x, double y) {
 			y = in_surface.y + offset_y;
 		}
 		zwp_locked_pointer_v1_set_cursor_position_hint(locked, wl_fixed_from_double(x), wl_fixed_from_double(y));
+		hinted = TRUE;
 		// The hint is double buffered: it counts from the next commit.
 		if (wl_surface != NULL) {
 			wl_surface_commit(wl_surface);
@@ -262,4 +264,5 @@ void oss_wl_unlock(GtkWidget *widget, gboolean has_hint, double x, double y) {
 	if (display != NULL && GDK_IS_WAYLAND_DISPLAY(display)) {
 		wl_display_flush(gdk_wayland_display_get_wl_display(display));
 	}
+	return hinted;
 }

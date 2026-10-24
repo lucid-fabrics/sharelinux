@@ -27,8 +27,8 @@ int oss_x11_caps(void);
 int oss_x11_lock(GtkWidget *widget, int *major, int *minor);
 
 // oss_x11_unlock ends it. With has_hint the pointer is put at (x, y), in the
-// widget's units.
-void oss_x11_unlock(GtkWidget *widget, gboolean has_hint, double x, double y);
+// widget's units. It returns TRUE when the pointer was warped.
+gboolean oss_x11_unlock(GtkWidget *widget, gboolean has_hint, double x, double y);
 
 // oss_x11_geometry reads what the lock needs to judge itself, in root pixels:
 // [0..3] the window box (left, top, right, bottom) as it is now, [4..7] the

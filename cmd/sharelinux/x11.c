@@ -460,11 +460,11 @@ static void raw_delta(XIRawEvent *raw, double *dx, double *dy) {
 }
 
 // warp_to puts the pointer at (x, y), in window units, on GDK's connection.
-static void warp_to(GtkWidget *widget, double x, double y) {
+static gboolean warp_to(GtkWidget *widget, double x, double y) {
 	GtkNative *native = gtk_widget_get_native(widget);
 	GdkSurface *surface = native != NULL ? gtk_native_get_surface(native) : NULL;
 	if (surface == NULL || !GDK_IS_X11_SURFACE(surface)) {
-		return;
+		return FALSE;
 	}
 	GdkDisplay *gdk_display = gdk_surface_get_display(surface);
 	Display *display = gdk_x11_display_get_xdisplay(gdk_display);
@@ -475,6 +475,7 @@ static void warp_to(GtkWidget *widget, double x, double y) {
 	XWarpPointer(display, None, gdk_x11_surface_get_xid(surface), 0, 0, 0, 0, (int)lround((x + offset_x) * scale), (int)lround((y + offset_y) * scale));
 	XFlush(display);
 	gdk_x11_display_error_trap_pop_ignored(gdk_display);
+	return TRUE;
 }
 
 // warp_to_middle puts the pointer in the middle of the part of the picture that
@@ -585,7 +586,7 @@ int oss_x11_lock(GtkWidget *widget, int *major_out, int *minor_out) {
 	return OSS_LOCK_OK;
 }
 
-void oss_x11_unlock(GtkWidget *widget, gboolean has_hint, double x, double y) {
+gboolean oss_x11_unlock(GtkWidget *widget, gboolean has_hint, double x, double y) {
 	raw_close();
 	oss_x11_confine(widget, FALSE);
 	if (has_hint) {
@@ -593,7 +594,8 @@ void oss_x11_unlock(GtkWidget *widget, gboolean has_hint, double x, double y) {
 		GtkNative *native = gtk_widget_get_native(widget);
 		graphene_point_t point = GRAPHENE_POINT_INIT((float)x, (float)y), in_window;
 		if (native != NULL && gtk_widget_compute_point(widget, GTK_WIDGET(native), &point, &in_window)) {
-			warp_to(widget, in_window.x, in_window.y);
+			return warp_to(widget, in_window.x, in_window.y);
 		}
 	}
+	return FALSE;
 }

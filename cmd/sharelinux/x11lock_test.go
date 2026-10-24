@@ -159,3 +159,16 @@ func TestX11SettleSurvivesADestroyedWindow(t *testing.T) {
 		t.Fatal("barriers still stand after the unlock")
 	}
 }
+
+// The confine backend never warps the pointer, so an unlock with a hint must
+// say nothing was warped and no echo may be armed for it.
+func TestX11ConfineUnlockReportsNoWarp(t *testing.T) {
+	window, view := x11Window(t)
+	t.Cleanup(window.Destroy)
+	if held, requested := view.lockPointer(lockConfine); held || !requested {
+		t.Skipf("no barriers (held %v requested %v)", held, requested)
+	}
+	if view.unlockPointer(lockConfine, true, 10, 10) {
+		t.Fatal("confine reported a warp it never made")
+	}
+}

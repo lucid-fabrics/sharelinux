@@ -114,20 +114,23 @@ func (s *screenView) settleLock(backend lockBackend) bool {
 }
 
 // unlockPointer lets the pointer go and puts it at (x, y) in window units, where
-// the Mac's cursor is drawn, when hint is set. It is safe to call without a lock.
-func (s *screenView) unlockPointer(backend lockBackend, hint bool, x, y float64) {
+// the Mac's cursor is drawn, when hint is set. It reports whether the pointer
+// was actually put there: the confine backend never warps, and Wayland drops the
+// hint when no lock is held. It is safe to call without a lock.
+func (s *screenView) unlockPointer(backend lockBackend, hint bool, x, y float64) (warped bool) {
 	value := C.gboolean(0)
 	if hint {
 		value = 1
 	}
 	switch backend {
 	case lockWayland:
-		C.oss_wl_unlock(s.c, value, C.double(x), C.double(y))
+		warped = C.oss_wl_unlock(s.c, value, C.double(x), C.double(y)) != 0
 	case lockX11:
-		C.oss_x11_unlock(s.c, value, C.double(x), C.double(y))
+		warped = C.oss_x11_unlock(s.c, value, C.double(x), C.double(y)) != 0
 	case lockConfine:
 		C.oss_x11_confine(s.c, 0)
 	}
+	return warped
 }
 
 // vanishX11WindowForTest makes the lock read a window that is gone, for the test of

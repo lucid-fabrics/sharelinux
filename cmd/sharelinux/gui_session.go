@@ -904,8 +904,7 @@ func (v *sessionView) setPointerLock(on bool) {
 		hint, x, y := v.unlockHint()
 		trips, ticks := x11Cost()
 		v.g.app.logger.Debug("pointer lock released", "round_trips", trips, "ticks", ticks, "backend", int(v.lockBackend), "hint", hint, "x", x, "y", y, "mac_x", v.pointerX, "mac_y", v.pointerY)
-		v.screen.unlockPointer(v.lockBackend, hint, x, y)
-		if hint {
+		if v.screen.unlockPointer(v.lockBackend, hint, x, y) {
 			v.warp.arm(x, y, time.Now())
 		}
 		return
@@ -1243,11 +1242,7 @@ func (v *sessionView) onMotion(x, y float64) {
 	fx, fy, inside := v.toFramebuffer(x, y)
 	v.pointerInside = inside
 	v.updateSystemCursor()
-	if v.warp.swallows(x, y, time.Now()) {
-		// The pointer we just put over the Mac's cursor: the Mac's cursor is already there.
-		return
-	}
-	if inside || v.buttons != 0 || v.mode == rfb.ModeExclusiveControl {
+	if motionSends(&v.warp, x, y, time.Now(), inside, v.buttons != 0, v.mode == rfb.ModeExclusiveControl) {
 		v.sendPointer(fx, fy)
 	}
 }
@@ -1284,12 +1279,7 @@ func (v *sessionView) onButton(gesture *gtk.GestureSingle, x, y float64, down bo
 			return
 		}
 		fx, fy, inside := v.toFramebuffer(x, y)
-		if v.mode == rfb.ModeExclusiveControl {
-			fx, fy, inside = v.pointerX, v.pointerY, true
-			if px, py, ok := v.toFramebuffer(x, y); ok && !v.lock.held && !v.warp.swallows(x, y, time.Now()) {
-				fx, fy = px, py
-			}
-		}
+		fx, fy, inside = clickTarget(&v.warp, x, y, time.Now(), v.mode == rfb.ModeExclusiveControl, v.lock.held, v.pointerX, v.pointerY, fx, fy, inside)
 		if !inside {
 			return
 		}

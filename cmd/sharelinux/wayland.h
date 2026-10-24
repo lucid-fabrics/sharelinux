@@ -34,7 +34,8 @@ void oss_wl_refresh(GtkWidget *widget);
 int oss_wl_live_regions(void);
 
 // oss_wl_unlock drops the lock, or the request for one. With has_hint the
-// compositor is asked to put the pointer at (x, y) in the widget's units afterwards.
-void oss_wl_unlock(GtkWidget *widget, gboolean has_hint, double x, double y);
+// compositor is asked to put the pointer at (x, y) in the widget's units afterwards,
+// and TRUE comes back when it was asked (no lock held, no hint taken).
+gboolean oss_wl_unlock(GtkWidget *widget, gboolean has_hint, double x, double y);
 
 #endif

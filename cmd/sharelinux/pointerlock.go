@@ -317,3 +317,28 @@ func (e *warpEcho) swallows(x, y float64, at time.Time) bool {
 	}
 	return true
 }
+
+// motionSends decides whether a pointer motion goes to the Mac. The echo of our
+// own unlock warp never does: the Mac's cursor is already there.
+func motionSends(echo *warpEcho, x, y float64, at time.Time, inside, buttonHeld, exclusive bool) bool {
+	if echo.swallows(x, y, at) {
+		return false
+	}
+	return inside || buttonHeld || exclusive
+}
+
+// clickTarget is the Mac position a button press goes to. (macX, macY) is
+// where the Mac's pointer is known to be and (mappedX, mappedY) is the window
+// position mapped onto the picture. While the unlock warp's echo is pending the
+// window position is only the whole-pixel rounding of the Mac's, so the click
+// uses the remembered exact Mac position in every mode. In Exclusive the Mac's
+// position also stands unless the pointer is free and over the picture.
+func clickTarget(echo *warpEcho, x, y float64, at time.Time, exclusive, lockHeld bool, macX, macY, mappedX, mappedY int, inside bool) (int, int, bool) {
+	if echo.swallows(x, y, at) {
+		return macX, macY, true
+	}
+	if exclusive && (lockHeld || !inside) {
+		return macX, macY, true
+	}
+	return mappedX, mappedY, inside
+}
