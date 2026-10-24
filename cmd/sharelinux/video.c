@@ -816,7 +816,8 @@ static gboolean hdr_gpu_wanted(int width, int height) {
 // vpp_convert has the GPU's video processor make a new surface of another pixel format from a 4:4:4
 // surface, of the same size and the same colors. For a YUV output (P010) the matrix, range and transfer
 // function stay what they were; for an RGB output the processor applies the matrix, and the range comes out
-// full. It returns VA_INVALID_ID when the GPU cannot.
+// full. The output names the same color standard as the input, so the processor has no reason to move the
+// primaries: the texture is told the stream's own. It returns VA_INVALID_ID when the GPU cannot.
 static VASurfaceID vpp_convert(VADisplay display, VASurfaceID input, int width, int height, OssColor color, unsigned int rt_format,
                                guint32 va_fourcc, gboolean rgb) {
 	VASurfaceID output = VA_INVALID_ID;
@@ -835,7 +836,7 @@ static VASurfaceID vpp_convert(VADisplay display, VASurfaceID input, int width, 
 		               : color.matrix == 5 || color.matrix == 6 ? VAProcColorStandardBT601
 		                                                        : VAProcColorStandardBT709;
 		params.surface_color_standard = standard;
-		params.output_color_standard = rgb ? VAProcColorStandardSRGB : standard;
+		params.output_color_standard = standard;
 		params.input_color_properties.color_range = color.full_range ? VA_SOURCE_RANGE_FULL : VA_SOURCE_RANGE_REDUCED;
 		params.output_color_properties.color_range = rgb ? VA_SOURCE_RANGE_FULL : params.input_color_properties.color_range;
 		VABufferID buffer = VA_INVALID_ID;

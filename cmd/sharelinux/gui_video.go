@@ -295,6 +295,8 @@ func (v *sessionView) handleVideoEvent(stream *videoStream, event videoEvent) {
 		logger.Info("video", "state", "showing", "decoder", streamLabel(stats.Codec, stats.Color, stats.Kind), "output", stats.Output.String())
 	case videoDecoderChanged:
 		logger.Info("video", "state", "decoder changed", "reason", event.Text)
+	case videoSoundFailed:
+		v.notify("No sound from the Mac: " + event.Text)
 	case videoFailed:
 		logger.Warn("video", "state", "failed", "reason", event.Text)
 		if event.Without444 && vid.plan.Chroma444 && !vid.no444 {

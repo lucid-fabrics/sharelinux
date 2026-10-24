@@ -299,11 +299,24 @@ func (p *audioPlayer) run() {
 		unit, action := p.jitter.pull()
 		switch action {
 		case jitterWait:
+			// A muted player has nothing to wake for but a change of the mute or the end.
+			var timer *time.Timer
+			var tick <-chan time.Time
+			if !p.jitter.isMuted() {
+				timer = time.NewTimer(audioPacketDuration * 2)
+				tick = timer.C
+			}
 			select {
 			case <-p.stop:
+				if timer != nil {
+					timer.Stop()
+				}
 				return
 			case <-p.wake:
-			case <-time.After(audioPacketDuration * 2):
+			case <-tick:
+			}
+			if timer != nil {
+				timer.Stop()
 			}
 		case jitterSilence:
 			if err := device.Write(silence); err != nil {

@@ -118,6 +118,12 @@ int oss_audio_decode(OssAudioDecoder *decoder, const guint8 *data, gsize length,
 			return AVERROR(ENOSYS);
 		}
 	}
+	// A mono frame is played on both sides.
+	for (int c = channels; c < decoder->channels && channels > 0; c++) {
+		for (int i = 0; i < frames; i++) {
+			out[i * decoder->channels + c] = out[i * decoder->channels];
+		}
+	}
 	av_frame_unref(frame);
 	return frames;
 }

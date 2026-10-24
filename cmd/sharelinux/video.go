@@ -391,6 +391,8 @@ const (
 	videoFailed
 	// videoDecoderChanged: a decoder failed and the next one took over.
 	videoDecoderChanged
+	// videoSoundFailed: the sound cannot be played (no sound server, or it broke); the picture goes on.
+	videoSoundFailed
 )
 
 type videoEvent struct {
@@ -411,9 +413,11 @@ type videoStream struct {
 	// the core's goroutine may read them.
 	hdr       bool
 	chroma444 bool
-	options   decoderOptions
-	queue     *unitQueue
-	out       presenter
+	// sound is whether the offer asked for the Mac's sound.
+	sound   bool
+	options decoderOptions
+	queue   *unitQueue
+	out     presenter
 	// keyframe asks the Mac for a keyframe.
 	keyframe func()
 	events   chan videoEvent
@@ -451,6 +455,7 @@ func newVideoStream(logger *slog.Logger, plan videoPlan, device string, threads 
 		plan:      plan,
 		hdr:       plan.HDR,
 		chroma444: plan.Chroma444,
+		sound:     plan.Sound,
 		options:   decoderOptions{Codec: plan.Codec, Device: device, Threads: threads},
 		queue:     newUnitQueue(queueDepth),
 		out:       out,
@@ -510,13 +515,14 @@ func (s *videoStream) VideoAccessUnit(unit media.VideoAccessUnit) {
 // AudioFormat is called by the core when the Mac announces its sound. It starts a player, which opens
 // the decoder and the sound device on its own goroutine, so the network goroutine is not held up.
 func (s *videoStream) AudioFormat(format media.AudioFormat) {
-	if !s.plan.Sound {
+	if !s.sound {
 		return
 	}
 	s.logger.Info("sound format", "format", "AAC-ELD", "rate", format.SampleRate, "channels", format.Channels, "frames", format.FramesPerPacket)
-	logger := s.logger
-	player := openSoundPlayer(format, func(err error) { logger.Warn("sound", "state", "stopped", "error", err) })
-	player.setMuted(s.muted.Load())
+	player := openSoundPlayer(format, func(err error) {
+		s.logger.Warn("sound", "state", "stopped", "error", err)
+		s.event(videoEvent{Kind: videoSoundFailed, Text: err.Error()})
+	})
 	s.audioAccess.Lock()
 	old := s.audio
 	closed := s.audioClosed
@@ -524,11 +530,15 @@ func (s *videoStream) AudioFormat(format media.AudioFormat) {
 		s.audio = player
 	}
 	s.audioAccess.Unlock()
+	// Set after the player is published, so a mute that came in meanwhile is not lost: setMuted stores
+	// the flag before it looks for the player.
+	player.setMuted(s.muted.Load())
+	// Neither is joined here: a sound server that has stopped answering must not hold the network goroutine.
 	if old != nil {
-		old.close()
+		go old.close()
 	}
 	if closed {
-		player.close()
+		go player.close()
 	}
 }
 
@@ -647,6 +657,9 @@ func (s *videoStream) reopen(format *media.VideoFormat) {
 	reason := s.plan.Reason
 	if reason == "" {
 		reason = "no decoder takes the HDR stream (HEVC 4:4:4 10-bit)"
+		if is444EightBit(format.Color) {
+			reason = "no decoder takes the full colour stream (HEVC 4:4:4 8-bit)"
+		}
 	}
 	s.event(videoEvent{Kind: videoFailed, Text: reason, Without444: is444EightBit(format.Color)})
 }
