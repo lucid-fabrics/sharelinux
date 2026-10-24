@@ -128,6 +128,13 @@ func TestVAAPIShows444OnTheGPU(t *testing.T) {
 		t.Skipf("the renderer %s does not draw on the GPU", renderer.Name)
 	}
 	before := videoLive()
+	// The converted surfaces are kept for reuse and go with the decoder: a cleanup that runs after the
+	// decoder's own says none is left.
+	t.Cleanup(func() {
+		if n := videoPoolForTest(); n != 0 {
+			t.Errorf("%d output surfaces left after the decoder closed", n)
+		}
+	})
 	frames := decode444(t, decoderVAAPI, clip, 3)
 	frame := frames[len(frames)-1]
 	if !frame.Hardware {
@@ -156,6 +163,15 @@ func TestVAAPIShows444OnTheGPU(t *testing.T) {
 	right, _, _, _ := frame.gpuTextureForTest(159, 40, expect)
 	if !pixelNear(left, 128, 128, 128, 4) || !pixelNear(right, 255, 0, 0, 8) {
 		t.Fatalf("the chroma edge is blurred: left %v right %v", left, right)
+	}
+	// A picture after picture reuses the same few surfaces instead of making one for each.
+	for range 30 {
+		if _, output, _, _ := frame.gpuTextureForTest(40, 40, expect); output != outputDMABuf {
+			t.Fatalf("a picture went as %v", output)
+		}
+	}
+	if n := videoPoolForTest(); n < 1 || n > 3 {
+		t.Fatalf("%d output surfaces in the pool after 30 pictures, want 1 to 3", n)
 	}
 	for _, frame := range frames {
 		frame.free()

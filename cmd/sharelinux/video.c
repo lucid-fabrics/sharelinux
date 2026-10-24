@@ -658,10 +658,15 @@ gboolean oss_color_state_is_rec2100_pq(GdkColorState *state) {
 
 // ---- textures ------------------------------------------------------------
 
+typedef struct PoolSurface PoolSurface;
+static void pool_release(PoolSurface *surface);
+
 typedef struct {
 	AVFrame *frame;
 	int fds[4];
 	int fd_count;
+	// pooled is the output surface of the video processor the texture shows, given back when it goes.
+	PoolSurface *pooled;
 } DmabufHold;
 
 static void dmabuf_release(gpointer data) {
@@ -671,6 +676,9 @@ static void dmabuf_release(gpointer data) {
 		g_atomic_int_dec_and_test(&live_fds);
 	}
 	frame_release(&hold->frame);
+	if (hold->pooled != NULL) {
+		pool_release(hold->pooled);
+	}
 	g_free(hold);
 	g_atomic_int_dec_and_test(&live_textures);
 }
@@ -738,7 +746,10 @@ void oss_video_test_hdr_gpu(int mode) {
 	g_atomic_int_set(&test_hdr_gpu, mode);
 }
 
+static void pool_purge_locked(void);
+
 static void vpp_destroy_locked(void) {
+	pool_purge_locked();
 	if (vpp.ready) {
 		vaDestroyContext(vpp.display, vpp.context);
 		vaDestroyConfig(vpp.display, vpp.config);
@@ -813,22 +824,175 @@ static gboolean hdr_gpu_wanted(int width, int height) {
 	return (gsize)width * height > HDR_GPU_PIXELS;
 }
 
-// vpp_convert has the GPU's video processor make a new surface of another pixel format from a 4:4:4
+// ---- the video processor's output surfaces ---------------------------------
+//
+// A new surface of 5120x1440 costs the driver about 6 ms to give out (its memory is mapped and cleared on
+// first use), more than the conversion itself, so the output surfaces are kept and used again. GDK holds
+// one for as long as its texture lives (a few pictures), so a few are in use at once. Each is exported to a
+// DMA-BUF once; every texture gets a duplicate of the descriptors. The pool belongs to the display of the
+// video processor and goes with it (vpp_destroy_locked); a surface a texture still holds at that time is
+// only forgotten, not destroyed, because the display it belongs to is about to go and takes it along.
+
+#define POOL_SIZE 8
+
+struct PoolSurface {
+	VASurfaceID id;
+	int width, height;
+	unsigned int rt_format;
+	guint32 va_fourcc;
+	VADRMPRIMESurfaceDescriptor desc;
+	gboolean pooled, busy, orphan;
+};
+
+static GMutex pool_lock;
+static PoolSurface *pool_surfaces[POOL_SIZE];
+
+static void pool_close_fds(PoolSurface *surface) {
+	for (guint i = 0; i < surface->desc.num_objects && i < G_N_ELEMENTS(surface->desc.objects); i++) {
+		if (surface->desc.objects[i].fd >= 0) {
+			close(surface->desc.objects[i].fd);
+			surface->desc.objects[i].fd = -1;
+		}
+	}
+}
+
+// pool_destroy_idle_locked destroys an idle surface of the pool; pool_lock and vpp_lock are held.
+static void pool_destroy_idle_locked(int slot) {
+	PoolSurface *surface = pool_surfaces[slot];
+	vaDestroySurfaces(vpp.display, &surface->id, 1);
+	pool_close_fds(surface);
+	g_free(surface);
+	pool_surfaces[slot] = NULL;
+}
+
+static void pool_purge_locked(void) {
+	g_mutex_lock(&pool_lock);
+	for (int i = 0; i < POOL_SIZE; i++) {
+		PoolSurface *surface = pool_surfaces[i];
+		if (surface == NULL) {
+			continue;
+		}
+		if (!surface->busy) {
+			pool_destroy_idle_locked(i);
+		} else {
+			// A texture still shows it: it is freed when the texture goes, and the display takes the surface.
+			surface->orphan = TRUE;
+			pool_close_fds(surface);
+			pool_surfaces[i] = NULL;
+		}
+	}
+	g_mutex_unlock(&pool_lock);
+}
+
+// oss_video_test_pool counts the output surfaces the pool holds, for tests.
+int oss_video_test_pool(void) {
+	int count = 0;
+	g_mutex_lock(&pool_lock);
+	for (int i = 0; i < POOL_SIZE; i++) {
+		count += pool_surfaces[i] != NULL;
+	}
+	g_mutex_unlock(&pool_lock);
+	return count;
+}
+
+// pool_drop_format destroys the idle surfaces of a format, for one the display refused. vpp_lock is held.
+static void pool_drop_format_locked(guint32 va_fourcc) {
+	g_mutex_lock(&pool_lock);
+	for (int i = 0; i < POOL_SIZE; i++) {
+		if (pool_surfaces[i] != NULL && !pool_surfaces[i]->busy && pool_surfaces[i]->va_fourcc == va_fourcc) {
+			pool_destroy_idle_locked(i);
+		}
+	}
+	g_mutex_unlock(&pool_lock);
+}
+
+static void pool_release(PoolSurface *surface) {
+	g_mutex_lock(&pool_lock);
+	if (surface->orphan) {
+		g_free(surface);
+	} else {
+		surface->busy = FALSE;
+	}
+	g_mutex_unlock(&pool_lock);
+}
+
+// surface_make creates an output surface and exports it. It returns NULL when the GPU cannot.
+static PoolSurface *surface_make(VADisplay display, int width, int height, unsigned int rt_format, guint32 va_fourcc) {
+	VASurfaceAttrib attrib;
+	memset(&attrib, 0, sizeof attrib);
+	attrib.type = VASurfaceAttribPixelFormat;
+	attrib.flags = VA_SURFACE_ATTRIB_SETTABLE;
+	attrib.value.type = VAGenericValueTypeInteger;
+	attrib.value.value.i = va_fourcc;
+	PoolSurface *surface = g_new0(PoolSurface, 1);
+	surface->width = width;
+	surface->height = height;
+	surface->rt_format = rt_format;
+	surface->va_fourcc = va_fourcc;
+	if (vaCreateSurfaces(display, rt_format, width, height, &surface->id, 1, &attrib, 1) != VA_STATUS_SUCCESS) {
+		g_free(surface);
+		return NULL;
+	}
+	if (vaExportSurfaceHandle(display, surface->id, VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2,
+	                          VA_EXPORT_SURFACE_READ_ONLY | VA_EXPORT_SURFACE_COMPOSED_LAYERS, &surface->desc) != VA_STATUS_SUCCESS) {
+		vaDestroySurfaces(display, &surface->id, 1);
+		g_free(surface);
+		return NULL;
+	}
+	return surface;
+}
+
+// pool_acquire gives an idle surface of this size and format, making one if the pool has room; vpp_lock is
+// held. It returns NULL when the pool is full of surfaces in use (the caller then makes one that is not kept).
+static PoolSurface *pool_acquire_locked(VADisplay display, int width, int height, unsigned int rt_format, guint32 va_fourcc) {
+	g_mutex_lock(&pool_lock);
+	PoolSurface *found = NULL;
+	int free_slot = -1;
+	for (int i = 0; i < POOL_SIZE; i++) {
+		PoolSurface *surface = pool_surfaces[i];
+		if (surface != NULL && !surface->busy && (surface->width != width || surface->height != height)) {
+			// The picture changed size: the old surfaces are of no use.
+			pool_destroy_idle_locked(i);
+			surface = NULL;
+		}
+		if (surface == NULL) {
+			free_slot = free_slot < 0 ? i : free_slot;
+		} else if (found == NULL && !surface->busy && surface->rt_format == rt_format && surface->va_fourcc == va_fourcc) {
+			found = surface;
+		}
+	}
+	if (found == NULL && free_slot >= 0) {
+		found = surface_make(display, width, height, rt_format, va_fourcc);
+		if (found != NULL) {
+			found->pooled = TRUE;
+			pool_surfaces[free_slot] = found;
+		}
+	}
+	if (found != NULL) {
+		found->busy = TRUE;
+	}
+	g_mutex_unlock(&pool_lock);
+	return found;
+}
+
+// vpp_convert has the GPU's video processor make a surface of another pixel format from a 4:4:4
 // surface, of the same size and the same colors. For a YUV output (P010) the matrix, range and transfer
 // function stay what they were; for an RGB output the processor applies the matrix, and the range comes out
 // full. The output names the same color standard as the input, so the processor has no reason to move the
-// primaries: the texture is told the stream's own. It returns VA_INVALID_ID when the GPU cannot.
-static VASurfaceID vpp_convert(VADisplay display, VASurfaceID input, int width, int height, OssColor color, unsigned int rt_format,
-                               guint32 va_fourcc, gboolean rgb) {
-	VASurfaceID output = VA_INVALID_ID;
+// primaries: the texture is told the stream's own. It returns the output, exported (pooled: give it back
+// with pool_release; not pooled: the caller owns the descriptors and frees the struct), or NULL when the
+// GPU cannot.
+static PoolSurface *vpp_convert(VADisplay display, VASurfaceID input, int width, int height, OssColor color, unsigned int rt_format,
+                                guint32 va_fourcc, gboolean rgb) {
+	PoolSurface *output = NULL;
 	g_mutex_lock(&vpp_lock);
 	if (vpp_prepare_locked(display, width, height)) {
-		VASurfaceAttrib attrib;
-		memset(&attrib, 0, sizeof attrib);
-		attrib.type = VASurfaceAttribPixelFormat;
-		attrib.flags = VA_SURFACE_ATTRIB_SETTABLE;
-		attrib.value.type = VAGenericValueTypeInteger;
-		attrib.value.value.i = va_fourcc;
+		output = pool_acquire_locked(display, width, height, rt_format, va_fourcc);
+		if (output == NULL) {
+			output = surface_make(display, width, height, rt_format, va_fourcc);
+		}
+	}
+	if (output != NULL) {
 		VAProcPipelineParameterBuffer params;
 		memset(&params, 0, sizeof params);
 		params.surface = input;
@@ -841,32 +1005,35 @@ static VASurfaceID vpp_convert(VADisplay display, VASurfaceID input, int width, 
 		params.output_color_properties.color_range = rgb ? VA_SOURCE_RANGE_FULL : params.input_color_properties.color_range;
 		VABufferID buffer = VA_INVALID_ID;
 		gboolean done = FALSE;
-		if (vaCreateSurfaces(display, rt_format, width, height, &output, 1, &attrib, 1) == VA_STATUS_SUCCESS) {
-			if (vaCreateBuffer(display, vpp.context, VAProcPipelineParameterBufferType, sizeof params, 1, &params, &buffer) ==
-			    VA_STATUS_SUCCESS) {
-				done = vaBeginPicture(display, vpp.context, output) == VA_STATUS_SUCCESS;
-				if (done) {
-					done = vaRenderPicture(display, vpp.context, &buffer, 1) == VA_STATUS_SUCCESS;
-					done = vaEndPicture(display, vpp.context) == VA_STATUS_SUCCESS && done;
-				}
-				vaDestroyBuffer(display, buffer);
-			}
+		if (vaCreateBuffer(display, vpp.context, VAProcPipelineParameterBufferType, sizeof params, 1, &params, &buffer) == VA_STATUS_SUCCESS) {
+			done = vaBeginPicture(display, vpp.context, output->id) == VA_STATUS_SUCCESS;
 			if (done) {
-				done = vaSyncSurface(display, output) == VA_STATUS_SUCCESS;
+				done = vaRenderPicture(display, vpp.context, &buffer, 1) == VA_STATUS_SUCCESS;
+				done = vaEndPicture(display, vpp.context) == VA_STATUS_SUCCESS && done;
 			}
-			if (!done) {
-				vaDestroySurfaces(display, &output, 1);
-				output = VA_INVALID_ID;
+			vaDestroyBuffer(display, buffer);
+		}
+		if (done) {
+			done = vaSyncSurface(display, output->id) == VA_STATUS_SUCCESS;
+		}
+		if (!done) {
+			if (output->pooled) {
+				// Back to the pool, which may use it again for the next picture.
+				pool_release(output);
+			} else {
+				vaDestroySurfaces(display, &output->id, 1);
+				pool_close_fds(output);
+				g_free(output);
 			}
+			output = NULL;
+		} else if (!output->pooled) {
+			// The buffer lives on in the descriptors; the surface object is no longer needed.
+			vaDestroySurfaces(display, &output->id, 1);
+			output->id = VA_INVALID_ID;
 		}
 	}
 	g_mutex_unlock(&vpp_lock);
 	return output;
-}
-
-// vpp_to_p010 converts a 4:4:4 10-bit surface into a new P010 surface of the same size.
-static VASurfaceID vpp_to_p010(VADisplay display, VASurfaceID input, int width, int height, OssColor color) {
-	return vpp_convert(display, input, width, height, color, VA_RT_FORMAT_YUV420_10, VA_FOURCC_P010, FALSE);
 }
 
 #define DRM_FORMAT_P010 FOURCC('P', '0', '1', '0')
@@ -902,10 +1069,12 @@ static int dmabuf_planes(guint32 fourcc) {
 }
 
 // dmabuf_import hands an exported surface to GDK. It takes the descriptor's file descriptors whatever
-// happens. keep, if given, is the decoded frame the texture must keep alive.
+// happens. keep, if given, is the decoded frame the texture must keep alive, and pooled the output surface
+// of the video processor the texture shows, which is given back when the texture goes.
 static DmabufResult dmabuf_import(GdkDisplay *display, VADRMPRIMESurfaceDescriptor *descriptor, const AVFrame *keep, OssColor color,
-                                  GdkTexture **texture) {
+                                  PoolSurface *pooled, GdkTexture **texture) {
 	DmabufHold *hold = g_new0(DmabufHold, 1);
+	hold->pooled = pooled;
 	hold->fd_count = (int)MIN(descriptor->num_objects, 4u);
 	for (int i = 0; i < hold->fd_count; i++) {
 		hold->fds[i] = descriptor->objects[i].fd;
@@ -966,23 +1135,32 @@ static DmabufResult dmabuf_import(GdkDisplay *display, VADRMPRIMESurfaceDescript
 	return result;
 }
 
-// import_converted has the GPU make a surface of another format from the decoded one, exports it and
-// hands it to GDK. The converted surface is not kept: its buffer lives on in the descriptors the export gave.
+// import_converted has the GPU make a surface of another format from the decoded one and hands it to GDK.
 static DmabufResult import_converted(const OssFrame *frame, GdkDisplay *display, VADisplay va, int width, int height, unsigned int rt_format,
                                      guint32 va_fourcc, gboolean rgb, GdkTexture **texture) {
-	VASurfaceID converted = vpp_convert(va, hardware_surface(frame->av), width, height, frame->info.color, rt_format, va_fourcc, rgb);
-	if (converted == VA_INVALID_ID) {
+	PoolSurface *converted = vpp_convert(va, hardware_surface(frame->av), width, height, frame->info.color, rt_format, va_fourcc, rgb);
+	if (converted == NULL) {
 		return DMABUF_UNSUPPORTED;
 	}
-	VADRMPRIMESurfaceDescriptor descriptor;
-	memset(&descriptor, 0, sizeof descriptor);
-	VAStatus exported = vaExportSurfaceHandle(va, converted, VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2,
-	                                          VA_EXPORT_SURFACE_READ_ONLY | VA_EXPORT_SURFACE_COMPOSED_LAYERS, &descriptor);
-	vaDestroySurfaces(va, &converted, 1);
-	if (exported != VA_STATUS_SUCCESS) {
-		return DMABUF_FAILED;
+	VADRMPRIMESurfaceDescriptor descriptor = converted->desc;
+	PoolSurface *pooled = NULL;
+	if (converted->pooled) {
+		// The pool keeps its descriptors: the texture gets duplicates, and the surface goes back when it is done.
+		for (guint i = 0; i < descriptor.num_objects; i++) {
+			descriptor.objects[i].fd = dup(converted->desc.objects[i].fd);
+			if (descriptor.objects[i].fd < 0) {
+				for (guint j = 0; j < i; j++) {
+					close(descriptor.objects[j].fd);
+				}
+				pool_release(converted);
+				return DMABUF_FAILED;
+			}
+		}
+		pooled = converted;
+	} else {
+		g_free(converted);
 	}
-	return dmabuf_import(display, &descriptor, NULL, frame->info.color, texture);
+	return dmabuf_import(display, &descriptor, NULL, frame->info.color, pooled, texture);
 }
 
 // rgb10_refused is set once GDK turned down a 10 bit RGB surface of the GPU's video processor.
@@ -999,7 +1177,7 @@ static DmabufResult texture_from_surface(const OssFrame *frame, GdkDisplay *disp
 	}
 	guint32 fourcc = descriptor.num_layers == 1 ? descriptor.layers[0].drm_format : 0;
 	int width = descriptor.width, height = descriptor.height;
-	DmabufResult result = dmabuf_import(display, &descriptor, av, frame->info.color, texture);
+	DmabufResult result = dmabuf_import(display, &descriptor, av, frame->info.color, NULL, texture);
 	if (result != DMABUF_UNSUPPORTED) {
 		return result;
 	}
@@ -1020,6 +1198,9 @@ static DmabufResult texture_from_surface(const OssFrame *frame, GdkDisplay *disp
 			// The processor writes linear surfaces, and Mesa's GL offers no linear 10 bit RGB to GDK: do not
 			// make the conversion again for every picture.
 			g_atomic_int_set(&rgb10_refused, 1);
+			g_mutex_lock(&vpp_lock);
+			pool_drop_format_locked(VA_FOURCC_A2R10G10B10);
+			g_mutex_unlock(&vpp_lock);
 		}
 	}
 	// Without 10 bit RGB the processor still makes P010, which has half the chroma resolution.

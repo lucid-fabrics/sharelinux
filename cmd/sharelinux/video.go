@@ -120,6 +120,11 @@ func hdrGPUForTest(mode int) {
 	C.oss_video_test_hdr_gpu(C.int(mode))
 }
 
+// videoPoolForTest is how many output surfaces of the GPU's video processor are kept for reuse.
+func videoPoolForTest() int {
+	return int(C.oss_video_test_pool())
+}
+
 // fullAnswersForTest makes the next sends of a packet to libavcodec answer "full" without taking it.
 func fullAnswersForTest(sends int) {
 	C.oss_video_test_eagain(C.int(sends))
