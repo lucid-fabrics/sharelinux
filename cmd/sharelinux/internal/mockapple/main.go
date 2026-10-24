@@ -119,7 +119,7 @@ func main() {
 		// A viewer on the same machine is a fair test of the video path.
 		Media: media.ServerStreamConfig{
 			AllowLoopbackTarget: true,
-			DisableAudioLeg:     true,
+			OpenAudio:           noSound,
 			ListenUDP: func(port uint16) (*net.UDPConn, error) {
 				return net.ListenUDP("udp", &net.UDPAddr{IP: listenIP(*listen), Port: int(port)})
 			},
@@ -135,3 +135,6 @@ func main() {
 	log.Println("listening on", listener.Addr())
 	log.Fatal(server.Serve(listener))
 }
+
+// noSound is a Mac that sends no sound: the server then answers without an audio stream.
+func noSound() (media.ServerAudioSource, error) { return nil, media.ErrAudioUnsupported }

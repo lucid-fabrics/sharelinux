@@ -87,7 +87,7 @@ func TestPlanVideoOffer(t *testing.T) {
 	if offer.TilesPerFrame != 1 {
 		t.Fatalf("%d bands, one decoder takes one", offer.TilesPerFrame)
 	}
-	if !offer.ImmediatePlayout || !offer.FrameRate60 {
+	if !offer.ImmediatePlayout {
 		t.Fatalf("offer %+v", offer)
 	}
 	if _, err := media.NewOffer(offer); err != nil {

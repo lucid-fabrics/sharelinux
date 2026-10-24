@@ -221,7 +221,7 @@ func (s *ServerSession) handshake() error {
 	s.screen = screen
 	s.framebuffer = [2]int{screen.Width, screen.Height}
 	s.logger.Debug("client init", "flags", fmt.Sprintf("%#x", clientInit), "version", version.String())
-	_, err = s.conn.Write(serverInitMessage(screen.Width, screen.Height, options.Name))
+	_, err = s.conn.Write(serverInitMessage(screen.Width, screen.Height, options.Flags, options.Name))
 	return err
 }
 

@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nekohasekai/open-screen-sharing/internal/rfb"
 	E "github.com/sagernet/sing/common/exceptions"
 	"github.com/zalando/go-keyring"
 )

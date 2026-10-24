@@ -314,7 +314,7 @@ func openMockMac(t *testing.T, clip *mockmedia.Clip) (*rfb.Client, *mockMac, fun
 		Handler: mac,
 		Flags:   rfb.ServerFlagObserveOnly | rfb.ServerFlagExtended,
 		Media: media.ServerStreamConfig{
-			AllowLoopbackTarget: true, DisableAudioLeg: true,
+			AllowLoopbackTarget: true, OpenAudio: noSound,
 			ListenUDP: func(port uint16) (*net.UDPConn, error) {
 				return net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 2), Port: int(port)})
 			},
@@ -734,3 +734,6 @@ func TestStreamKnowsHowLongItHasBeenQuiet(t *testing.T) {
 		t.Fatal("a unit ends the quiet")
 	}
 }
+
+// noSound is a Mac that sends no sound: the server then answers without an audio stream.
+func noSound() (media.ServerAudioSource, error) { return nil, media.ErrAudioUnsupported }

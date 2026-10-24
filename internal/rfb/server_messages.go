@@ -23,14 +23,14 @@ var serverCommands = func() [16]byte {
 	return bitmap
 }()
 
-func serverInitMessage(width, height int, name string) []byte {
+func serverInitMessage(width, height int, flags uint32, name string) []byte {
 	message := binary.BigEndian.AppendUint16(nil, uint16(width))
 	message = binary.BigEndian.AppendUint16(message, uint16(height))
 	format := make([]byte, 16)
 	pixelFormatBGRA.encode(format)
 	message = append(message, format...)
 	extended := []byte{0, 0}
-	extended = binary.BigEndian.AppendUint32(extended, serverFlags)
+	extended = binary.BigEndian.AppendUint32(extended, flags)
 	extended = append(extended, serverCommands[:]...)
 	extended = append(extended, name...)
 	message = binary.BigEndian.AppendUint32(message, uint32(len(extended)))

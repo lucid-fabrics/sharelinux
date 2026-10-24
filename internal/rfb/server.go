@@ -55,6 +55,10 @@ type ServerOptions struct {
 	Logger           *slog.Logger
 	Handler          ServerHandler
 
+	// Flags are the ServerInit flags to advertise; zero means the Mac default. Test
+	// servers use it to play a Mac that only allows viewing.
+	Flags uint32
+
 	SystemCommands []SystemCommand
 
 	Media media.ServerStreamConfig
@@ -82,6 +86,9 @@ type Server struct {
 func NewServer(options ServerOptions) (*Server, error) {
 	if options.Password == "" && !options.NoAuthentication {
 		return nil, E.New("rfb: the server needs a password")
+	}
+	if options.Flags == 0 {
+		options.Flags = serverFlags
 	}
 	s := &Server{
 		options:   options,
