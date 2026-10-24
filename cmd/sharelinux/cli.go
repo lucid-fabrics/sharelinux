@@ -22,7 +22,7 @@ network. The password comes from the keyring, SHARELINUX_PASSWORD,
 In a session Ctrl+Alt+Esc leaves exclusive mode. Hold Ctrl+Alt+Shift and press:
   M cycle view/control/exclusive   H stats   F fullscreen   U quality
   D cycle displays   V virtual display at window size   X toggle HDR
-  R refresh   T type the local clipboard   G fetch files of the Mac's drag
+  N mute or unmute the Mac's sound   R refresh   T type the local clipboard   G fetch files of the Mac's drag
   S save a screenshot   Q quit
 
 flags:

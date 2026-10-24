@@ -43,3 +43,12 @@ func TestNextCycle(t *testing.T) {
 		t.Fatal("ring")
 	}
 }
+
+func TestMuteSoundChord(t *testing.T) {
+	if chordCommand(17, modCtrl|modAlt|modShift) != commandMuteSound {
+		t.Fatal("leader+N mutes the Mac's sound")
+	}
+	if chordCommand(17, modCtrl|modAlt) != commandNone {
+		t.Fatal("N needs the whole leader")
+	}
+}

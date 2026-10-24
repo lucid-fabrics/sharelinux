@@ -367,7 +367,7 @@ func (v *sessionView) installActions() {
 	v.actions.AddAction(v.statsAction)
 
 	v.muteAction = gio.NewSimpleActionStateful("mute", nil, glib.NewVariantBoolean(v.muted))
-	v.muteAction.ConnectActivate(func(*glib.Variant) { v.setMuted(!v.muted) })
+	v.muteAction.ConnectActivate(func(*glib.Variant) { v.runCommand(commandMuteSound) })
 	v.actions.AddAction(v.muteAction)
 
 	v.hdrAction = gio.NewSimpleActionStateful("hdr", nil, glib.NewVariantBoolean(v.hdr))
@@ -1443,6 +1443,8 @@ func (v *sessionView) runCommand(command command) {
 		v.report(fmt.Sprintf("Virtual display %d×%d", width, height), err)
 	case commandToggleHDR:
 		v.toggleHDR()
+	case commandMuteSound:
+		v.setMuted(!v.muted)
 	case commandRefresh:
 		v.report("Refreshing", v.client.RequestRefresh())
 	case commandTypeClipboard:

@@ -14,6 +14,7 @@ const (
 	commandCycleDisplay
 	commandVirtualDisplay
 	commandToggleHDR
+	commandMuteSound
 	commandRefresh
 	commandTypeClipboard
 	commandFetchDrag
@@ -41,6 +42,7 @@ var chordKeys = map[uint32]command{
 	7:  commandCycleDisplay,   // D
 	25: commandVirtualDisplay, // V
 	27: commandToggleHDR,      // X
+	17: commandMuteSound,      // N
 	21: commandRefresh,        // R
 	23: commandTypeClipboard,  // T
 	10: commandFetchDrag,      // G
