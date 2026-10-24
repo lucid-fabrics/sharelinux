@@ -389,7 +389,7 @@ func (v *sessionView) installActions() {
 	v.qualityAction = gio.NewSimpleActionStateful("quality", glib.NewVariantType("s"), glib.NewVariantString(v.quality.String()))
 	v.qualityAction.ConnectActivate(func(parameter *glib.Variant) {
 		_, text := parameter.DupString()
-		quality, err := rfb.ParseQuality(text)
+		quality, err := parseQuality(text)
 		if err != nil {
 			return
 		}

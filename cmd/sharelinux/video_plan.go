@@ -239,7 +239,6 @@ func planVideo(mode videoMode, caps videoCaps, serverHasVideo bool) videoPlan {
 		Codecs: []media.Codec{plan.Codec},
 		// Standard dynamic range, 4:2:0, full or video range. HDR adds 4:4:4 10-bit (withHDR).
 		PixelFormats:  media.PixelFormatsSDR420,
-		FrameRate60:   true,
 		TilesPerFrame: 1,
 		// A viewer on a LAN wants the newest picture, not a smooth delay: the library hands
 		// units over as they complete and the widget shows the latest.

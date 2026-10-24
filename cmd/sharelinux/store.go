@@ -286,7 +286,7 @@ func (c *savedConnection) apply(opts *options) error {
 		}
 	}
 	if c.Quality != "" && !opts.Explicit["quality"] {
-		opts.Quality, err = rfb.ParseQuality(c.Quality)
+		opts.Quality, err = parseQuality(c.Quality)
 		if err != nil {
 			return err
 		}

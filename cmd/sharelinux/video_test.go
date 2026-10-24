@@ -361,15 +361,15 @@ type mutableSource struct {
 	mute *atomic.Bool
 }
 
-func (m mutableSource) ReadPacket(ctx context.Context, buffer []byte) (int, bool, error) {
+func (m mutableSource) ReadPackets(ctx context.Context, packets []media.ServerPacket) (int, error) {
 	for m.mute.Load() {
 		select {
 		case <-ctx.Done():
-			return 0, false, ctx.Err()
+			return 0, ctx.Err()
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
-	return m.Source.ReadPacket(ctx, buffer)
+	return m.Source.ReadPackets(ctx, packets)
 }
 
 func (m *mockMac) Screen() rfb.ServerScreen {

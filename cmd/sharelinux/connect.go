@@ -64,7 +64,6 @@ func (a *app) rfbOptions(req *request, h *handler) rfb.Options {
 		Quality:              req.opts.Quality,
 		Mode:                 req.opts.Mode,
 		Clipboard:            !req.opts.NoClipboard,
-		DisplayID:            req.opts.Display,
 		AutomaticUpdates:     true,
 		Logger:               a.logger,
 		SecurityTypes:        securityTypes(req),
@@ -78,9 +77,15 @@ func (a *app) rfbOptions(req *request, h *handler) rfb.Options {
 	if req.opts.HDR && !hdr {
 		a.logger.Info("hdr", "state", "off", "reason", a.hdrOffReason())
 	}
-	if req.opts.Virtual != nil || hdr {
-		virtual := req.opts.Virtual
+	if req.opts.Virtual != nil || hdr || req.opts.Display != 0 {
+		virtual, display := req.opts.Virtual, req.opts.Display
 		options.Prepare = func(client *rfb.Client) {
+			if display != 0 {
+				err := client.SelectDisplay(display)
+				if err != nil {
+					h.toast("Display: " + err.Error())
+				}
+			}
 			if virtual != nil {
 				err := client.SetVirtualDisplay(virtual.Width, virtual.Height, virtual.Density, rfb.VirtualDisplayLargestSide, rfb.VirtualDisplayLargestSide)
 				if err != nil {

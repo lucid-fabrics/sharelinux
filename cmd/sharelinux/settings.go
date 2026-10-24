@@ -57,7 +57,7 @@ func defaultSettings() settings {
 // sanitize replaces values a hand-edited file could break.
 func (s *settings) sanitize() {
 	defaults := defaultSettings()
-	if _, err := rfb.ParseQuality(s.Quality); err != nil {
+	if _, err := parseQuality(s.Quality); err != nil {
 		s.Quality = defaults.Quality
 	}
 	if s.CommandKey != commandKeySuper && s.CommandKey != commandKeyAlt {
@@ -76,7 +76,7 @@ func (s *settings) sanitize() {
 // apply puts the preferences into the options of a connection. A flag given on
 // the command line always wins.
 func (s settings) apply(opts *options) {
-	quality, err := rfb.ParseQuality(s.Quality)
+	quality, err := parseQuality(s.Quality)
 	if err == nil && !opts.Explicit["quality"] {
 		opts.Quality = quality
 	}

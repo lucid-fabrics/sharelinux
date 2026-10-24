@@ -10,6 +10,7 @@ import (
 type stream struct {
 	raw     *bufio.Reader
 	source  io.Reader
+	records *recordReader
 	scratch [8]byte
 }
 
@@ -24,6 +25,7 @@ func (s *stream) startRecords(keys recordKeys) error {
 	if err != nil {
 		return err
 	}
+	s.records = records
 	s.source = records
 	return nil
 }

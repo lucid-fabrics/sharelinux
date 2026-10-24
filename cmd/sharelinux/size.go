@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/nekohasekai/open-screen-sharing/internal/rfb"
 	E "github.com/sagernet/sing/common/exceptions"
 )
 
@@ -22,4 +23,14 @@ func parseSize(value string) (int, int, error) {
 		return 0, 0, err
 	}
 	return width, height, nil
+}
+
+// parseQuality maps a quality name to its rfb value.
+func parseQuality(name string) (rfb.Quality, error) {
+	for quality := rfb.QualityAdaptive; quality <= rfb.QualityLow; quality++ {
+		if quality.String() == name {
+			return quality, nil
+		}
+	}
+	return 0, E.New("unknown quality ", strconv.Quote(name))
 }

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nekohasekai/open-screen-sharing/internal/rfb/media"
+	"github.com/sagernet/sing/common/buf"
 	E "github.com/sagernet/sing/common/exceptions"
 )
 
@@ -218,8 +219,6 @@ func (s *Source) Info() media.ServerVideoInfo { return s.info }
 // Frames counts the pictures sent.
 func (s *Source) Frames() uint64 { return s.sent.Load() }
 
-func (s *Source) PacketArrival() time.Time { return time.Now() }
-
 func (s *Source) WriteRTCP([]byte) error { return nil }
 
 // RequestKeyFrame makes the next picture the clip's first, which is a keyframe.
@@ -231,6 +230,20 @@ func (s *Source) RequestKeyFrame() error {
 func (s *Source) Close() error {
 	s.closeOnce.Do(func() { close(s.closed) })
 	return nil
+}
+
+// ReadPackets waits for the next packet and hands it over in a buffer with the
+// rear room the server's sender needs.
+func (s *Source) ReadPackets(ctx context.Context, packets []media.ServerPacket) (int, error) {
+	scratch := make([]byte, 12+maxPayload+3)
+	n, rtcp, err := s.ReadPacket(ctx, scratch)
+	if err != nil {
+		return 0, err
+	}
+	buffer := buf.NewSize(n + int(media.ServerRearHeadroom))
+	_, _ = buffer.Write(scratch[:n])
+	packets[0] = media.ServerPacket{Buffer: buffer, RTCP: rtcp, Arrival: time.Now()}
+	return 1, nil
 }
 
 func (s *Source) ReadPacket(ctx context.Context, buffer []byte) (int, bool, error) {

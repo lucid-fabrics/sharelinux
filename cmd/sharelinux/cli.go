@@ -172,7 +172,7 @@ func parseArgs(args []string, output io.Writer) (*options, error) {
 	if err != nil {
 		return nil, err
 	}
-	opts.Quality, err = rfb.ParseQuality(quality)
+	opts.Quality, err = parseQuality(quality)
 	if err != nil {
 		return nil, err
 	}

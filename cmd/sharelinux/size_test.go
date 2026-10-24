@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/nekohasekai/open-screen-sharing/internal/rfb"
+)
 
 func TestParseSize(t *testing.T) {
 	w, h, err := parseSize("1920x1080")
@@ -11,5 +15,17 @@ func TestParseSize(t *testing.T) {
 		if _, _, err := parseSize(bad); err == nil {
 			t.Fatalf("%q should fail", bad)
 		}
+	}
+}
+
+func TestParseQualityRoundTrips(t *testing.T) {
+	for quality := rfb.QualityAdaptive; quality <= rfb.QualityLow; quality++ {
+		got, err := parseQuality(quality.String())
+		if err != nil || got != quality {
+			t.Fatalf("%v: got %v %v", quality, got, err)
+		}
+	}
+	if _, err := parseQuality("ultra"); err == nil {
+		t.Fatal("unknown name should fail")
 	}
 }
