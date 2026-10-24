@@ -149,12 +149,15 @@ func hoverPointer(gate *pointerGate, send func(x, y int, buttons uint8) error, x
 
 // dropGesture presses, drags a pixel and releases the left button at x, y, which
 // is how the Mac learns where the dropped files should land.
-func dropGesture(send func(x, y int, buttons uint8) error, wait func(time.Duration), x, y int) {
-	_ = send(x, y, rfb.ButtonLeft)
+// Press, drag and release carry a click count of 1, because a count of 0 lets
+// the Mac treat a press at an unmoved pointer as a multi-click, which would open
+// the item under the drop.
+func dropGesture(send func(x, y int, buttons uint8, clickCount int) error, wait func(time.Duration), x, y int) {
+	_ = send(x, y, rfb.ButtonLeft, 1)
 	wait(150 * time.Millisecond)
-	_ = send(x+1, y+1, rfb.ButtonLeft)
+	_ = send(x+1, y+1, rfb.ButtonLeft, 1)
 	wait(150 * time.Millisecond)
-	_ = send(x+1, y+1, 0)
+	_ = send(x+1, y+1, 0, 1)
 }
 
 // progressInterval is the least time between two reports of one copy.
@@ -283,7 +286,7 @@ func (t *transfers) drop(paths []string, x, y int) {
 			t.failDrop("Cannot drop: " + err.Error())
 			return
 		}
-		dropGesture(plainPointer(t.client), time.Sleep, x, y)
+		dropGesture(countedPointer(t.client), time.Sleep, x, y)
 		t.gesture.End()
 		destination, err := t.waitDestination(id)
 		if err != nil {
@@ -403,8 +406,14 @@ func (t *transfers) fetch(drag *rfb.RemoteDrag) {
 	}()
 }
 
+// countedPointer sends pointer events with an explicit click count, which the
+// synthetic drop gesture needs.
+func countedPointer(client *rfb.Client) func(x, y int, buttons uint8, clickCount int) error {
+	return client.SendPointer
+}
+
 // plainPointer sends pointer events that carry no click count, which is what
-// hovers and the synthetic drop gesture want.
+// hovers want.
 func plainPointer(client *rfb.Client) func(x, y int, buttons uint8) error {
 	return func(x, y int, buttons uint8) error { return client.SendPointer(x, y, buttons, 0) }
 }

@@ -30,7 +30,7 @@ func TestDropGestureOrder(t *testing.T) {
 	}
 	var sent []press
 	var waits []time.Duration
-	dropGesture(func(x, y int, buttons uint8) error {
+	dropGesture(func(x, y int, buttons uint8, _ int) error {
 		sent = append(sent, press{x, y, buttons})
 		return nil
 	}, func(d time.Duration) { waits = append(waits, d) }, 10, 20)
@@ -45,6 +45,24 @@ func TestDropGestureOrder(t *testing.T) {
 	}
 	if len(waits) != 2 {
 		t.Fatalf("%v", waits)
+	}
+}
+
+// A count of 0 would let the Mac read a press at an unmoved pointer as a
+// double-click that opens the item under the drop, so every drop event sends 1.
+func TestDropGestureSendsClickCountOne(t *testing.T) {
+	var counts []int
+	dropGesture(func(_, _ int, _ uint8, clickCount int) error {
+		counts = append(counts, clickCount)
+		return nil
+	}, func(time.Duration) {}, 10, 20)
+	if len(counts) != 3 {
+		t.Fatalf("%v", counts)
+	}
+	for i, c := range counts {
+		if c != 1 {
+			t.Fatalf("event %d sent click count %d, want 1", i, c)
+		}
 	}
 }
 
@@ -65,7 +83,7 @@ func TestHoverReachesTheMacBeforeTheDrop(t *testing.T) {
 	hoverPointer(&gate, send, 10, 20)
 	gate.Begin()
 	hoverPointer(&gate, send, 99, 99)
-	dropGesture(send, func(time.Duration) {}, 10, 20)
+	dropGesture(func(x, y int, buttons uint8, _ int) error { return send(x, y, buttons) }, func(time.Duration) {}, 10, 20)
 	gate.End()
 	want := []event{{5, 6, 0}, {10, 20, 0}, {10, 20, rfb.ButtonLeft}, {11, 21, rfb.ButtonLeft}, {11, 21, 0}}
 	if len(sent) != len(want) {
