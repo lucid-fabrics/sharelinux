@@ -379,7 +379,7 @@ func TestCodesAreUnpredictableFromAttackerControlledState(t *testing.T) {
 
 func TestNormalizeDeviceName(t *testing.T) {
 	ok := map[string]string{
-		"Wassim's PC":        "Wassim's PC",
+		"Alice's PC":         "Alice's PC",
 		"B\u00fcro 2":        "B\u00fcro 2",
 		"Rechner \U0001F4BB": "Rechner \U0001F4BB",
 		"Cafe\u0301":         "Caf\u00e9", // NFC

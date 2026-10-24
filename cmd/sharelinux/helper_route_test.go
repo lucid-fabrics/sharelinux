@@ -412,24 +412,24 @@ func TestHelperButtonMapping(t *testing.T) {
 
 func TestHelperTargetIsOnlyTheMacTheSessionIsConnectedTo(t *testing.T) {
 	macs := []pairedMac{
-		{Name: "Studio", Address: "192.168.1.218", Key: strings.Repeat("a", 64)},
+		{Name: "Studio", Address: "192.0.2.218", Key: strings.Repeat("a", 64)},
 		{Name: "Other", Address: "10.0.0.9:6000", Key: strings.Repeat("b", 64)},
 	}
-	mac, addr, ok := helperTarget("192.168.1.218", macs, nil)
-	if !ok || mac.Name != "Studio" || addr != "192.168.1.218:5961" {
+	mac, addr, ok := helperTarget("192.0.2.218", macs, nil)
+	if !ok || mac.Name != "Studio" || addr != "192.0.2.218:5961" {
 		t.Fatalf("%v %v %v", mac, addr, ok)
 	}
 	mac, addr, ok = helperTarget("10.0.0.9", macs, nil)
 	if !ok || mac.Name != "Other" || addr != "10.0.0.9:6000" {
 		t.Fatalf("custom port: %v %v %v", mac, addr, ok)
 	}
-	if _, _, ok = helperTarget("192.168.1.77", macs, nil); ok {
+	if _, _, ok = helperTarget("192.0.2.77", macs, nil); ok {
 		t.Fatal("matched a Mac the session is not connected to")
 	}
 	if _, _, ok = helperTarget("", macs, nil); ok {
 		t.Fatal("matched an empty address")
 	}
-	if _, _, ok = helperTarget("192.168.1.218", nil, nil); ok {
+	if _, _, ok = helperTarget("192.0.2.218", nil, nil); ok {
 		t.Fatal("matched with nobody paired")
 	}
 }
@@ -439,19 +439,19 @@ func TestHelperTargetIsOnlyTheMacTheSessionIsConnectedTo(t *testing.T) {
 func TestHelperTargetSendsToThePeerIPNeverToAName(t *testing.T) {
 	lookup := func(name string) []string {
 		if name == "studio.local" {
-			return []string{"192.168.1.218"}
+			return []string{"192.0.2.218"}
 		}
 		return nil
 	}
 	macs := []pairedMac{{Name: "Studio", Address: "Studio.local", Key: strings.Repeat("a", 64)}}
-	_, addr, ok := helperTarget("192.168.1.218", macs, lookup)
-	if !ok || addr != "192.168.1.218:5961" {
+	_, addr, ok := helperTarget("192.0.2.218", macs, lookup)
+	if !ok || addr != "192.0.2.218:5961" {
 		t.Fatalf("%v %v", addr, ok)
 	}
-	if _, _, ok = helperTarget("192.168.1.219", macs, lookup); ok {
+	if _, _, ok = helperTarget("192.0.2.219", macs, lookup); ok {
 		t.Fatal("matched another address")
 	}
-	if _, _, ok = helperTarget("192.168.1.218", macs, nil); ok {
+	if _, _, ok = helperTarget("192.0.2.218", macs, nil); ok {
 		t.Fatal("matched a name without a lookup")
 	}
 	// A session host that is a name (no peer IP recorded) never becomes a target.
@@ -459,8 +459,8 @@ func TestHelperTargetSendsToThePeerIPNeverToAName(t *testing.T) {
 		t.Fatalf("a name was accepted as the peer and would be looked up again: %v", addr)
 	}
 	// A DNS that now answers differently cannot redirect the send: only the peer IP is used.
-	changed := func(string) []string { return []string{"192.168.1.99", "192.168.1.218"} }
-	if _, addr, _ = helperTarget("192.168.1.218", macs, changed); addr != "192.168.1.218:5961" {
+	changed := func(string) []string { return []string{"192.0.2.99", "192.0.2.218"} }
+	if _, addr, _ = helperTarget("192.0.2.218", macs, changed); addr != "192.0.2.218:5961" {
 		t.Fatalf("sent to %v", addr)
 	}
 }
@@ -473,15 +473,15 @@ func TestHelperTargetSpellings(t *testing.T) {
 			t.Errorf("%q -> %v %v", peer, addr, ok)
 		}
 	}
-	mapped := []pairedMac{{Name: "S", Address: "192.168.1.5", Key: strings.Repeat("a", 64)}}
-	if _, _, ok := helperTarget("::ffff:192.168.1.5", mapped, nil); !ok {
+	mapped := []pairedMac{{Name: "S", Address: "192.0.2.5", Key: strings.Repeat("a", 64)}}
+	if _, _, ok := helperTarget("::ffff:192.0.2.5", mapped, nil); !ok {
 		t.Error("an IPv4-mapped peer is the same machine")
 	}
 }
 
 func TestDialCandidatesResolveOnceAndKeepLiterals(t *testing.T) {
 	ctx := context.Background()
-	if got := dialCandidates(ctx, "192.168.1.5"); len(got) != 1 || got[0] != "192.168.1.5" {
+	if got := dialCandidates(ctx, "192.0.2.5"); len(got) != 1 || got[0] != "192.0.2.5" {
 		t.Fatalf("%v", got)
 	}
 	if got := dialCandidates(ctx, "[fe80::1]"); len(got) != 1 || got[0] != "fe80::1" {

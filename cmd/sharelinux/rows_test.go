@@ -33,8 +33,8 @@ func TestAgoText(t *testing.T) {
 
 func TestSavedSubtitle(t *testing.T) {
 	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
-	mac := savedConnection{User: "wassim", Host: "192.168.1.218", Port: 5900, LastUsed: now.Add(-2 * time.Hour)}
-	if got := mac.subtitle(now); got != "wassim on 192.168.1.218 · last used 2 hours ago" {
+	mac := savedConnection{User: "alice", Host: "192.0.2.218", Port: 5900, LastUsed: now.Add(-2 * time.Hour)}
+	if got := mac.subtitle(now); got != "alice on 192.0.2.218 · last used 2 hours ago" {
 		t.Fatal(got)
 	}
 	vnc := savedConnection{Host: "mac.local", Port: 5901}
@@ -60,7 +60,7 @@ func TestTileColorIsStable(t *testing.T) {
 	for _, name := range tilePalette {
 		known[name] = true
 	}
-	for _, id := range []string{"", "x", "y@z:1", "wassim@192.168.1.218:5900"} {
+	for _, id := range []string{"", "x", "y@z:1", "alice@192.0.2.218:5900"} {
 		if !known[tileColor(id)] {
 			t.Errorf("%q: unknown colour", id)
 		}

@@ -96,7 +96,7 @@ func TestMatchesQuery(t *testing.T) {
 	if !matchesQuery("mini", "mac mini") {
 		t.Fatal("match is on lower-case text")
 	}
-	if matchesQuery("studio", "mac mini", "192.168.1.5") {
+	if matchesQuery("studio", "mac mini", "192.0.2.5") {
 		t.Fatal("no field contains the query")
 	}
 }

@@ -30,7 +30,7 @@ type discoveredMac struct {
 
 // unescapeLabel undoes the DNS escaping of a service instance name: a
 // backslash before a character stands for the character, and a backslash with
-// three digits for the byte of that decimal value. Names like "Wassim\226\128\153s Mac"
+// three digits for the byte of that decimal value. Names like "Alice\226\128\153s Mac"
 // come back as written by the person who named the Mac.
 func unescapeLabel(label string) string {
 	if !strings.Contains(label, "\\") {

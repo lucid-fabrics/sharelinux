@@ -25,13 +25,13 @@ func TestHostKey(t *testing.T) {
 		},
 		{
 			name:  "IPv4-mapped IPv6",
-			first: "::ffff:192.168.1.5",
-			other: "192.168.1.5",
+			first: "::ffff:192.0.2.5",
+			other: "192.0.2.5",
 		},
 		{
 			name:  "surrounding whitespace",
-			first: " 192.168.1.5 ",
-			other: "192.168.1.5",
+			first: " 192.0.2.5 ",
+			other: "192.0.2.5",
 		},
 	}
 
@@ -50,7 +50,7 @@ func TestMatchesSavedMac(t *testing.T) {
 	mac := discoveredMac{
 		Name:      "Studio",
 		Host:      "studio.local",
-		Addresses: []string{"192.168.1.5", "2001:db8::5"},
+		Addresses: []string{"192.0.2.5", "2001:db8::5"},
 		Port:      5900,
 	}
 
@@ -66,7 +66,7 @@ func TestMatchesSavedMac(t *testing.T) {
 		},
 		{
 			name:  "by IPv4",
-			saved: savedConnection{Host: "192.168.1.5", Port: 5900},
+			saved: savedConnection{Host: "192.0.2.5", Port: 5900},
 			want:  true,
 		},
 		{
@@ -81,7 +81,7 @@ func TestMatchesSavedMac(t *testing.T) {
 		},
 		{
 			name:  "same name, other host",
-			saved: savedConnection{Name: "Studio", Host: "192.168.1.9", Port: 5900},
+			saved: savedConnection{Name: "Studio", Host: "192.0.2.9", Port: 5900},
 			want:  false,
 		},
 		{
@@ -122,7 +122,7 @@ func TestIPv6OnlyAnswerStillHiddenWhenSavedByIPv4(t *testing.T) {
 
 	t.Run("matching name alone does not hide Mac", func(t *testing.T) {
 		saved := []savedConnection{
-			{Name: "Studio", Host: "192.168.1.5", Port: 5900},
+			{Name: "Studio", Host: "192.0.2.5", Port: 5900},
 		}
 
 		got := unsaved(found, saved)
@@ -133,10 +133,10 @@ func TestIPv6OnlyAnswerStillHiddenWhenSavedByIPv4(t *testing.T) {
 
 	t.Run("second Mac with the same name stays listed", func(t *testing.T) {
 		two := []discoveredMac{
-			{Name: "Studio", Host: "studio.local", Addresses: []string{"192.168.1.5"}, Port: 5900},
-			{Name: "Studio", Host: "studio-2.local", Addresses: []string{"192.168.1.6"}, Port: 5900},
+			{Name: "Studio", Host: "studio.local", Addresses: []string{"192.0.2.5"}, Port: 5900},
+			{Name: "Studio", Host: "studio-2.local", Addresses: []string{"192.0.2.6"}, Port: 5900},
 		}
-		saved := []savedConnection{{Name: "Studio", Host: "192.168.1.5", Port: 5900}}
+		saved := []savedConnection{{Name: "Studio", Host: "192.0.2.5", Port: 5900}}
 
 		got := unsaved(two, saved)
 		if len(got) != 1 || got[0].Host != "studio-2.local" {
@@ -146,7 +146,7 @@ func TestIPv6OnlyAnswerStillHiddenWhenSavedByIPv4(t *testing.T) {
 
 	t.Run("unrelated name does not hide Mac", func(t *testing.T) {
 		saved := []savedConnection{
-			{Name: "Something else", Host: "192.168.1.5", Port: 5900},
+			{Name: "Something else", Host: "192.0.2.5", Port: 5900},
 		}
 
 		got := unsaved(found, saved)

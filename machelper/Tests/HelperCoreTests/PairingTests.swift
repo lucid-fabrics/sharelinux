@@ -247,7 +247,7 @@ final class PairingTests: XCTestCase {
 
     func testDeviceNameRules() {
         func v(_ s: String) -> String? { PairingResponder.validateDeviceName(Data(s.utf8)) }
-        XCTAssertEqual(v("Wassim's PC"), "Wassim's PC")
+        XCTAssertEqual(v("Alice's PC"), "Alice's PC")
         XCTAssertEqual(v("B\u{FC}ro Laptop 2"), "B\u{FC}ro Laptop 2")
         XCTAssertEqual(v("Rechner \u{1F4BB}"), "Rechner \u{1F4BB}")
         // Normalised to NFC: e + combining acute becomes the single scalar.

@@ -22,20 +22,20 @@ func entry(instance, host string, port int, addrs ...string) *zeroconf.ServiceEn
 }
 
 func TestNewDiscoveredMac(t *testing.T) {
-	mac, ok := newDiscoveredMac(entry("Mac mini", "mac-mini.local.", 5900, "192.168.1.30", "fe80::1", "2001:db8::5"))
+	mac, ok := newDiscoveredMac(entry("Mac mini", "mac-mini.local.", 5900, "192.0.2.30", "fe80::1", "2001:db8::5"))
 	if !ok || mac.Name != "Mac mini" || mac.Host != "mac-mini.local" || mac.Port != 5900 {
 		t.Fatalf("%+v %v", mac, ok)
 	}
-	if len(mac.Addresses) != 2 || mac.Addresses[0] != "192.168.1.30" || mac.Addresses[1] != "2001:db8::5" {
+	if len(mac.Addresses) != 2 || mac.Addresses[0] != "192.0.2.30" || mac.Addresses[1] != "2001:db8::5" {
 		t.Fatalf("link-local IPv6 is dropped: %v", mac.Addresses)
 	}
-	if mac.dialHost() != "192.168.1.30" {
+	if mac.dialHost() != "192.0.2.30" {
 		t.Fatal("a numeric address is dialled first")
 	}
 	if mac.subtitle() != "mac-mini.local · Screen Sharing is on" {
 		t.Fatal(mac.subtitle())
 	}
-	if got := mac.target(); got.Host != "192.168.1.30" || got.Port != 5900 || got.User != "" {
+	if got := mac.target(); got.Host != "192.0.2.30" || got.Port != 5900 || got.User != "" {
 		t.Fatalf("%+v", got)
 	}
 }
@@ -63,8 +63,8 @@ func TestNewDiscoveredMacRejectsJunk(t *testing.T) {
 
 func TestMergeScanDeduplicatesInterfaces(t *testing.T) {
 	first, _ := newDiscoveredMac(entry("Mac mini", "mac-mini.local.", 5900, "2001:db8::5"))
-	second, _ := newDiscoveredMac(entry("Mac mini", "mac-mini.local.", 5900, "192.168.1.30"))
-	other, _ := newDiscoveredMac(entry("Air", "air.local.", 5900, "192.168.1.31"))
+	second, _ := newDiscoveredMac(entry("Mac mini", "mac-mini.local.", 5900, "192.0.2.30"))
+	other, _ := newDiscoveredMac(entry("Air", "air.local.", 5900, "192.0.2.31"))
 	list := mergeScan(nil, first)
 	list = mergeScan(list, second)
 	list = mergeScan(list, second)
@@ -72,18 +72,18 @@ func TestMergeScanDeduplicatesInterfaces(t *testing.T) {
 	if len(list) != 2 {
 		t.Fatalf("%+v", list)
 	}
-	if list[0].dialHost() != "192.168.1.30" || len(list[0].Addresses) != 2 {
+	if list[0].dialHost() != "192.0.2.30" || len(list[0].Addresses) != 2 {
 		t.Fatalf("addresses merge with IPv4 first: %v", list[0].Addresses)
 	}
 }
 
 func TestUnsavedHidesKnownMacsAndSorts(t *testing.T) {
-	mini, _ := newDiscoveredMac(entry("Mac mini", "mac-mini.local.", 5900, "192.168.1.30"))
-	air, _ := newDiscoveredMac(entry("air", "air.local.", 5900, "192.168.1.31"))
-	studio, _ := newDiscoveredMac(entry("Studio", "studio.local.", 5900, "192.168.1.32"))
+	mini, _ := newDiscoveredMac(entry("Mac mini", "mac-mini.local.", 5900, "192.0.2.30"))
+	air, _ := newDiscoveredMac(entry("air", "air.local.", 5900, "192.0.2.31"))
+	studio, _ := newDiscoveredMac(entry("Studio", "studio.local.", 5900, "192.0.2.32"))
 	saved := []savedConnection{
 		{Host: "Mac-Mini.local", Port: 5900},
-		{Host: "192.168.1.32", Port: 5900},
+		{Host: "192.0.2.32", Port: 5900},
 		{Host: "air.local", Port: 5901},
 	}
 	got := unsaved([]discoveredMac{studio, mini, air}, saved)

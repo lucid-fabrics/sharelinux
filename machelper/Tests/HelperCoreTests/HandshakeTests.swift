@@ -103,7 +103,7 @@ final class HandshakeTests: XCTestCase {
         XCTAssertNil(PairingResponder.validateDeviceName(Data("a\u{202E}b".utf8)))
         XCTAssertNil(PairingResponder.validateDeviceName(Data([0xff, 0xfe])))
         XCTAssertNil(PairingResponder.validateDeviceName(Data("   ".utf8)))
-        XCTAssertEqual(PairingResponder.validateDeviceName(Data("Wassim's PC".utf8)), "Wassim's PC")
+        XCTAssertEqual(PairingResponder.validateDeviceName(Data("Alice's PC".utf8)), "Alice's PC")
         let r = try PairingResponder(staticKey: PrivKey())
         XCTAssertThrowsError(try r.receive(Data([DatagramKind.xxMessage3.rawValue]) + Data(count: 64)))  // wrong stage
         XCTAssertThrowsError(try r.receive(Data([DatagramKind.xxMessage1.rawValue]) + Data(count: 31)))
