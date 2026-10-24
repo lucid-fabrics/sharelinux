@@ -228,6 +228,12 @@ func TestPlayerWritesSilenceForLostPacketsAndBadOnes(t *testing.T) {
 	p.push(audioUnit{Data: []byte{3}})
 	// 1, silence for 99, silence for the 2 lost, 2, 3; silence may follow once the queue is dry.
 	waitUntil(t, "five writes", func() bool { return len(device.written()) >= 5 })
+	if got := p.stats().DecodeErrors; got != 1 {
+		t.Fatalf("decode errors %d, want 1", got)
+	}
+	if got := p.lastDecodeError(); got != "bad packet (1 bytes)" {
+		t.Fatalf("last error %q", got)
+	}
 	writes := device.written()
 	if writes[0][0] != 1 {
 		t.Fatalf("first write %v", writes[0])

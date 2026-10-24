@@ -581,7 +581,7 @@ func (s *videoStream) soundStats() (stats soundStats, ok bool) {
 	if player == nil {
 		return soundStats{}, false
 	}
-	return soundStats{Counters: player.stats(), Device: player.deviceLatency(), Muted: s.muted.Load()}, true
+	return soundStats{Counters: player.stats(), LastError: player.lastDecodeError(), Device: player.deviceLatency(), Muted: s.muted.Load()}, true
 }
 
 // closeAudio stops the player. A player announced later is closed on arrival.

@@ -277,7 +277,7 @@ func (v *sessionView) pollVideo() {
 			v.g.app.logger.Info("sound stats", "received", c.Received, "played", c.Played, "dropped", c.Dropped, "discarded", c.Discarded,
 				"lost", c.Lost, "underruns", c.Underruns, "silence", c.Silence, "depth", c.Depth, "max_depth", c.MaxDepth,
 				"device_ms", float64(stats.Sound.Device.Microseconds())/1000, "delay_ms", float64(stats.Sound.Delay().Microseconds())/1000,
-				"muted", stats.Sound.Muted)
+				"muted", stats.Sound.Muted, "decode_errors", c.DecodeErrors, "zero_packets", c.ZeroPackets, "zero_holes", c.ZeroHoles, "last_error", stats.Sound.LastError)
 		}
 	}
 }

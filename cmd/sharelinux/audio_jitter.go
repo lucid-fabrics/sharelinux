@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strconv"
 	"sync"
 	"time"
 )
@@ -62,6 +63,10 @@ type audioCounters struct {
 	// written for them.
 	Underruns, Silence uint64
 	Lost               uint64
+	// DecodeErrors counts the packets the decoder refused; each was played as 10 ms of silence. ZeroPackets
+	// counts the ones that decoded to nothing but zeros (a Mac with nothing to play sends those), and
+	// ZeroHoles the single ones between two packets with sound: a hole the Mac or the decoder made.
+	DecodeErrors, ZeroPackets, ZeroHoles uint64
 	// Depth is how many packets wait now, MaxDepth the most since the start.
 	Depth, MaxDepth int
 }
@@ -170,6 +175,8 @@ func (j *audioJitter) stats() audioCounters {
 // soundStats is what the stats card and the log show about the Mac's sound.
 type soundStats struct {
 	Counters audioCounters
+	// LastError is why the decoder refused the last packet it did.
+	LastError string
 	// Device is the delay of the sound device, Queue the sound waiting in the jitter buffer.
 	Device time.Duration
 	Muted  bool
@@ -214,6 +221,11 @@ type audioPlayer struct {
 	access  sync.Mutex
 	latency time.Duration
 	stopped bool
+	// decodeErrors counts the packets the decoder refused, lastError says why the last one was.
+	decodeErrors uint64
+	zeroPackets  uint64
+	zeroHoles    uint64
+	lastError    string
 }
 
 // newAudioPlayer starts the player. open makes the decoder and the device on the player's own
@@ -257,7 +269,22 @@ func (p *audioPlayer) deviceLatency() time.Duration {
 	return p.latency
 }
 
-func (p *audioPlayer) stats() audioCounters { return p.jitter.stats() }
+func (p *audioPlayer) stats() audioCounters {
+	c := p.jitter.stats()
+	p.access.Lock()
+	c.DecodeErrors = p.decodeErrors
+	c.ZeroPackets = p.zeroPackets
+	c.ZeroHoles = p.zeroHoles
+	p.access.Unlock()
+	return c
+}
+
+// lastDecodeError is why the decoder refused the last packet it refused, empty if it never did.
+func (p *audioPlayer) lastDecodeError() string {
+	p.access.Lock()
+	defer p.access.Unlock()
+	return p.lastError
+}
 
 // close stops the goroutine and releases the device. It is safe to call twice.
 func (p *audioPlayer) close() {
@@ -283,7 +310,8 @@ func (p *audioPlayer) run() {
 	defer decoder.Close()
 	defer device.Close()
 	silence := make([]int16, p.frames*p.channels)
-	var wasMuted bool
+	var wasMuted, heard bool
+	var zeroRun int
 	for {
 		select {
 		case <-p.stop:
@@ -336,7 +364,27 @@ func (p *audioPlayer) run() {
 			if err != nil || len(samples) == 0 {
 				// One packet that does not decode is a gap of 10 ms, not the end of the sound.
 				samples = silence
+				p.access.Lock()
+				p.decodeErrors++
+				if err != nil {
+					p.lastError = err.Error() + " (" + strconv.Itoa(len(unit.Data)) + " bytes)"
+				} else {
+					p.lastError = "no samples (" + strconv.Itoa(len(unit.Data)) + " bytes)"
+				}
+				p.access.Unlock()
 			}
+			zero := allZero(samples)
+			p.access.Lock()
+			if zero {
+				p.zeroPackets++
+				zeroRun++
+			} else {
+				if zeroRun == 1 && heard {
+					p.zeroHoles++
+				}
+				zeroRun, heard = 0, true
+			}
+			p.access.Unlock()
 			if err := device.Write(samples); err != nil {
 				p.fail(err)
 				return
@@ -344,6 +392,16 @@ func (p *audioPlayer) run() {
 			p.setLatency(device.Latency())
 		}
 	}
+}
+
+// allZero reports whether a packet holds nothing but zeros.
+func allZero(samples []int16) bool {
+	for _, sample := range samples {
+		if sample != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func (p *audioPlayer) setLatency(latency time.Duration) {
