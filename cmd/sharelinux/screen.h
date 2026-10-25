@@ -46,6 +46,14 @@ guint64 oss_screen_frames(GtkWidget *screen);
 // oss_screen_tile_count is the number of tiles with a texture, for tests and measurements.
 int oss_screen_tile_count(GtkWidget *screen);
 
+// oss_screen_watch starts following how the widget is drawn, so oss_screen_save_png
+// can copy the last picture. The result is owned by the caller (g_object_unref).
+GdkPaintable *oss_screen_watch(GtkWidget *screen);
+
+// oss_screen_save_png writes what the watched widget shows now to a PNG file, scaled
+// down to at most max_width pixels wide. It returns FALSE when nothing was drawn.
+gboolean oss_screen_save_png(GdkPaintable *watch, GtkWidget *screen, const char *path, int max_width);
+
 // OssPresent says what a video texture shows and where it came from.
 typedef struct {
 	int src_x, src_y, src_width, src_height; // the visible part of the texture

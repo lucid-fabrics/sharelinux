@@ -213,6 +213,7 @@ button.oss-icon:hover { background: rgba(255, 255, 255, 0.06); color: #E8ECF2; }
 .oss-dot.online { background: #34D399; }
 .oss-status.online { color: #34D399; }
 
+flowboxchild { padding: 0; }
 .oss-chip {
 	padding: 6px 10px;
 	border-radius: 8px;

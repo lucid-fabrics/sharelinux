@@ -5,6 +5,7 @@ package main
 /*
 #cgo pkg-config: gtk4 gtk4-x11 gtk4-wayland wayland-client x11 xfixes xi epoxy
 #cgo LDFLAGS: -lm
+#include <stdlib.h>
 #include "screen.h"
 #include "x11.h"
 */
@@ -40,6 +41,8 @@ type screenView struct {
 	// dmabufFailures counts the DMA-BUF imports that failed in a row; at three this screen reads pictures
 	// back instead, until the next run of the video.
 	dmabufFailures C.gint
+	// watch follows the widget's drawing for savePNG.
+	watch *C.GdkPaintable
 }
 
 func newScreenView() *screenView {
@@ -248,4 +251,28 @@ func (s *screenView) videoCounters() screenVideo {
 		result.AgeAverage = time.Duration(stats.age_total_us/C.gint64(stats.presented)) * time.Microsecond
 	}
 	return result
+}
+
+// watchDrawing starts following how the widget is drawn. Without it the last picture
+// cannot be copied: a widget paintable only knows what was drawn after it was made.
+func (s *screenView) watchDrawing() {
+	if s.watch == nil {
+		s.watch = C.oss_screen_watch(s.c)
+	}
+}
+
+// stopWatching lets go of the follower.
+func (s *screenView) stopWatching() {
+	if s.watch != nil {
+		C.g_object_unref(C.gpointer(unsafe.Pointer(s.watch)))
+		s.watch = nil
+	}
+}
+
+// savePNG writes the picture as it is drawn now to a PNG file, scaled down to at most
+// maxWidth pixels wide. It reports false when nothing could be copied.
+func (s *screenView) savePNG(path string, maxWidth int) bool {
+	cpath := C.CString(path)
+	defer C.free(unsafe.Pointer(cpath))
+	return C.oss_screen_save_png(s.watch, s.c, cpath, C.int(maxWidth)) != 0
 }

@@ -45,7 +45,7 @@ func (g *gui) mouseHelperGroup() *adw.PreferencesGroup {
 	pair := adw.NewActionRow()
 	pair.SetTitle("Pair with this Mac...")
 	pair.SetSubtitle("Needs sharelinux Mouse Helper running on the Mac, with its pairing window open")
-	pair.AddSuffix(gtk.NewImageFromIconName("go-next-symbolic"))
+	pair.AddSuffix(icon(iconForward, 16))
 	pair.SetActivatable(true)
 	pair.ConnectActivated(func() { g.pairHelperDialog(h.refresh) })
 	h.group.Add(pair)
@@ -244,7 +244,7 @@ func (p *pairDialog) build() {
 	p.doneText = wrapLabel("", "title-3")
 	finish := pillButton("Done", true)
 	finish.ConnectClicked(func() { p.dialog.Close() })
-	mark := gtk.NewImageFromIconName("object-select-symbolic")
+	mark := gtk.NewImageFromIconName(iconCheck)
 	mark.SetPixelSize(48)
 	mark.AddCSSClass("success")
 	done := page(mark, p.doneText,

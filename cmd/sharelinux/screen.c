@@ -576,3 +576,37 @@ gboolean oss_shortcuts_inhibited(GtkWidget *widget) {
 	g_object_get(toplevel, "shortcuts-inhibited", &inhibited, NULL);
 	return inhibited;
 }
+
+GdkPaintable *oss_screen_watch(GtkWidget *screen) {
+	return gtk_widget_paintable_new(screen);
+}
+
+gboolean oss_screen_save_png(GdkPaintable *watch, GtkWidget *screen, const char *path, int max_width) {
+	int width = gtk_widget_get_width(screen);
+	int height = gtk_widget_get_height(screen);
+	GtkNative *native = gtk_widget_get_native(screen);
+	if (watch == NULL || width <= 0 || height <= 0 || native == NULL) {
+		return FALSE;
+	}
+	GskRenderer *renderer = gtk_native_get_renderer(native);
+	if (renderer == NULL) {
+		return FALSE;
+	}
+	float scale = (width > max_width && max_width > 0) ? (float)max_width / (float)width : 1.0f;
+	GtkSnapshot *snapshot = gtk_snapshot_new();
+	gtk_snapshot_scale(snapshot, scale, scale);
+	gdk_paintable_snapshot(watch, snapshot, width, height);
+	GskRenderNode *node = gtk_snapshot_free_to_node(snapshot);
+	if (node == NULL) {
+		return FALSE;
+	}
+	graphene_rect_t bounds = GRAPHENE_RECT_INIT(0, 0, width * scale, height * scale);
+	GdkTexture *texture = gsk_renderer_render_texture(renderer, node, &bounds);
+	gsk_render_node_unref(node);
+	if (texture == NULL) {
+		return FALSE;
+	}
+	gboolean saved = gdk_texture_save_to_png(texture, path);
+	g_object_unref(texture);
+	return saved;
+}

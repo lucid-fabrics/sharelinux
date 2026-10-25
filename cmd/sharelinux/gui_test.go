@@ -155,3 +155,26 @@ func TestHDRSwitchLooksLikeTheDesktop(t *testing.T) {
 		t.Fatalf("sensitive %v subtitle %q", row.Sensitive(), row.Subtitle())
 	}
 }
+
+func TestInstallIconsMakesTheDesignIconsKnownToTheTheme(t *testing.T) {
+	requireDisplay(t)
+	root := t.TempDir()
+	if err := installIconsAt(gdk.DisplayGetDefault(), root); err != nil {
+		t.Fatal(err)
+	}
+	theme := gtk.IconThemeGetForDisplay(gdk.DisplayGetDefault())
+	for _, name := range append(iconNames(), applicationID) {
+		if !theme.HasIcon(name) {
+			t.Errorf("the icon theme does not know %s", name)
+		}
+	}
+	for _, art := range allMacArt {
+		if !theme.HasIcon(macArtIcon(art)) {
+			t.Errorf("the icon theme does not know the art of %s", art)
+		}
+	}
+	// A second run leaves the files alone.
+	if err := installIconsAt(gdk.DisplayGetDefault(), root); err != nil {
+		t.Fatal(err)
+	}
+}

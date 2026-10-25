@@ -1,8 +1,12 @@
 package main
 
 import (
+	"io"
+	"log/slog"
 	"path/filepath"
 	"testing"
+
+	"github.com/nekohasekai/open-screen-sharing/internal/rfb"
 )
 
 type countingMemorySecrets struct {
@@ -152,5 +156,31 @@ func TestAccountPasswordNeverSentAsVNCPassword(t *testing.T) {
 	req.setPassword("vnc-secret", true)
 	if got := a.rfbOptions(req, newHandler(nil, nil)).Password; got != "vnc-secret" {
 		t.Fatalf("the VNC password entered after the switch: %q", got)
+	}
+}
+
+func TestRememberKeepsTheSavedModeAfterAOneTimeMode(t *testing.T) {
+	a := &app{opts: &options{}, store: newStore(filepath.Join(t.TempDir(), "c.json"), memorySecrets{}), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	saved := savedConnection{Name: "Studio", Host: "mac", Port: 5900, VNC: true, Mode: "control"}
+	if err := a.store.Save(saved, ""); err != nil {
+		t.Fatal(err)
+	}
+	req, err := a.newRequest(saved.target(), &saved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.opts.Mode = rfb.ModeExclusiveControl
+	req.modeOnce = true
+	a.remember(req, "Studio")
+	items, _ := a.store.List()
+	if len(items) != 1 || items[0].Mode != "control" {
+		t.Fatalf("the Exclusive button must not change the saved mode: %+v", items)
+	}
+
+	req.modeOnce = false
+	a.remember(req, "Studio")
+	items, _ = a.store.List()
+	if items[0].Mode != rfb.ModeExclusiveControl.String() {
+		t.Fatalf("a mode chosen as usual is saved: %+v", items)
 	}
 }

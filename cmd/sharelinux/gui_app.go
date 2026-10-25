@@ -112,6 +112,8 @@ func (g *gui) activate() {
 			g.session.end()
 			g.session = nil
 			g.setListActions(true)
+			// The last picture of the Mac was kept as the page went: show it.
+			g.list.reload()
 		}
 	})
 	g.installActions()

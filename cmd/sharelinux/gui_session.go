@@ -17,7 +17,6 @@ import (
 	"github.com/diamondburned/gotk4/pkg/gdk/v4"
 	"github.com/diamondburned/gotk4/pkg/gio/v2"
 	"github.com/diamondburned/gotk4/pkg/glib/v2"
-	"github.com/diamondburned/gotk4/pkg/gsk/v4"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 	"github.com/nekohasekai/open-screen-sharing/internal/bgra"
 	"github.com/nekohasekai/open-screen-sharing/internal/rfb"
@@ -340,7 +339,7 @@ func (v *sessionView) buildModes() {
 	v.modes = adw.NewToggleGroup()
 	for _, item := range []struct{ id, label, icon string }{
 		{"observe", "View", iconView},
-		{"control", "Control", "input-mouse-symbolic"},
+		{"control", "Control", iconMouseHelper},
 		{"exclusive", "Exclusive", iconExclusive},
 	} {
 		toggle := adw.NewToggle()
@@ -512,7 +511,7 @@ func (v *sessionView) buildCopyCard(overlay *gtk.Overlay) {
 	v.copyTitle.SetEllipsize(3)
 	v.copyValue = gtk.NewLabel("")
 	v.copyValue.AddCSSClass("dim-label")
-	v.copyCancel = gtk.NewButtonFromIconName("window-close-symbolic")
+	v.copyCancel = iconButton(iconClose, "Cancel the copy", 16)
 	v.copyCancel.AddCSSClass("flat")
 	v.copyCancel.AddCSSClass("circular")
 	v.copyCancel.SetTooltipText("Cancel the copy")
@@ -688,6 +687,7 @@ func (v *sessionView) start() {
 	v.applyMode(v.mode, false)
 	v.helper.begin()
 	v.setStats(v.showStats)
+	v.screen.watchDrawing()
 	// The home screen shows the last picture of this Mac: keep it fresh, so a
 	// window that closes without a clean goodbye still leaves one.
 	v.thumbTimer = coreglib.TimeoutSecondsAdd(30, func() bool {
@@ -757,6 +757,7 @@ func (v *sessionView) end() {
 // the widgets and actions are destroyed, and the Go collector then takes the
 // session and its framebuffer.
 func (v *sessionView) release() {
+	v.screen.stopWatching()
 	v.screen.clear()
 	for _, name := range v.actions.ListActions() {
 		coreglib.Destroy(v.actions.LookupAction(name))
@@ -1837,34 +1838,16 @@ func (v *sessionView) captureLast() {
 // thumbnailWidth is the width of the kept last frame, in pixels.
 const thumbnailWidth = 640
 
-// saveThumbnail renders the picture widget as it is drawn now, scaled down, to a PNG file.
+// saveThumbnail writes the picture widget as it is drawn now, scaled down, to a PNG file.
 func (v *sessionView) saveThumbnail(path string) error {
-	width, height := v.screen.Width(), v.screen.Height()
-	if width <= 0 || height <= 0 || !v.screen.Mapped() {
+	if !v.screen.Mapped() {
 		return E.New("the picture is not on screen")
-	}
-	paintable := gtk.NewWidgetPaintable(v.screen)
-	scale := min(1.0, float64(thumbnailWidth)/float64(width))
-	snapshot := gtk.NewSnapshot()
-	snapshot.Scale(float32(scale), float32(scale))
-	paintable.Snapshot(snapshot, float64(width), float64(height))
-	node := snapshot.ToNode()
-	if node == nil {
-		return E.New("nothing to draw")
-	}
-	renderer := v.g.window.Renderer()
-	if renderer == nil {
-		return E.New("the window has no renderer")
-	}
-	texture := gsk.BaseRenderer(renderer).RenderTexture(node, nil)
-	if texture == nil {
-		return E.New("the picture could not be drawn")
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return E.Cause(err, "create the thumbnail folder")
 	}
-	if !gdk.BaseTexture(texture).SaveToPNG(path) {
-		return E.New("the picture could not be saved")
+	if !v.screen.savePNG(path, thumbnailWidth) {
+		return E.New("the picture could not be copied")
 	}
 	return nil
 }
