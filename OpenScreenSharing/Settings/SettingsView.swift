@@ -48,7 +48,7 @@ private struct ControlSettingsView: View {
     var body: some View {
         WithPerceptionTracking {
             Form {
-                Section {
+                Section("Customization") {
                     NavigationLink {
                         CursorStyleView()
                     } label: {
@@ -63,6 +63,13 @@ private struct ControlSettingsView: View {
                         }
                     }
                 }
+                #if os(iOS)
+                Section("Behavior") {
+                    Toggle(isOn: Binding(get: { settings.pinchZooms }, set: { settings.pinchZooms = $0 })) {
+                        Label("Pinch to Zoom", systemImage: "arrow.up.left.and.down.right.magnifyingglass")
+                    }
+                }
+                #endif
             }
             #if os(macOS)
             .formStyle(.grouped)
