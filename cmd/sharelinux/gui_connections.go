@@ -285,6 +285,7 @@ func (p *connectionsPage) buildContent() gtk.Widgetter {
 	p.grid.SetMinChildrenPerLine(1)
 	p.grid.SetMaxChildrenPerLine(6)
 	p.grid.SetActivateOnSingleClick(false)
+	p.grid.SetVAlign(gtk.AlignStart)
 
 	p.nothingHere = gtk.NewLabel("")
 	p.nothingHere.AddCSSClass("oss-muted")
@@ -679,12 +680,7 @@ func (p *connectionsPage) heroCard(connection savedConnection, current time.Time
 	titleBox.Append(name)
 	titleBox.Append(status)
 
-	chips := gtk.NewFlowBox()
-	chips.SetSelectionMode(gtk.SelectionNone)
-	chips.SetColumnSpacing(8)
-	chips.SetRowSpacing(8)
-	chips.SetHomogeneous(false)
-	chips.SetMaxChildrenPerLine(8)
+	chips := gtk.NewBox(gtk.OrientationHorizontal, 8)
 	chipCount := 0
 	if connection.Last != nil {
 		for _, c := range connection.Last.chips() {
@@ -693,7 +689,6 @@ func (p *connectionsPage) heroCard(connection savedConnection, current time.Time
 			if c.HDR {
 				label.AddCSSClass("hdr")
 			}
-			label.SetHAlign(gtk.AlignStart)
 			chips.Append(label)
 			chipCount++
 		}
@@ -783,6 +778,7 @@ func (p *connectionsPage) cardShell(art macArt, name, tooltip string, status *gt
 	card := gtk.NewBox(gtk.OrientationVertical, 14)
 	card.AddCSSClass("oss-card")
 	card.SetSizeRequest(220, -1)
+	card.SetVAlign(gtk.AlignStart)
 	card.SetTooltipText(tooltip)
 	card.Append(overlay)
 	card.Append(text)

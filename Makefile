@@ -95,6 +95,8 @@ install-linux:
 	go build -o build/sharelinux ./cmd/sharelinux
 	install -Dm755 build/sharelinux $(PREFIX)/bin/sharelinux
 	install -Dm644 cmd/sharelinux/data/io.github.sharelinux.ScreenSharing.svg $(PREFIX)/share/icons/hicolor/scalable/apps/io.github.sharelinux.ScreenSharing.svg
+	install -Dm644 cmd/sharelinux/data/io.github.sharelinux.ScreenSharing-symbolic.svg $(PREFIX)/share/icons/hicolor/symbolic/apps/io.github.sharelinux.ScreenSharing-symbolic.svg
+	for size in 16 24 32; do install -Dm644 cmd/sharelinux/data/io.github.sharelinux.ScreenSharing-small.svg $(PREFIX)/share/icons/hicolor/$${size}x$${size}/apps/io.github.sharelinux.ScreenSharing.svg; done
 	install -Dm644 cmd/sharelinux/data/io.github.sharelinux.ScreenSharing.desktop $(PREFIX)/share/applications/io.github.sharelinux.ScreenSharing.desktop
 	install -Dm644 cmd/sharelinux/data/io.github.sharelinux.ScreenSharing.metainfo.xml $(PREFIX)/share/metainfo/io.github.sharelinux.ScreenSharing.metainfo.xml
 	-gtk-update-icon-cache -f -t $(PREFIX)/share/icons/hicolor
