@@ -54,6 +54,8 @@ modules:
     build-commands:
       - go build -o /app/bin/sharelinux ./cmd/sharelinux
       - install -Dm644 cmd/sharelinux/data/io.github.sharelinux.ScreenSharing.svg /app/share/icons/hicolor/scalable/apps/io.github.sharelinux.ScreenSharing.svg
+      - install -Dm644 cmd/sharelinux/data/io.github.sharelinux.ScreenSharing-symbolic.svg /app/share/icons/hicolor/symbolic/apps/io.github.sharelinux.ScreenSharing-symbolic.svg
+      - for size in 16 24 32; do install -Dm644 cmd/sharelinux/data/io.github.sharelinux.ScreenSharing-small.svg /app/share/icons/hicolor/${size}x${size}/apps/io.github.sharelinux.ScreenSharing.svg; done
       - install -Dm644 cmd/sharelinux/data/io.github.sharelinux.ScreenSharing.desktop /app/share/applications/io.github.sharelinux.ScreenSharing.desktop
       - install -Dm644 cmd/sharelinux/data/io.github.sharelinux.ScreenSharing.metainfo.xml /app/share/metainfo/io.github.sharelinux.ScreenSharing.metainfo.xml
     sources:

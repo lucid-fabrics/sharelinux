@@ -13,6 +13,9 @@
   </developer>
   <url type="homepage">https://github.com/lucid-fabrics/sharelinux</url>
   <launchable type="desktop-id">io.github.sharelinux.ScreenSharing.desktop</launchable>
+  <branding>
+    <color type="primary" scheme_preference="dark">#3550C9</color>
+  </branding>
   <content_rating type="oars-1.1"/>
   <requires>
     <display_length compare="ge">360</display_length>
