@@ -223,6 +223,7 @@ flowboxchild { padding: 0; }
 	font-weight: 600;
 }
 .oss-chip.hdr { background: #2A2340; color: #D9CCFF; }
+.oss-chip.muted { background: #1C2433; color: #9AA4B2; }
 .oss-chip.success { color: #34D399; background: alpha(#34D399, 0.12); }
 .oss-chip.warning { color: @warning_color; background: alpha(@warning_color, 0.12); }
 
@@ -282,6 +283,16 @@ button.oss-tool:disabled { opacity: 0.4; }
 	font-size: 13px;
 	color: #CFD8E6;
 }
+
+toast {
+	background: rgba(16, 20, 27, 0.9);
+	border: 1px solid rgba(255, 255, 255, 0.10);
+	border-radius: 12px;
+	color: #E8ECF2;
+	box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+toast label, toast .heading { color: #E8ECF2; }
+toast button { color: #E8ECF2; }
 
 .oss-copy-card {
 	background: rgba(16, 20, 27, 0.9);

@@ -70,8 +70,8 @@ func TestExclusiveTooltipDropsTheKeyboardOnlyWordingWhereTheLockWorks(t *testing
 		if strings.Contains(exclusiveTooltip(backend), "keyboard only") || strings.Contains(exclusiveTooltip(backend), "Captures the keyboard") {
 			t.Errorf("backend %d: %q", backend, exclusiveTooltip(backend))
 		}
-		if strings.Contains(exclusiveAnnouncement(backend), "keyboard only") {
-			t.Errorf("backend %d: %q", backend, exclusiveAnnouncement(backend))
+		if exclusiveAnnouncement(backend) != "" {
+			t.Errorf("backend %d: the hint pill speaks, no toast: %q", backend, exclusiveAnnouncement(backend))
 		}
 	}
 	if !strings.Contains(exclusiveTooltip(lockConfine), "keeps the pointer inside") {

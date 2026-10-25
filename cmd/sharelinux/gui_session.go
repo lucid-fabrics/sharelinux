@@ -1107,7 +1107,9 @@ func (v *sessionView) applyMode(mode rfb.Mode, announce bool) {
 	v.showExclusiveHint(mode == rfb.ModeExclusiveControl)
 	if announce {
 		if mode == rfb.ModeExclusiveControl {
-			v.notify(exclusiveAnnouncement(v.lockBackend))
+			if text := exclusiveAnnouncement(v.lockBackend); text != "" {
+				v.notify(text)
+			}
 		} else {
 			v.notify("Mode: " + mode.String())
 		}

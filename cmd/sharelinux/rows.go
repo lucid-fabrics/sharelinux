@@ -91,12 +91,14 @@ func exclusiveTooltip(backend lockBackend) string {
 	return "Captures the keyboard only: Super and Alt+Tab go to the Mac. This display server does not let an app hold the pointer, so it can still leave the window"
 }
 
-// exclusiveAnnouncement is the toast shown when Exclusive mode starts.
+// exclusiveAnnouncement is the toast shown when Exclusive mode starts. It is
+// empty where the pointer is held: the hint pill already says it all. Only the
+// keyboard-only case needs words, because the pill cannot promise a lock.
 func exclusiveAnnouncement(backend lockBackend) string {
 	if backend.holds() {
-		return "Mode: exclusive"
+		return ""
 	}
-	return "Mode: exclusive (keyboard only, the pointer can leave the window)"
+	return "Exclusive: keyboard only, the pointer can leave the window"
 }
 
 // lockFailedAnnouncement is the toast shown when the pointer could not be held
