@@ -50,10 +50,10 @@ int oss_screen_tile_count(GtkWidget *screen);
 // can copy the last picture. The result is owned by the caller (g_object_unref).
 GdkPaintable *oss_screen_watch(GtkWidget *screen);
 
-// oss_screen_snapshot renders what the watched widget shows now, scaled down to at most
+// oss_screen_capture renders what the watched widget shows now, scaled down to at most
 // max_width pixels wide. Call it on the main thread. It returns NULL when nothing was
 // drawn; the texture is owned by the caller (g_object_unref).
-GdkTexture *oss_screen_snapshot(GdkPaintable *watch, GtkWidget *screen, int max_width);
+GdkTexture *oss_screen_capture(GdkPaintable *watch, GtkWidget *screen, int max_width);
 
 // oss_texture_png encodes a texture as PNG. A texture is immutable, so any thread may
 // call it. The result is freed with g_free; NULL when encoding failed.

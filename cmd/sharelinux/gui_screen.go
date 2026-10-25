@@ -273,7 +273,7 @@ func (s *screenView) stopWatching() {
 // pixels wide. It must run on the main thread. The result is nil when nothing was
 // drawn; encode it with png, possibly on another thread, and free it with free.
 func (s *screenView) snapshot(maxWidth int) *pictureSnapshot {
-	texture := C.oss_screen_snapshot(s.watch, s.c, C.int(maxWidth))
+	texture := C.oss_screen_capture(s.watch, s.c, C.int(maxWidth))
 	if texture == nil {
 		return nil
 	}

@@ -581,7 +581,7 @@ GdkPaintable *oss_screen_watch(GtkWidget *screen) {
 	return gtk_widget_paintable_new(screen);
 }
 
-GdkTexture *oss_screen_snapshot(GdkPaintable *watch, GtkWidget *screen, int max_width) {
+GdkTexture *oss_screen_capture(GdkPaintable *watch, GtkWidget *screen, int max_width) {
 	int width = gtk_widget_get_width(screen);
 	int height = gtk_widget_get_height(screen);
 	GtkNative *native = gtk_widget_get_native(screen);
