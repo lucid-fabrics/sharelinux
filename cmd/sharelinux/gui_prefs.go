@@ -9,7 +9,11 @@ import (
 )
 
 // showPreferences opens the preferences dialog. Every change applies at once and is saved.
-func (g *gui) showPreferences() {
+func (g *gui) showPreferences() { g.showPreferencesPage("") }
+
+// showPreferencesPage opens the preferences dialog on one of its pages:
+// "general", "keyboard" (where the mouse helper is) or "displays".
+func (g *gui) showPreferencesPage(name string) {
 	prefs := g.app.preferences()
 	change := func(f func(*settings)) {
 		err := g.app.updatePreferences(f)
@@ -22,6 +26,9 @@ func (g *gui) showPreferences() {
 	dialog.Add(g.generalPage(prefs, change))
 	dialog.Add(g.keyboardPage(prefs, change))
 	dialog.Add(g.displaysPage(prefs, change))
+	if name != "" {
+		dialog.SetVisiblePageName(name)
+	}
 	dialog.Present(g.window)
 }
 
@@ -47,7 +54,8 @@ func comboRow(title, subtitle string, options []string, selected int, set func(i
 func (g *gui) generalPage(prefs settings, change func(func(*settings))) *adw.PreferencesPage {
 	page := adw.NewPreferencesPage()
 	page.SetTitle("General")
-	page.SetIconName("preferences-system-symbolic")
+	page.SetName("general")
+	page.SetIconName(iconPreferences)
 
 	picture := adw.NewPreferencesGroup()
 	picture.SetTitle("Picture")
@@ -124,7 +132,8 @@ func (g *gui) generalPage(prefs settings, change func(func(*settings))) *adw.Pre
 func (g *gui) keyboardPage(prefs settings, change func(func(*settings))) *adw.PreferencesPage {
 	page := adw.NewPreferencesPage()
 	page.SetTitle("Keyboard")
-	page.SetIconName("input-keyboard-symbolic")
+	page.SetName("keyboard")
+	page.SetIconName(iconKeyboard)
 	group := adw.NewPreferencesGroup()
 	group.SetTitle("Keyboard and mouse")
 
@@ -172,7 +181,8 @@ func folderName(path string) string {
 func (g *gui) displaysPage(prefs settings, change func(func(*settings))) *adw.PreferencesPage {
 	page := adw.NewPreferencesPage()
 	page.SetTitle("Displays")
-	page.SetIconName("video-display-symbolic")
+	page.SetName("displays")
+	page.SetIconName(iconDisplays)
 
 	start := adw.NewPreferencesGroup()
 	start.SetTitle("Display")

@@ -52,21 +52,6 @@ func TestDisplayNameFallsBackToAddress(t *testing.T) {
 	}
 }
 
-func TestTileColorIsStable(t *testing.T) {
-	if tileColor("a@b:5900") != tileColor("a@b:5900") {
-		t.Fatal("same identity, same colour")
-	}
-	known := map[string]bool{}
-	for _, name := range tilePalette {
-		known[name] = true
-	}
-	for _, id := range []string{"", "x", "y@z:1", "alice@192.0.2.218:5900"} {
-		if !known[tileColor(id)] {
-			t.Errorf("%q: unknown colour", id)
-		}
-	}
-}
-
 func TestExclusiveTooltipIsHonestWhereThePointerIsNotHeld(t *testing.T) {
 	none := exclusiveTooltip(lockNone)
 	if !strings.Contains(none, "Captures the keyboard only") {

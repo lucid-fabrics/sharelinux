@@ -12,10 +12,12 @@ import (
 	"time"
 
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
+	"github.com/diamondburned/gotk4/pkg/cairo"
 	coreglib "github.com/diamondburned/gotk4/pkg/core/glib"
 	"github.com/diamondburned/gotk4/pkg/gdk/v4"
 	"github.com/diamondburned/gotk4/pkg/gio/v2"
 	"github.com/diamondburned/gotk4/pkg/glib/v2"
+	"github.com/diamondburned/gotk4/pkg/gsk/v4"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 	"github.com/nekohasekai/open-screen-sharing/internal/bgra"
 	"github.com/nekohasekai/open-screen-sharing/internal/rfb"
@@ -46,25 +48,35 @@ type sessionView struct {
 	scroll  *gtk.ScrolledWindow
 	im      *gtk.IMMulticontext
 
-	modes         *adw.ToggleGroup
-	subtitle      *gtk.Label
-	displayButton *gtk.MenuButton
-	displayText   *gtk.Label
-	qualityButton *gtk.MenuButton
-	qualityText   *gtk.Label
-	sessionMenu   *gtk.MenuButton
-	displayMenu   *gio.Menu
-	actions       *gio.SimpleActionGroup
-	displayAction *gio.SimpleAction
-	qualityAction *gio.SimpleAction
-	statsAction   *gio.SimpleAction
-	hdrAction     *gio.SimpleAction
-	muteAction    *gio.SimpleAction
+	modes *adw.ToggleGroup
+	// The floating bar: the Mac's name, the delay and the buttons.
+	bar             *gtk.Revealer
+	identity        *gtk.Box
+	delay           *gtk.Label
+	exclusiveButton *gtk.Button
+	soundButton     *gtk.Button
+	soundIcon       *gtk.Image
+	statsButton     *gtk.Button
+	displayButton   *gtk.MenuButton
+	sessionMenu     *gtk.MenuButton
+	hint            *gtk.Revealer
+	hintHide        coreglib.SourceHandle
+	thumbTimer      coreglib.SourceHandle
+	displayMenu     *gio.Menu
+	actions         *gio.SimpleActionGroup
+	displayAction   *gio.SimpleAction
+	qualityAction   *gio.SimpleAction
+	statsAction     *gio.SimpleAction
+	hdrAction       *gio.SimpleAction
+	muteAction      *gio.SimpleAction
 
 	stats      *gtk.Box
 	statValues []*gtk.Label
 	statNames  []*gtk.Label
 	statGrid   *gtk.Grid
+	spark      *gtk.DrawingArea
+	delays     []float64
+	delayAt    time.Time
 	copyCard   *gtk.Box
 	copyTitle  *gtk.Label
 	copyValue  *gtk.Label
@@ -185,25 +197,151 @@ func (v *sessionView) build() {
 	overlay.SetChild(v.scroll)
 	v.buildStats(overlay)
 	v.buildCopyCard(overlay)
+	v.buildHint(overlay)
+	v.buildBar(overlay, name)
+	v.buildModes()
 
-	header := v.buildHeader(name)
+	// The window controls only: the name and the buttons float over the picture.
+	header := adw.NewHeaderBar()
+	header.SetShowTitle(false)
 	v.toolbar = adw.NewToolbarView()
 	v.toolbar.AddTopBar(header)
 	v.toolbar.SetContent(overlay)
 	v.page = adw.NewNavigationPageWithTag(v.toolbar, name, sessionPageTag)
+	// Leaving by the back arrow too: keep the last picture while the page is still shown.
+	v.page.ConnectHiding(v.captureLast)
 	v.installActions()
 	v.installInput()
 	v.installFullscreenReveal()
 }
 
-func (v *sessionView) buildHeader(name string) *adw.HeaderBar {
-	header := adw.NewHeaderBar()
+// toolButton is one icon button of the floating bar. It never takes the focus
+// by a click, so the next key still goes to the Mac.
+func (v *sessionView) toolButton(iconName, label string, click func()) *gtk.Button {
+	button := gtk.NewButton()
+	button.SetChild(icon(iconName, 20))
+	button.AddCSSClass("oss-tool")
+	button.SetTooltipText(label)
+	setAccessibleLabel(button, label)
+	button.SetFocusOnClick(false)
+	button.ConnectClicked(func() {
+		click()
+		if v.controlling() {
+			v.screen.GrabFocus()
+		}
+	})
+	return button
+}
 
+// barSeparator is the thin line between groups of buttons.
+func barSeparator() *gtk.Box {
+	separator := gtk.NewBox(gtk.OrientationVertical, 0)
+	separator.AddCSSClass("oss-bar-sep")
+	separator.SetVAlign(gtk.AlignCenter)
+	return separator
+}
+
+// buildBar builds the glass bar at the top of the picture: who this is, how
+// long the Mac takes to answer, and the buttons a session needs.
+func (v *sessionView) buildBar(overlay *gtk.Overlay, name string) {
+	dot := gtk.NewBox(gtk.OrientationHorizontal, 0)
+	dot.AddCSSClass("oss-dot")
+	dot.AddCSSClass("online")
+	dot.SetVAlign(gtk.AlignCenter)
+	title := gtk.NewLabel(name)
+	title.AddCSSClass("oss-bar-name")
+	title.SetEllipsize(3)
+	title.SetMaxWidthChars(24)
+	v.delay = gtk.NewLabel("")
+	v.delay.AddCSSClass("oss-bar-delay")
+	v.identity = gtk.NewBox(gtk.OrientationHorizontal, 10)
+	v.identity.SetMarginStart(8)
+	v.identity.SetMarginEnd(12)
+	v.identity.SetVAlign(gtk.AlignCenter)
+	v.identity.Append(dot)
+	v.identity.Append(title)
+	v.identity.Append(v.delay)
+	v.identity.SetTooltipText(connectedText(0))
+
+	bar := gtk.NewBox(gtk.OrientationHorizontal, 4)
+	bar.AddCSSClass("oss-glass")
+	bar.AddCSSClass("oss-bar")
+	bar.SetOverflow(gtk.OverflowHidden)
+	setAccessibleLabel(bar, "Session")
+	bar.Append(v.identity)
+	bar.Append(v.helper.chip)
+	bar.Append(barSeparator())
+
+	v.exclusiveButton = v.toolButton(iconExclusive, "Exclusive mode", func() {
+		if v.mode == rfb.ModeExclusiveControl {
+			v.applyMode(rfb.ModeControl, true)
+		} else {
+			v.applyMode(rfb.ModeExclusiveControl, true)
+		}
+	})
+	v.exclusiveButton.SetTooltipText(exclusiveTooltip(v.lockBackend))
+	bar.Append(v.exclusiveButton)
+
+	v.soundButton = v.toolButton(iconSound, "Sound", func() { v.runCommand(commandMuteSound) })
+	v.soundIcon = v.soundButton.Child().(*gtk.Image)
+	bar.Append(v.soundButton)
+
+	bar.Append(v.toolButton(iconSendFile, "Send a file", v.chooseFilesToSend))
+
+	v.displayButton = gtk.NewMenuButton()
+	v.displayButton.SetIconName(iconDisplays)
+	v.displayButton.AddCSSClass("oss-tool")
+	v.displayButton.SetTooltipText("Displays")
+	setAccessibleLabel(v.displayButton, "Displays")
+	v.displayButton.SetFocusOnClick(false)
+	bar.Append(v.displayButton)
+
+	v.statsButton = v.toolButton(iconStats, "Stats", func() { v.setStats(!v.showStats) })
+	bar.Append(v.statsButton)
+
+	bar.Append(v.toolButton(iconFullscreen, "Full screen", v.toggleFullscreen))
+
+	v.sessionMenu = gtk.NewMenuButton()
+	v.sessionMenu.SetIconName(iconMore)
+	v.sessionMenu.AddCSSClass("oss-tool")
+	v.sessionMenu.SetTooltipText("More")
+	setAccessibleLabel(v.sessionMenu, "More")
+	v.sessionMenu.SetFocusOnClick(false)
+	v.sessionMenu.SetPrimary(true)
+	bar.Append(v.sessionMenu)
+
+	bar.Append(barSeparator())
+	disconnect := v.toolButton(iconDisconnect, "Disconnect", func() { v.disconnect() })
+	disconnect.AddCSSClass("danger")
+	bar.Append(disconnect)
+
+	// A closed menu hands the keyboard back to the picture, so the next key goes to the Mac.
+	for _, button := range []*gtk.MenuButton{v.sessionMenu, v.displayButton} {
+		button.NotifyProperty("active", func() {
+			if !button.Active() && v.controlling() {
+				v.screen.GrabFocus()
+			}
+		})
+	}
+
+	v.bar = gtk.NewRevealer()
+	v.bar.SetTransitionType(gtk.RevealerTransitionTypeSlideDown)
+	v.bar.SetTransitionDuration(180)
+	v.bar.SetRevealChild(true)
+	v.bar.SetChild(bar)
+	v.bar.SetHAlign(gtk.AlignCenter)
+	v.bar.SetVAlign(gtk.AlignStart)
+	v.bar.SetMarginTop(16)
+	overlay.AddOverlay(v.bar)
+}
+
+// buildModes builds the View, Control and Exclusive choice. It sits in the More menu.
+func (v *sessionView) buildModes() {
 	v.modes = adw.NewToggleGroup()
 	for _, item := range []struct{ id, label, icon string }{
-		{"observe", "View", "view-reveal-symbolic"},
+		{"observe", "View", iconView},
 		{"control", "Control", "input-mouse-symbolic"},
-		{"exclusive", "Exclusive", "input-keyboard-symbolic"},
+		{"exclusive", "Exclusive", iconExclusive},
 	} {
 		toggle := adw.NewToggle()
 		toggle.SetName(item.id)
@@ -217,67 +355,74 @@ func (v *sessionView) buildHeader(name string) *adw.HeaderBar {
 			toggle.SetEnabled(false)
 			toggle.SetTooltip("This Mac only allows viewing")
 		}
+		v.exclusiveButton.SetSensitive(false)
 	}
 	v.modes.ToggleByName("exclusive").SetTooltip(exclusiveTooltip(v.lockBackend))
 	v.modes.SetActiveName(modeID(allowedMode(v.mode, v.client.Info().Flags)))
-	header.PackStart(v.modes)
-	header.PackStart(v.helper.chip)
-
-	title := gtk.NewLabel(name)
-	title.AddCSSClass("oss-title-line")
-	title.SetEllipsize(3)
-	v.subtitle = gtk.NewLabel("Connected")
-	v.subtitle.AddCSSClass("oss-connected")
-	column := gtk.NewBox(gtk.OrientationVertical, 0)
-	column.SetVAlign(gtk.AlignCenter)
-	column.Append(title)
-	column.Append(v.subtitle)
-	header.SetTitleWidget(column)
-
-	// Packed from the right: menu, fullscreen, files, quality, display.
-	v.sessionMenu = gtk.NewMenuButton()
-	v.sessionMenu.SetIconName("view-more-symbolic")
-	v.sessionMenu.SetTooltipText("Session menu")
-	v.sessionMenu.SetPrimary(true)
-	header.PackEnd(v.sessionMenu)
-
-	fullscreen := gtk.NewButtonFromIconName("view-fullscreen-symbolic")
-	fullscreen.SetTooltipText("Fullscreen")
-	fullscreen.ConnectClicked(v.toggleFullscreen)
-	header.PackEnd(fullscreen)
-
-	files := gtk.NewButtonFromIconName("document-send-symbolic")
-	files.SetTooltipText("Send files to the Mac")
-	files.ConnectClicked(v.chooseFilesToSend)
-	header.PackEnd(files)
-
-	v.qualityButton, v.qualityText = menuButtonWithLabel("", "")
-	header.PackEnd(v.qualityButton)
-	v.displayButton, v.displayText = menuButtonWithLabel("video-display-symbolic", "All displays")
-	header.PackEnd(v.displayButton)
-	// A closed menu hands the keyboard back to the picture, so the next key goes to the Mac.
-	for _, button := range []*gtk.MenuButton{v.sessionMenu, v.qualityButton, v.displayButton} {
-		button.NotifyProperty("active", func() {
-			if !button.Active() && v.controlling() {
-				v.screen.GrabFocus()
-			}
-		})
-	}
-	return header
+	v.syncModeButton()
 }
 
-// menuButtonWithLabel is a flat menu button showing an optional icon, a label and an arrow.
-func menuButtonWithLabel(icon, text string) (*gtk.MenuButton, *gtk.Label) {
-	button := gtk.NewMenuButton()
-	box := gtk.NewBox(gtk.OrientationHorizontal, 6)
-	if icon != "" {
-		box.Append(gtk.NewImageFromIconName(icon))
+// syncModeButton lights the Exclusive button while Exclusive mode is on.
+func (v *sessionView) syncModeButton() {
+	if v.exclusiveButton == nil {
+		return
 	}
-	label := gtk.NewLabel(text)
-	box.Append(label)
-	box.Append(gtk.NewImageFromIconName("pan-down-symbolic"))
-	button.SetChild(box)
-	return button, label
+	if v.mode == rfb.ModeExclusiveControl {
+		v.exclusiveButton.AddCSSClass("on")
+	} else {
+		v.exclusiveButton.RemoveCSSClass("on")
+	}
+}
+
+// buildHint builds the line that says how to let go of the mouse. It shows for a
+// few seconds when Exclusive mode starts.
+func (v *sessionView) buildHint(overlay *gtk.Overlay) {
+	box := gtk.NewBox(gtk.OrientationHorizontal, 4)
+	box.AddCSSClass("oss-hint")
+	before := gtk.NewLabel("Exclusive mode is on. Press ")
+	box.Append(before)
+	for _, key := range []string{"Ctrl", "Alt", "Esc"} {
+		cap := gtk.NewLabel(key)
+		cap.AddCSSClass("oss-keycap")
+		box.Append(cap)
+	}
+	box.Append(gtk.NewLabel(" to let go of the mouse."))
+	box.SetCanTarget(false)
+	v.hint = gtk.NewRevealer()
+	v.hint.SetTransitionType(gtk.RevealerTransitionTypeCrossfade)
+	v.hint.SetTransitionDuration(200)
+	v.hint.SetChild(box)
+	v.hint.SetHAlign(gtk.AlignCenter)
+	v.hint.SetVAlign(gtk.AlignStart)
+	v.hint.SetMarginTop(84)
+	v.hint.SetCanTarget(false)
+	overlay.AddOverlay(v.hint)
+}
+
+// hintShownFor is how long the exclusive hint stays, in milliseconds.
+const hintShownFor = 8000
+
+// showExclusiveHint shows the hint for a while, or hides it at once.
+func (v *sessionView) showExclusiveHint(on bool) {
+	if v.hintHide != 0 {
+		coreglib.SourceRemove(v.hintHide)
+		v.hintHide = 0
+	}
+	v.hint.SetRevealChild(on)
+	if !on {
+		return
+	}
+	v.hintHide = coreglib.TimeoutAdd(hintShownFor, func() bool {
+		v.hintHide = 0
+		v.hint.SetRevealChild(false)
+		return false
+	})
+}
+
+// disconnect leaves the session. The last picture is kept first, while it is still on screen.
+func (v *sessionView) disconnect() {
+	v.captureLast()
+	v.g.nav.Pop()
 }
 
 func modeID(mode rfb.Mode) string {
@@ -301,20 +446,63 @@ func modeFromID(id string) rfb.Mode {
 }
 
 func (v *sessionView) buildStats(overlay *gtk.Overlay) {
+	heading := gtk.NewLabel("STREAM")
+	heading.AddCSSClass("overline")
+	heading.SetXAlign(0)
 	v.statGrid = gtk.NewGrid()
-	v.statGrid.SetRowSpacing(6)
+	v.statGrid.SetRowSpacing(10)
 	v.statGrid.SetColumnSpacing(14)
-	v.stats = gtk.NewBox(gtk.OrientationVertical, 0)
+	v.spark = gtk.NewDrawingArea()
+	v.spark.SetContentWidth(208)
+	v.spark.SetContentHeight(36)
+	v.spark.SetDrawFunc(v.drawSparkline)
+	v.spark.SetTooltipText("Delay over the last minute")
+	setAccessibleLabel(v.spark, "Delay over the last minute")
+	v.stats = gtk.NewBox(gtk.OrientationVertical, 10)
 	v.stats.AddCSSClass("oss-stats")
-	v.stats.SetHAlign(gtk.AlignStart)
-	v.stats.SetVAlign(gtk.AlignEnd)
-	v.stats.SetMarginStart(16)
-	v.stats.SetMarginBottom(16)
-	v.stats.SetSizeRequest(230, -1)
+	v.stats.SetHAlign(gtk.AlignEnd)
+	v.stats.SetVAlign(gtk.AlignStart)
+	v.stats.SetMarginEnd(24)
+	v.stats.SetMarginTop(88)
+	v.stats.SetSizeRequest(240, -1)
 	v.stats.SetCanTarget(false)
+	v.stats.Append(heading)
 	v.stats.Append(v.statGrid)
+	v.stats.Append(v.spark)
 	v.stats.SetVisible(false)
 	overlay.AddOverlay(v.stats)
+}
+
+// delayHistory is how many one second samples the sparkline keeps.
+const delayHistory = 60
+
+// noteDelay adds a sample of the delay, at most once a second.
+func (v *sessionView) noteDelay(now time.Time, ms float64) {
+	if now.Sub(v.delayAt) < time.Second {
+		return
+	}
+	v.delayAt = now
+	v.delays = appendSample(v.delays, ms, delayHistory)
+	if v.spark != nil {
+		v.spark.QueueDraw()
+	}
+}
+
+// drawSparkline draws the delay history as one blue line.
+func (v *sessionView) drawSparkline(_ *gtk.DrawingArea, cr *cairo.Context, width, height int) {
+	points := sparkPoints(v.delays, float64(width), float64(height), 4)
+	if len(points) < 2 {
+		return
+	}
+	cr.SetSourceRGB(0x5B/255.0, 0x8C/255.0, 0xFF/255.0)
+	cr.SetLineWidth(1.75)
+	cr.SetLineJoin(cairo.LineJoinRound)
+	cr.SetLineCap(cairo.LineCapRound)
+	cr.MoveTo(points[0][0], points[0][1])
+	for _, point := range points[1:] {
+		cr.LineTo(point[0], point[1])
+	}
+	cr.Stroke()
 }
 
 func (v *sessionView) buildCopyCard(overlay *gtk.Overlay) {
@@ -341,8 +529,8 @@ func (v *sessionView) buildCopyCard(overlay *gtk.Overlay) {
 	v.copyCard = gtk.NewBox(gtk.OrientationVertical, 8)
 	v.copyCard.AddCSSClass("oss-copy-card")
 	v.copyCard.SetHAlign(gtk.AlignCenter)
-	v.copyCard.SetVAlign(gtk.AlignStart)
-	v.copyCard.SetMarginTop(18)
+	v.copyCard.SetVAlign(gtk.AlignEnd)
+	v.copyCard.SetMarginBottom(24)
 	v.copyCard.SetSizeRequest(340, -1)
 	v.copyCard.Append(row)
 	v.copyCard.Append(v.copyBar)
@@ -358,7 +546,7 @@ func (v *sessionView) installActions() {
 		action.ConnectActivate(func(*glib.Variant) { f() })
 		v.actions.AddAction(action)
 	}
-	simple("disconnect", func() { v.g.nav.Pop() })
+	simple("disconnect", func() { v.disconnect() })
 	simple("type-clipboard", v.typeClipboard)
 	simple("fetch-drag", func() { v.runCommand(commandFetchDrag) })
 	simple("refresh", func() { v.report("Refreshing", v.client.RequestRefresh()) })
@@ -398,27 +586,28 @@ func (v *sessionView) installActions() {
 	v.actions.AddAction(v.qualityAction)
 	v.toolbar.InsertActionGroup("session", v.actions)
 
-	qualityMenu := gio.NewMenu()
-	for _, quality := range qualities {
-		qualityMenu.Append(qualityLabel(quality), "session.quality::"+quality.String())
-	}
-	v.qualityButton.SetMenuModel(qualityMenu)
-	v.qualityText.SetLabel(qualityLabel(v.quality))
-
 	v.displayMenu = gio.NewMenu()
 	v.displayButton.SetMenuModel(v.displayMenu)
 	v.refreshDisplays()
 
+	qualityMenu := gio.NewMenu()
+	for _, quality := range qualities {
+		qualityMenu.Append(qualityLabel(quality), "session.quality::"+quality.String())
+	}
+	modes := gio.NewMenu()
+	custom := gio.NewMenuItem("", "")
+	custom.SetAttributeValue("custom", glib.NewVariantString("modes"))
+	modes.AppendItem(custom)
 	menu := gio.NewMenu()
+	menu.AppendSection("", modes)
 	first := gio.NewMenu()
-	first.Append("Show stats", "session.stats")
+	first.AppendSubmenu("Picture quality", qualityMenu)
 	first.Append("Paste clipboard as keystrokes", "session.type-clipboard")
 	first.Append("Get files the Mac is dragging", "session.fetch-drag")
 	first.Append("Refresh the picture", "session.refresh")
 	first.Append("Save a screenshot", "session.screenshot")
 	second := gio.NewMenu()
 	second.Append("Virtual display at window size", "session.virtual")
-	second.Append("Mute sound", "session.mute")
 	second.Append("HDR", "session.hdr")
 	third := gio.NewMenu()
 	third.Append("Preferences", "win.preferences")
@@ -426,7 +615,9 @@ func (v *sessionView) installActions() {
 	menu.AppendSection("", first)
 	menu.AppendSection("", second)
 	menu.AppendSection("", third)
-	v.sessionMenu.SetMenuModel(menu)
+	popover := gtk.NewPopoverMenuFromModel(menu)
+	popover.AddChild(v.modes, "modes")
+	v.sessionMenu.SetPopover(&popover.Popover)
 }
 
 // refreshDisplays rebuilds the Display menu from the layout the Mac reported.
@@ -437,7 +628,7 @@ func (v *sessionView) refreshDisplays() {
 		v.displayMenu.Append(choice.Label, fmt.Sprintf("session.display::%d", choice.ID))
 	}
 	v.displayAction.SetState(glib.NewVariantString(fmt.Sprint(currentDisplay(layout))))
-	v.displayText.SetLabel(displayLabel(layout))
+	v.displayButton.SetTooltipText(displayLabel(layout))
 }
 
 func (v *sessionView) selectDisplay(label string, id uint32) {
@@ -447,7 +638,6 @@ func (v *sessionView) selectDisplay(label string, id uint32) {
 
 func (v *sessionView) setQuality(quality rfb.Quality) {
 	v.quality = quality
-	v.qualityText.SetLabel(qualityLabel(quality))
 	v.qualityAction.SetState(glib.NewVariantString(quality.String()))
 	v.report("", v.client.SetQuality(quality))
 }
@@ -456,6 +646,8 @@ func (v *sessionView) setQuality(quality rfb.Quality) {
 func (v *sessionView) setMuted(muted bool) {
 	v.muted = muted
 	v.muteAction.SetState(glib.NewVariantBoolean(muted))
+	v.soundIcon.SetFromIconName(map[bool]string{true: iconSoundMuted, false: iconSound}[muted])
+	v.soundButton.SetTooltipText(map[bool]string{true: "Sound is off", false: "Sound"}[muted])
 	if stream := v.vid.stream; stream != nil {
 		stream.setMuted(muted)
 	}
@@ -466,6 +658,11 @@ func (v *sessionView) setStats(on bool) {
 	v.showStats = on
 	v.statsAction.SetState(glib.NewVariantBoolean(on))
 	v.stats.SetVisible(on)
+	if on {
+		v.statsButton.AddCSSClass("on")
+	} else {
+		v.statsButton.RemoveCSSClass("on")
+	}
 	if on {
 		v.statsAt = time.Time{}
 		v.updateStats()
@@ -491,6 +688,15 @@ func (v *sessionView) start() {
 	v.applyMode(v.mode, false)
 	v.helper.begin()
 	v.setStats(v.showStats)
+	// The home screen shows the last picture of this Mac: keep it fresh, so a
+	// window that closes without a clean goodbye still leaves one.
+	v.thumbTimer = coreglib.TimeoutSecondsAdd(30, func() bool {
+		if v.ended {
+			return false
+		}
+		v.captureLast()
+		return true
+	})
 	v.screen.GrabFocus()
 	prefs := v.g.app.preferences()
 	v.screen.setRealSize(!prefs.FitWindow)
@@ -504,6 +710,14 @@ func (v *sessionView) end() {
 	v.ended = true
 	if v.hideTimer != 0 {
 		coreglib.SourceRemove(v.hideTimer)
+	}
+	if v.hintHide != 0 {
+		coreglib.SourceRemove(v.hintHide)
+		v.hintHide = 0
+	}
+	if v.thumbTimer != 0 {
+		coreglib.SourceRemove(v.thumbTimer)
+		v.thumbTimer = 0
 	}
 	if v.copyHide != 0 {
 		coreglib.SourceRemove(v.copyHide)
@@ -740,12 +954,17 @@ func (v *sessionView) updateStats() {
 		v.loggedAt = now
 		v.g.app.logger.Debug("stats", "drawn_fps", int(v.meter.Frames), "update_fps", int(v.meter.Updates), "mbit", int(v.meter.BitsPS/1e6))
 	}
-	v.subtitle.SetLabel(connectedText(v.fps))
+	delayMS := float64(v.live.echo.Value()) / float64(time.Millisecond)
+	v.identity.SetTooltipText(connectedText(v.fps))
+	if delayMS > 0 {
+		v.delay.SetLabel(fmt.Sprintf("%.0f ms", delayMS))
+		v.noteDelay(now, delayMS)
+	}
 	if !v.showStats {
 		return
 	}
 	frameWidth, frameHeight := v.client.FramebufferSize()
-	rows := statRows(v.client.Info(), v.meter.Frames, float64(v.live.echo.Value())/float64(time.Millisecond), v.meter.BitsPS, v.h.lastEncoding(), frameWidth, frameHeight)
+	rows := statRows(v.client.Info(), v.meter.Frames, delayMS, v.meter.BitsPS, v.h.lastEncoding(), frameWidth, frameHeight)
 	rows = applyVideoRows(rows, v.videoStatistics())
 	for len(v.statNames) < len(rows) {
 		name := gtk.NewLabel("")
@@ -842,6 +1061,7 @@ func (v *sessionView) connectionLost() {
 		_, message = describeError(err, address, v.live.req.vncLogin())
 	}
 	req := v.live.req
+	v.captureLast()
 	v.g.nav.Pop()
 	dialog := adw.NewAlertDialog("Disconnected", message)
 	dialog.AddResponse("close", "Close")
@@ -882,6 +1102,8 @@ func (v *sessionView) applyMode(mode rfb.Mode, announce bool) {
 	}
 	v.applyGrabs()
 	v.updateSystemCursor()
+	v.syncModeButton()
+	v.showExclusiveHint(mode == rfb.ModeExclusiveControl)
 	if announce {
 		if mode == rfb.ModeExclusiveControl {
 			v.notify(exclusiveAnnouncement(v.lockBackend))
@@ -1538,18 +1760,14 @@ func (v *sessionView) toggleFullscreen() {
 	}
 }
 
-// installFullscreenReveal hides the header bar in fullscreen and brings it
-// back when the pointer touches the top edge.
+// installFullscreenReveal hides the window controls and the floating bar in
+// fullscreen and brings the bar back when the pointer touches the top edge.
 func (v *sessionView) installFullscreenReveal() {
 	fullscreened := v.g.window.NotifyProperty("fullscreened", func() {
 		v.fullscreen = v.g.window.IsFullscreen()
 		v.toolbar.SetExtendContentToTopEdge(v.fullscreen)
-		if v.fullscreen {
-			v.toolbar.SetTopBarStyle(adw.ToolbarRaised)
-		} else {
-			v.toolbar.SetTopBarStyle(adw.ToolbarFlat)
-		}
 		v.toolbar.SetRevealTopBars(!v.fullscreen)
+		v.bar.SetRevealChild(!v.fullscreen)
 	})
 	v.outliving.add(v.g.window, fullscreened)
 	motion := gtk.NewEventControllerMotion()
@@ -1560,10 +1778,10 @@ func (v *sessionView) installFullscreenReveal() {
 		}
 		if y <= revealZone {
 			v.cancelHide()
-			v.toolbar.SetRevealTopBars(true)
+			v.bar.SetRevealChild(true)
 			return
 		}
-		if y > 80 && v.toolbar.RevealTopBars() {
+		if y > 80 && v.bar.RevealChild() {
 			v.scheduleHide()
 		}
 	})
@@ -1571,7 +1789,7 @@ func (v *sessionView) installFullscreenReveal() {
 }
 
 func (v *sessionView) menuOpen() bool {
-	return v.displayButton.Active() || v.qualityButton.Active() || v.sessionMenu.Active()
+	return v.displayButton.Active() || v.sessionMenu.Active()
 }
 
 func (v *sessionView) cancelHide() {
@@ -1588,8 +1806,65 @@ func (v *sessionView) scheduleHide() {
 	v.hideTimer = coreglib.TimeoutAdd(900, func() bool {
 		v.hideTimer = 0
 		if v.fullscreen && !v.menuOpen() {
-			v.toolbar.SetRevealTopBars(false)
+			v.bar.SetRevealChild(false)
 		}
 		return false
 	})
+}
+
+// captureLast keeps what the home screen shows of this Mac: how the last
+// session went and a small copy of the picture as it is on screen now.
+func (v *sessionView) captureLast() {
+	if v.ended {
+		return
+	}
+	target := v.live.req.target
+	width, height := v.client.FramebufferSize()
+	summary := summarizeSession(width, height, v.videoStatistics(), v.h.lastEncoding(), v.muted)
+	_, err := v.g.app.store.Update(target, func(c *savedConnection) { c.Last = &summary })
+	if err != nil {
+		v.g.app.logger.Debug("note the last session", "error", err)
+	}
+	path := v.g.thumbnailFile(target.ID())
+	if path == "" {
+		return
+	}
+	if err = v.saveThumbnail(path); err != nil {
+		v.g.app.logger.Debug("keep the last frame", "error", err)
+	}
+}
+
+// thumbnailWidth is the width of the kept last frame, in pixels.
+const thumbnailWidth = 640
+
+// saveThumbnail renders the picture widget as it is drawn now, scaled down, to a PNG file.
+func (v *sessionView) saveThumbnail(path string) error {
+	width, height := v.screen.Width(), v.screen.Height()
+	if width <= 0 || height <= 0 || !v.screen.Mapped() {
+		return E.New("the picture is not on screen")
+	}
+	paintable := gtk.NewWidgetPaintable(v.screen)
+	scale := min(1.0, float64(thumbnailWidth)/float64(width))
+	snapshot := gtk.NewSnapshot()
+	snapshot.Scale(float32(scale), float32(scale))
+	paintable.Snapshot(snapshot, float64(width), float64(height))
+	node := snapshot.ToNode()
+	if node == nil {
+		return E.New("nothing to draw")
+	}
+	renderer := v.g.window.Renderer()
+	if renderer == nil {
+		return E.New("the window has no renderer")
+	}
+	texture := gsk.BaseRenderer(renderer).RenderTexture(node, nil)
+	if texture == nil {
+		return E.New("the picture could not be drawn")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return E.Cause(err, "create the thumbnail folder")
+	}
+	if !gdk.BaseTexture(texture).SaveToPNG(path) {
+		return E.New("the picture could not be saved")
+	}
+	return nil
 }

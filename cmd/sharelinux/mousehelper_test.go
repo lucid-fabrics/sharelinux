@@ -486,3 +486,26 @@ func TestAMacSavedBeforeThePendingFlagLoadsAsPending(t *testing.T) {
 		}
 	}
 }
+
+func TestHelperCard(t *testing.T) {
+	title, body, ready := helperCard(nil, nil)
+	if title != "Mouse helper not paired" || ready || body == "" {
+		t.Fatal(title, body, ready)
+	}
+	title, body, ready = helperCard([]pairedMac{{Name: "MacBook Pro"}}, nil)
+	if title != "Mouse helper paired" || !ready || body != "Raw mouse is ready for games and 3D tools on MacBook Pro." {
+		t.Fatal(title, body, ready)
+	}
+	title, _, ready = helperCard([]pairedMac{{Name: "A", Pending: true}}, nil)
+	if title != "Mouse helper waiting" || ready {
+		t.Fatal(title, ready)
+	}
+	_, body, ready = helperCard([]pairedMac{{Name: "A"}, {Name: "B"}, {Name: "C", Pending: true}}, nil)
+	if ready != true || body != "Raw mouse is ready for games and 3D tools on 2 Macs." {
+		t.Fatal(body, ready)
+	}
+	title, _, ready = helperCard(nil, errors.New("keyring locked"))
+	if title != "Mouse helper not ready" || ready {
+		t.Fatal(title, ready)
+	}
+}

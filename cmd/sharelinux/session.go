@@ -137,17 +137,46 @@ type statRow struct {
 // server does not report it.
 func statRows(info rfb.ServerInfo, frames float64, latencyMS float64, bitsPS float64, encoding rfb.Encoding, width, height int) []statRow {
 	rows := []statRow{
-		{"Frame rate", fmt.Sprintf("%.0f fps", frames)},
-		{"Latency", fmt.Sprintf("%.0f ms", latencyMS)},
+		{"Codec", codecLabel(encoding)},
+		{"Picture", fmt.Sprintf("%d × %d · %.0f fps", width, height, frames)},
+		{"Delay", fmt.Sprintf("%.0f ms", latencyMS)},
 	}
 	if info.Dialect == rfb.DialectApple {
 		rows = append(rows, statRow{"Bandwidth", formatBits(bitsPS)})
 	}
-	rows = append(rows,
-		statRow{"Codec", codecLabel(encoding)},
-		statRow{"Resolution", fmt.Sprintf("%d×%d", width, height)},
-	)
 	return rows
+}
+
+// appendSample adds a sample to a history that keeps the newest keep samples.
+func appendSample(history []float64, sample float64, keep int) []float64 {
+	history = append(history, sample)
+	if len(history) > keep {
+		history = history[len(history)-keep:]
+	}
+	return history
+}
+
+// sparkPoints turns a history into points of a line that fills a width by
+// height box, leaving pad around it. The line is centred when every sample is
+// the same, so a steady delay draws a steady line.
+func sparkPoints(history []float64, width, height, pad float64) [][2]float64 {
+	if len(history) < 2 || width <= 2*pad || height <= 2*pad {
+		return nil
+	}
+	low, high := history[0], history[0]
+	for _, sample := range history {
+		low, high = min(low, sample), max(high, sample)
+	}
+	// A swing of under 2 ms is noise: it must not fill the whole height.
+	span := max(high-low, 2)
+	middle := (high + low) / 2
+	points := make([][2]float64, len(history))
+	for index, sample := range history {
+		x := pad + (width-2*pad)*float64(index)/float64(len(history)-1)
+		y := height/2 - (sample-middle)/span*(height-2*pad)
+		points[index] = [2]float64{x, y}
+	}
+	return points
 }
 
 // connectedText is the green subtitle of the session header.

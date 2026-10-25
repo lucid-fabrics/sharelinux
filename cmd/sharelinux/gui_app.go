@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"runtime"
 
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
@@ -78,9 +79,15 @@ func (g *gui) activate() {
 	// The display is open: find out what it offers for HDR on this, the GTK thread.
 	g.app.displayHDR()
 	gtk.WindowSetDefaultIconName(applicationID)
-	// The symbolic icons of the design are Adwaita's. Other icon themes draw
-	// some of them differently or not at all, so the window pins this one.
+	// The look is dark: the design has no light variant.
+	adw.StyleManagerGetDefault().SetColorScheme(adw.ColorSchemeForceDark)
+	// The design's symbolic icons and Mac art are unpacked next to the stock ones.
+	// The rest of the stock icons are Adwaita's; other icon themes draw some of
+	// them differently or not at all, so the window pins this one.
 	gtk.SettingsGetDefault().SetObjectProperty("gtk-icon-theme-name", "Adwaita")
+	if err := installIcons(gdk.DisplayGetDefault()); err != nil {
+		g.app.logger.Warn("icons", "error", err)
+	}
 	provider := gtk.NewCSSProvider()
 	provider.LoadFromString(stylesheet)
 	gtk.StyleContextAddProviderForDisplay(gdk.DisplayGetDefault(), provider, gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
@@ -99,6 +106,7 @@ func (g *gui) activate() {
 
 	g.list = newConnectionsPage(g)
 	g.nav.Add(g.list.page)
+	g.list.installBreakpoint()
 	g.nav.ConnectPopped(func(page *adw.NavigationPage) {
 		if g.session != nil && page.Tag() == sessionPageTag {
 			g.session.end()
@@ -124,6 +132,7 @@ func (g *gui) activate() {
 // shutdown stops everything that runs in the background.
 func (g *gui) shutdown() {
 	if g.session != nil {
+		g.session.captureLast()
 		g.session.end()
 		g.session = nil
 	}
@@ -149,7 +158,7 @@ func (g *gui) installActions() {
 		return action
 	}
 	add("new-connection", []string{"<Control>n"}, true, func() { g.openSignIn(nil, false) })
-	add("search", []string{"<Control>f"}, true, func() { g.list.toggleSearch() })
+	add("search", []string{"<Control>f"}, true, func() { g.list.focusSearch() })
 	add("preferences", []string{"<Control>comma"}, false, g.showPreferences)
 	add("about", nil, false, g.showAbout)
 	add("quit", []string{"<Control>q"}, true, func() { g.window.Close() })
@@ -176,6 +185,16 @@ func newToast(message string) *adw.Toast {
 // toast shows a short message over the current page.
 func (g *gui) toast(message string) {
 	g.toasts.AddToast(newToast(message))
+}
+
+// thumbnailFile is where the last frame of a Mac is kept, or "" when the cache
+// folder is unknown.
+func (g *gui) thumbnailFile(id string) string {
+	base, err := os.UserCacheDir()
+	if err != nil {
+		return ""
+	}
+	return thumbnailPath(filepath.Join(base, configName), id)
 }
 
 func (g *gui) showAbout() {

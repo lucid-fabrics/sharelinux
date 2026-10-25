@@ -210,6 +210,21 @@ func isIPv4(address string) bool {
 	return ip != nil && ip.To4() != nil
 }
 
+// modelKeys are the ways a device-info answer and a Screen Sharing answer of
+// the same Mac can be matched: the host name first (the two services share it
+// even when their instance names differ, "MacBook-Pro" and "MacBook Pro"), then
+// the instance name.
+func modelKeys(name, host string) []string {
+	var keys []string
+	if host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), ".")); host != "" {
+		keys = append(keys, "host:"+host)
+	}
+	if name = strings.ToLower(strings.TrimSpace(name)); name != "" {
+		keys = append(keys, "name:"+name)
+	}
+	return keys
+}
+
 // scanMacs browses once and returns what answered within scanWindow, calling
 // onFound for each new Mac as soon as it answers. The model each Mac announces
 // next to Screen Sharing is read in the same window.
@@ -246,7 +261,9 @@ func scanMacs(ctx context.Context, onFound func(discoveredMac)) ([]discoveredMac
 					return
 				}
 				if model := modelFromText(entry.Text); model != "" {
-					models[strings.ToLower(strings.TrimSpace(unescapeLabel(entry.Instance)))] = model
+					for _, key := range modelKeys(strings.TrimSpace(unescapeLabel(entry.Instance)), entry.HostName) {
+						models[key] = model
+					}
 				}
 			case <-infoBrowsed:
 				return
@@ -262,7 +279,12 @@ func scanMacs(ctx context.Context, onFound func(discoveredMac)) ([]discoveredMac
 	<-done
 	<-infoDone
 	for index := range found {
-		found[index].Model = models[strings.ToLower(found[index].Name)]
+		for _, key := range modelKeys(found[index].Name, found[index].Host) {
+			if model := models[key]; model != "" {
+				found[index].Model = model
+				break
+			}
+		}
 	}
 	if err != nil && ctx.Err() == nil {
 		return found, E.Cause(err, "look for Macs on the network")

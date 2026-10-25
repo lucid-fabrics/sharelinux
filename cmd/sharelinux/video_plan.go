@@ -425,22 +425,20 @@ func applyVideoRows(rows []statRow, v videoStats) []statRow {
 	if !v.Active {
 		return rows
 	}
-	out := make([]statRow, 0, len(rows)+3)
+	out := make([]statRow, 0, len(rows)+5)
 	for _, row := range rows {
 		if row.Label == "Codec" {
 			row.Value = streamLabel(v.Codec, v.Color, v.Kind)
-			out = append(out, row)
-			out = append(out,
-				statRow{"Decode", formatMillis(v.DecodeAvg)},
-				statRow{"Output", v.Output.String()},
-				statRow{"Dropped", fmt.Sprint(v.Dropped)},
-			)
-			if v.SoundOn {
-				out = append(out, statRow{"Sound", soundRow(v.Sound)})
-			}
-			continue
 		}
 		out = append(out, row)
+	}
+	out = append(out,
+		statRow{"Decode", formatMillis(v.DecodeAvg)},
+		statRow{"Output", v.Output.String()},
+		statRow{"Dropped", fmt.Sprint(v.Dropped)},
+	)
+	if v.SoundOn {
+		out = append(out, statRow{"Sound", soundRow(v.Sound)})
 	}
 	return out
 }

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"github.com/nekohasekai/open-screen-sharing/internal/rfb"
+	"github.com/nekohasekai/open-screen-sharing/internal/rfb/media"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -91,5 +93,23 @@ func TestLastUsedAndRecentMacs(t *testing.T) {
 	}
 	if names != "new mid old " {
 		t.Fatalf("order %q", names)
+	}
+}
+
+func TestSummarizeSession(t *testing.T) {
+	hdr := videoStats{Active: true, Codec: media.CodecHEVC, Color: media.Color{BitDepth: 10, ChromaFormat: 3, Transfer: media.TransferPQ}, SoundOn: true}
+	got := summarizeSession(5120, 1440, hdr, rfb.EncodingMediaStream, false)
+	if got != (lastSession{Width: 5120, Height: 1440, Codec: "HEVC 4:4:4", HDR: true, Sound: true}) {
+		t.Fatalf("%+v", got)
+	}
+	if got := summarizeSession(5120, 1440, hdr, rfb.EncodingMediaStream, true); got.Sound {
+		t.Fatal("a muted session had no sound to remember")
+	}
+	plain := videoStats{Active: true, Codec: media.CodecH264, Color: media.Color{BitDepth: 8, ChromaFormat: 1}}
+	if got := summarizeSession(2560, 1600, plain, rfb.EncodingMediaStream, false); got.Codec != "H.264" || got.HDR || got.Sound {
+		t.Fatalf("%+v", got)
+	}
+	if got := summarizeSession(1280, 800, videoStats{}, rfb.EncodingZRLE, false); got.Codec != "ZRLE" || got.Width != 1280 {
+		t.Fatalf("%+v", got)
 	}
 }

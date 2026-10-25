@@ -10,7 +10,7 @@ import (
 // They travel inside the binary, so the viewer looks the same installed from the
 // Flatpak or run from a build folder.
 //
-//go:embed data/icons/*.svg data/mac/*.svg
+//go:embed data/icons/*.svg data/mac/*.svg data/io.github.sharelinux.ScreenSharing.svg
 var assetFiles embed.FS
 
 // iconNames lists the embedded symbolic icons by their theme name, such as

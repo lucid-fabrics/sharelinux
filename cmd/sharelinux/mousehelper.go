@@ -480,3 +480,26 @@ func macRowSubtitle(mac pairedMac) string {
 	}
 	return line
 }
+
+// helperCard is the title and the line of the status card at the foot of the
+// home sidebar. ready says the helper can be used now (a green dot).
+func helperCard(macs []pairedMac, err error) (title, body string, ready bool) {
+	if err != nil {
+		return "Mouse helper not ready", pairingProblem(err), false
+	}
+	var paired []pairedMac
+	for _, mac := range macs {
+		if !mac.Pending {
+			paired = append(paired, mac)
+		}
+	}
+	switch {
+	case len(macs) == 0:
+		return "Mouse helper not paired", "Pair it once for smooth mouse movement in games and 3D tools.", false
+	case len(paired) == 0:
+		return "Mouse helper waiting", "Confirm the pairing on the Mac to finish.", false
+	case len(paired) == 1:
+		return "Mouse helper paired", "Raw mouse is ready for games and 3D tools on " + paired[0].Name + ".", true
+	}
+	return "Mouse helper paired", "Raw mouse is ready for games and 3D tools on " + strconv.Itoa(len(paired)) + " Macs.", true
+}

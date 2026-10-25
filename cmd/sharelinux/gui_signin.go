@@ -52,6 +52,31 @@ func (g *gui) openSaved(connection savedConnection) {
 	g.openSignInNamed(req, connection.displayName(), req.dialPassword() != "")
 }
 
+// openSavedExclusive connects to a saved Mac in Exclusive mode, whatever mode it was saved with.
+func (g *gui) openSavedExclusive(connection savedConnection) {
+	req, err := g.app.newRequest(connection.target(), &connection)
+	if err != nil {
+		g.showError("This Mac's settings could not be read", err.Error())
+		return
+	}
+	req.opts.Mode = rfb.ModeExclusiveControl
+	req.modeOnce = true
+	g.app.loadSavedPassword(req, connection)
+	g.openSignInNamed(req, connection.displayName(), req.dialPassword() != "")
+}
+
+// editSaved opens the sign-in for a saved Mac without connecting, so its
+// address, account or password can be changed.
+func (g *gui) editSaved(connection savedConnection) {
+	req, err := g.app.newRequest(connection.target(), &connection)
+	if err != nil {
+		g.showError("This Mac's settings could not be read", err.Error())
+		return
+	}
+	g.app.loadSavedPassword(req, connection)
+	g.openSignInNamed(req, connection.displayName(), false)
+}
+
 // openDiscovered starts the sign-in for a Mac found on the network.
 func (g *gui) openDiscovered(mac discoveredMac) {
 	req, err := g.app.newRequest(mac.target(), nil)
@@ -105,8 +130,19 @@ func (s *signInDialog) build() {
 	s.dialog.SetContentWidth(440)
 	s.dialog.SetFollowsContentSize(true)
 
-	icon := tile(tileColor(s.req.target.ID()), true)
-	icon.SetMarginTop(6)
+	art := artDisplay
+	if saved, found := s.g.app.store.Lookup(s.req.target); found {
+		art = s.g.list.artFor(saved)
+	}
+	picture := icon(macArtIcon(art), 72)
+	picture.SetHAlign(gtk.AlignCenter)
+	picture.SetVAlign(gtk.AlignCenter)
+	badge := gtk.NewBox(gtk.OrientationVertical, 0)
+	badge.AddCSSClass("oss-art")
+	badge.SetHAlign(gtk.AlignCenter)
+	badge.SetSizeRequest(150, 96)
+	badge.SetMarginTop(6)
+	badge.Append(picture)
 	s.title = gtk.NewLabel("")
 	s.title.AddCSSClass("title-2")
 	s.title.SetWrap(true)
@@ -188,7 +224,7 @@ func (s *signInDialog) build() {
 	column.SetMarginStart(24)
 	column.SetMarginEnd(24)
 	column.SetMarginBottom(24)
-	column.Append(icon)
+	column.Append(badge)
 	column.Append(s.title)
 	column.Append(s.lead)
 	spacer := gtk.NewBox(gtk.OrientationVertical, 0)

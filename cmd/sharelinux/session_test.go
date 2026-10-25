@@ -85,7 +85,7 @@ func TestDisplayLabelAndMain(t *testing.T) {
 
 func TestStatRows(t *testing.T) {
 	rows := statRows(rfb.ServerInfo{Dialect: rfb.DialectApple}, 59.6, 14.2, 18.2e6, rfb.EncodingMVS, 2560, 1600)
-	want := []statRow{{"Frame rate", "60 fps"}, {"Latency", "14 ms"}, {"Bandwidth", "18.2 Mbit/s"}, {"Codec", "Video"}, {"Resolution", "2560×1600"}}
+	want := []statRow{{"Codec", "Video"}, {"Picture", "2560 × 1600 · 60 fps"}, {"Delay", "14 ms"}, {"Bandwidth", "18.2 Mbit/s"}}
 	if len(rows) != len(want) {
 		t.Fatalf("%+v", rows)
 	}
@@ -100,7 +100,7 @@ func TestStatRows(t *testing.T) {
 			t.Fatal("a server without a byte count has no bandwidth row")
 		}
 	}
-	if len(plain) != 4 {
+	if len(plain) != 3 {
 		t.Fatalf("%+v", plain)
 	}
 }
@@ -133,6 +133,43 @@ func TestVideoDisplayReady(t *testing.T) {
 	for _, c := range cases {
 		if got := videoDisplayReady(c.layout); got != c.want {
 			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestAppendSample(t *testing.T) {
+	var history []float64
+	for sample := 1.0; sample <= 5; sample++ {
+		history = appendSample(history, sample, 3)
+	}
+	if len(history) != 3 || history[0] != 3 || history[2] != 5 {
+		t.Fatalf("%v", history)
+	}
+}
+
+func TestSparkPoints(t *testing.T) {
+	if sparkPoints([]float64{12}, 208, 36, 4) != nil {
+		t.Fatal("one sample draws no line")
+	}
+	if sparkPoints([]float64{12, 13}, 6, 36, 4) != nil {
+		t.Fatal("a box smaller than its padding draws no line")
+	}
+	steady := sparkPoints([]float64{12, 12, 12, 12}, 208, 36, 4)
+	if len(steady) != 4 || steady[0][0] != 4 || steady[3][0] != 204 {
+		t.Fatalf("%v", steady)
+	}
+	for _, point := range steady {
+		if point[1] != 18 {
+			t.Fatalf("a steady delay draws a centred line: %v", steady)
+		}
+	}
+	rising := sparkPoints([]float64{10, 20, 30}, 100, 40, 4)
+	if !(rising[0][1] > rising[1][1] && rising[1][1] > rising[2][1]) {
+		t.Fatalf("a higher delay is drawn higher: %v", rising)
+	}
+	for _, point := range rising {
+		if point[1] < 4 || point[1] > 36 {
+			t.Fatalf("inside the padding: %v", point)
 		}
 	}
 }

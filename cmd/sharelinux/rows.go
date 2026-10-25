@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"hash/fnv"
 	"strings"
 	"time"
 )
@@ -59,16 +58,6 @@ func (c savedConnection) displayName() string {
 		return c.Name
 	}
 	return c.target().Address()
-}
-
-// tilePalette is the Adwaita palette the icon tiles draw from.
-var tilePalette = []string{"blue", "purple", "green", "orange", "teal", "pink", "slate"}
-
-// tileColor picks a stable tile colour from a connection's identity.
-func tileColor(id string) string {
-	sum := fnv.New32a()
-	_, _ = sum.Write([]byte(id))
-	return tilePalette[int(sum.Sum32())%len(tilePalette)]
 }
 
 // reachability is the status dot of a saved Mac.

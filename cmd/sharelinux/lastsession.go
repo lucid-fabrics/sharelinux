@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/nekohasekai/open-screen-sharing/internal/rfb"
+	"github.com/nekohasekai/open-screen-sharing/internal/rfb/media"
 )
 
 // lastSession is what the home screen remembers of the most recent session
@@ -112,4 +115,18 @@ func recentMacs(saved []savedConnection) []savedConnection {
 		}
 	}
 	return result
+}
+
+// summarizeSession describes a session that is ending: the picture size, how it
+// was sent (a video stream or the plain screen updates), HDR and sound.
+func summarizeSession(width, height int, video videoStats, encoding rfb.Encoding, muted bool) lastSession {
+	last := lastSession{Width: width, Height: height}
+	if !video.Active {
+		last.Codec = codecLabel(encoding)
+		return last
+	}
+	last.Codec = codecChipText(codecName(video.Codec), is444TenBit(video.Color) || is444EightBit(video.Color))
+	last.HDR = is444TenBit(video.Color) && (video.Color.Transfer == media.TransferPQ || video.Color.Transfer == media.TransferHLG)
+	last.Sound = video.SoundOn && !muted
+	return last
 }

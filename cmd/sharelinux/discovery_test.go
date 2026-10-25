@@ -116,3 +116,17 @@ func TestUnescapeLabel(t *testing.T) {
 		t.Fatalf("%+v", mac)
 	}
 }
+
+func TestModelKeys(t *testing.T) {
+	info := modelKeys("MacBook-Pro-m3-Max", "MacBook-Pro-m3-Max.local.")
+	rfb := modelKeys("MacBook Pro m3 Max", "MacBook-Pro-m3-Max.local")
+	if len(info) != 2 || len(rfb) != 2 || info[0] != rfb[0] {
+		t.Fatalf("the host key joins the two answers: %v %v", info, rfb)
+	}
+	if info[1] == rfb[1] {
+		t.Fatal("different instance names stay different")
+	}
+	if got := modelKeys("", ""); len(got) != 0 {
+		t.Fatalf("%v", got)
+	}
+}

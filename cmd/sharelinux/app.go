@@ -22,7 +22,10 @@ type request struct {
 	// password, false for a Mac account password. The two are never mixed.
 	passwordVNC bool
 	remember    bool
-	opts        options
+	// modeOnce says the mode was chosen for this session only, so saving the
+	// Mac afterwards keeps the mode it was saved with.
+	modeOnce bool
+	opts     options
 }
 
 // vncLogin reports whether the request logs in with a VNC password instead of
@@ -301,8 +304,13 @@ func (a *app) remember(req *request, name string) {
 		Keyboard: req.opts.Keyboard,
 		LastUsed: now(),
 	}
-	if existing, found := a.store.Lookup(req.target); found && existing.Name != "" {
-		connection.Name = existing.Name
+	if existing, found := a.store.Lookup(req.target); found {
+		if existing.Name != "" {
+			connection.Name = existing.Name
+		}
+		if req.modeOnce {
+			connection.Mode = existing.Mode
+		}
 	}
 	err := a.store.Save(connection, req.dialPassword())
 	if err != nil {

@@ -176,11 +176,11 @@ func TestApplyVideoRows(t *testing.T) {
 			t.Errorf("%s: %q, want %q", row.Label, row.Value, value)
 		}
 	}
-	if position < 0 || got[position+1].Label != "Decode" || got[position+2].Label != "Output" || got[position+3].Label != "Dropped" {
-		t.Fatalf("the video rows follow the Codec row: %v", got)
+	if position != 0 || got[len(got)-3].Label != "Decode" || got[len(got)-2].Label != "Output" || got[len(got)-1].Label != "Dropped" {
+		t.Fatalf("the video rows follow the stream rows: %v", got)
 	}
-	if got[len(got)-1].Label != "Resolution" {
-		t.Fatal("Resolution stays last")
+	if got[1].Label != "Picture" || got[2].Label != "Delay" {
+		t.Fatalf("Picture and Delay stay next to the Codec row: %v", got)
 	}
 	if rows[position].Value == "HEVC (VA-API)" {
 		t.Fatal("the rows it was given must not change")
