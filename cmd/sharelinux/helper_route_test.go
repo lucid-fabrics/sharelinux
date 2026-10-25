@@ -330,7 +330,7 @@ func TestChipForEveryState(t *testing.T) {
 		want           helperChip
 		label          string
 	}{
-		{"not paired", false, false, machelper.LinkStatus{}, chipNotPaired, "Helper not paired"},
+		{"not paired", false, false, machelper.LinkStatus{}, chipNotPaired, "No mouse helper on this Mac"},
 		{"paired, link not started", true, false, machelper.LinkStatus{}, chipWaiting, "Helper waiting"},
 		{"connecting", true, true, machelper.LinkStatus{State: machelper.LinkConnecting}, chipWaiting, "Helper waiting"},
 		{"active", true, true, live(machelper.StateActive), chipActive, "Helper active"},
@@ -369,6 +369,9 @@ func TestChipForEveryState(t *testing.T) {
 			t.Errorf("%s and %s share a tooltip", c.name, other)
 		}
 		seen[tip] = c.name
+	}
+	if class := chipFor(false, false, machelper.LinkStatus{}).Class; class != "muted" {
+		t.Errorf("the not paired chip is plain, class %q", class)
 	}
 	if !strings.Contains(chipFor(false, false, machelper.LinkStatus{}).Tooltip, "Preferences") {
 		t.Error("the not paired tooltip does not say where to pair")

@@ -216,7 +216,7 @@ func (h *helperUse) updateChip() {
 	look := chipFor(h.paired, h.linked, h.status)
 	h.chip.SetLabel(look.Label)
 	h.chip.SetTooltipText(look.Tooltip)
-	for _, class := range []string{"dim-label", "success", "warning"} {
+	for _, class := range []string{"dim-label", "muted", "success", "warning"} {
 		h.chip.RemoveCSSClass(class)
 	}
 	h.chip.AddCSSClass(look.Class)

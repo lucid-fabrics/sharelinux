@@ -46,18 +46,18 @@ const pairHint = "Pair this computer with the Mac in Preferences, under Keyboard
 // pinned helper; link is meaningful only when linked is set.
 func chipFor(paired, linked bool, link machelper.LinkStatus) chipLook {
 	if !paired {
-		return chipLook{chipNotPaired, "Helper not paired",
+		return chipLook{chipNotPaired, "No mouse helper on this Mac",
 			"The mouse helper gives games and 3D tools smooth, unlimited mouse movement. " + pairHint +
-				" Until then the mouse works as usual.", "dim-label"}
+				" Until then the mouse works as usual.", "muted"}
 	}
 	if !linked {
 		return chipLook{chipWaiting, "Helper waiting",
-			"Connecting to the mouse helper on the Mac. The mouse works as usual meanwhile.", "dim-label"}
+			"Connecting to the mouse helper on the Mac. The mouse works as usual meanwhile.", "muted"}
 	}
 	switch link.State {
 	case machelper.LinkConnecting:
 		return chipLook{chipWaiting, "Helper waiting",
-			"Connecting to the mouse helper on the Mac. The mouse works as usual meanwhile.", "dim-label"}
+			"Connecting to the mouse helper on the Mac. The mouse works as usual meanwhile.", "muted"}
 	case machelper.LinkDown:
 		return chipLook{chipUnavailable, "Helper unavailable", unreachableWords(link.Reason), "warning"}
 	}
