@@ -2,6 +2,7 @@ package main
 
 import (
 	"strings"
+	"unicode"
 )
 
 // macArt names the illustration drawn on a Mac's card.
@@ -78,4 +79,60 @@ func artForModel(model string) macArt {
 		return art
 	}
 	return artDisplay
+}
+
+// artForNames picks the illustration from what a Mac calls itself, for the
+// Macs that announce no model: its advertised name and its host name, such as
+// "cicd's iMac Pro" or "MacBook-Pro-m3-Max.local". Words are matched whole (or
+// as the start of a joined word like "macbookpro"), most specific first, so
+// "MacBook Pro" is a MacBook and "iMac Pro" an iMac, never a Mac Pro. It
+// returns the plain screen when no name says what the Mac is.
+func artForNames(names ...string) macArt {
+	var words []string
+	for _, name := range names {
+		words = append(words, strings.FieldsFunc(strings.ToLower(name), func(r rune) bool {
+			return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+		})...)
+	}
+	has := func(match func(word string) bool) bool {
+		for _, word := range words {
+			if match(word) {
+				return true
+			}
+		}
+		return false
+	}
+	prefix := func(start string) func(string) bool {
+		return func(word string) bool { return strings.HasPrefix(word, start) }
+	}
+	equal := func(want string) func(string) bool {
+		return func(word string) bool { return word == want }
+	}
+	switch {
+	case has(prefix("macbook")):
+		return artMacBook
+	case has(prefix("imac")):
+		return artIMac
+	case has(prefix("macmini")), has(equal("mini")):
+		return artMini
+	case has(prefix("macstudio")), has(equal("studio")):
+		return artStudio
+	case has(prefix("macpro")):
+		return artPro
+	}
+	for index := 0; index+1 < len(words); index++ {
+		if words[index] == "mac" && words[index+1] == "pro" {
+			return artPro
+		}
+	}
+	return artDisplay
+}
+
+// resolveArt picks the illustration for a Mac. The model it announced wins when
+// it is one we know; otherwise its names decide; otherwise the plain screen.
+func resolveArt(model string, names ...string) macArt {
+	if art := artForModel(model); art != artDisplay {
+		return art
+	}
+	return artForNames(names...)
 }

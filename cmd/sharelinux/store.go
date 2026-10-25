@@ -46,6 +46,9 @@ type savedConnection struct {
 	// Model is the model identifier the Mac announced on the network, such as
 	// "MacBookPro18,2". It picks the picture on the Mac's card.
 	Model string `json:"model,omitempty"`
+	// Art is the picture the home screen settled on for this Mac, from its
+	// model or its name, kept so the card still has it while the Mac is off.
+	Art string `json:"art,omitempty"`
 	// Last describes the most recent session, for the home screen.
 	Last *lastSession `json:"last,omitempty"`
 }
@@ -214,6 +217,9 @@ func (s *store) Save(connection savedConnection, password string) error {
 		// sign-in edits, so an edit keeps it.
 		if connection.Model == "" {
 			connection.Model = connections[index].Model
+		}
+		if connection.Art == "" {
+			connection.Art = connections[index].Art
 		}
 		if connection.Last == nil {
 			connection.Last = connections[index].Last

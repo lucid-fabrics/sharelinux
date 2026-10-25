@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -447,26 +448,32 @@ func (p *connectionsPage) scanLoop(ctx context.Context) {
 	}
 }
 
-// learnModels writes the model a Mac announced onto the saved Mac it is, so its
-// card keeps the right picture while it is switched off. It reports whether
-// anything changed.
+// learnModels writes the model a Mac announced, and the picture settled on for
+// it, onto the saved Mac it is, so its card keeps the right picture while it is
+// switched off. It reports whether anything changed.
 func (p *connectionsPage) learnModels(found []discoveredMac) bool {
 	changed := false
-	for _, mac := range found {
-		if mac.Model == "" {
+	for _, connection := range p.savedSnapshot() {
+		model := connection.Model
+		for _, mac := range found {
+			if mac.Model != "" && mac.matches(connection) {
+				model = mac.Model
+			}
+		}
+		art := artWith(connection, found)
+		if model == connection.Model && (art == artDisplay || string(art) == connection.Art) {
 			continue
 		}
-		for _, connection := range p.savedSnapshot() {
-			if connection.Model == mac.Model || !mac.matches(connection) {
-				continue
+		updated, err := p.g.app.store.Update(connection.target(), func(c *savedConnection) {
+			c.Model = model
+			if art != artDisplay {
+				c.Art = string(art)
 			}
-			model := mac.Model
-			updated, err := p.g.app.store.Update(connection.target(), func(c *savedConnection) { c.Model = model })
-			if err != nil {
-				p.g.app.logger.Warn("note the model of a Mac", "error", err)
-			}
-			changed = changed || updated
+		})
+		if err != nil {
+			p.g.app.logger.Warn("note the model of a Mac", "error", err)
 		}
+		changed = changed || updated
 	}
 	return changed
 }
@@ -522,18 +529,32 @@ func matchesQuery(query string, fields ...string) bool {
 }
 
 // artFor picks the illustration of a saved Mac: its own model, or the one a
-// Mac found on the network with the same address announced.
+// Mac found on the network with the same address announced, then what its
+// names say, then the picture kept from an earlier look.
 func (p *connectionsPage) artFor(connection savedConnection) macArt {
+	return artWith(connection, p.found)
+}
+
+// artWith is artFor against a given list of Macs found on the network.
+func artWith(connection savedConnection, found []discoveredMac) macArt {
 	model := connection.Model
-	if model == "" {
-		for _, mac := range p.found {
-			if mac.matches(connection) && mac.Model != "" {
-				model = mac.Model
-				break
-			}
+	names := []string{connection.Name, connection.Host}
+	for _, mac := range found {
+		if !mac.matches(connection) {
+			continue
 		}
+		if mac.Model != "" {
+			model = mac.Model
+		}
+		names = append(names, mac.Name, mac.Host)
 	}
-	return artForModel(model)
+	if art := resolveArt(model, names...); art != artDisplay {
+		return art
+	}
+	if kept := macArt(connection.Art); slices.Contains(allMacArt, kept) {
+		return kept
+	}
+	return artDisplay
 }
 
 // rebuild redraws the hero and the grid from the saved and found data and the search text.
@@ -861,7 +882,7 @@ func (p *connectionsPage) confirmRemove(connection savedConnection) {
 func (p *connectionsPage) foundCard(mac discoveredMac) gtk.Widgetter {
 	status, dot := p.statusRow("", "Found on this network", 7)
 	dot.AddCSSClass("online")
-	card := p.cardShell(artForModel(mac.Model), mac.Name, mac.subtitle(), status, nil)
+	card := p.cardShell(resolveArt(mac.Model, mac.Name, mac.Host), mac.Name, mac.subtitle(), status, nil)
 	button := gtk.NewButtonWithLabel("Connect")
 	button.AddCSSClass("oss-soft")
 	setAccessibleLabel(button, "Connect to "+mac.Name)

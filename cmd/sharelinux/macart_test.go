@@ -87,3 +87,52 @@ func TestIconNames(t *testing.T) {
 		}
 	}
 }
+
+func TestArtForNames(t *testing.T) {
+	cases := []struct {
+		names []string
+		want  macArt
+	}{
+		{[]string{"MacBook Pro m3 Max"}, artMacBook},
+		{[]string{"MacBook-Pro-m3-Max.local."}, artMacBook},
+		{[]string{"cicd's iMac Pro"}, artIMac},
+		{[]string{"cicds-iMac-Pro.local"}, artIMac},
+		{[]string{"Anna's MacBook Air"}, artMacBook},
+		{[]string{"MACBOOKPRO"}, artMacBook},
+		{[]string{"Office iMac"}, artIMac},
+		{[]string{"Mac mini"}, artMini},
+		{[]string{"Mac-mini.local"}, artMini},
+		{[]string{"macmini9"}, artMini},
+		{[]string{"build mini"}, artMini},
+		{[]string{"Mac Studio"}, artStudio},
+		{[]string{"macstudio"}, artStudio},
+		{[]string{"Render studio"}, artStudio},
+		{[]string{"Mac Pro"}, artPro},
+		{[]string{"macpro"}, artPro},
+		{[]string{"Edit-Mac-Pro.local"}, artPro},
+		{[]string{"Pro", "Mac"}, artDisplay},
+		{[]string{"administrator"}, artDisplay},
+		{[]string{"Alice's Mac"}, artDisplay},
+		{[]string{"192.168.1.20"}, artDisplay},
+		{[]string{"", ""}, artDisplay},
+		{nil, artDisplay},
+		{[]string{"Alice's Mac", "MacBook-Air.local"}, artMacBook},
+	}
+	for _, c := range cases {
+		if got := artForNames(c.names...); got != c.want {
+			t.Errorf("artForNames(%q) = %s, want %s", c.names, got, c.want)
+		}
+	}
+}
+
+func TestResolveArtModelWins(t *testing.T) {
+	if got := resolveArt("Macmini9,1", "MacBook Pro m3 Max"); got != artMini {
+		t.Errorf("a model beats the name: got %s", got)
+	}
+	if got := resolveArt("Mac99,1", "cicd's iMac Pro"); got != artIMac {
+		t.Errorf("an unknown model falls to the name: got %s", got)
+	}
+	if got := resolveArt("", "Alice's Mac"); got != artDisplay {
+		t.Errorf("nothing known: got %s", got)
+	}
+}
