@@ -216,11 +216,11 @@ func TestVideoHint(t *testing.T) {
 		want string
 	}{
 		{"nothing", videoCaps{}, "org.freedesktop.Platform.codecs-extra"},
-		{"gpu", videoCaps{HEVCVAAPI: true, HEVCSoftware: true, Driver: "Intel iHD driver"}, "Decodes on the GPU: Intel iHD driver"},
-		{"driver name with an empty detail", videoCaps{HEVCVAAPI: true, Driver: "Intel iHD driver for Intel(R) Gen Graphics - 25.2.3 ()"}, "Decodes on the GPU: Intel iHD driver for Intel(R) Gen Graphics - 25.2.3"},
-		{"gpu without a driver name", videoCaps{H264VAAPI: true}, "Decodes on the GPU"},
+		{"gpu", videoCaps{HEVCVAAPI: true, HEVCSoftware: true, Driver: "Intel iHD driver"}, "GPU: Intel iHD driver"},
+		{"driver name with an empty detail", videoCaps{HEVCVAAPI: true, Driver: "Intel iHD driver for Intel(R) Gen Graphics - 25.2.3 ()"}, "GPU: Intel iHD driver for Intel(R) Gen Graphics - 25.2.3"},
+		{"gpu without a driver name", videoCaps{H264VAAPI: true}, "GPU"},
 		{"cpu with a reason", videoCaps{HEVCSoftware: true, Error: "VA-API: No such file"}, "no VA-API decoder here (VA-API: No such file)"},
-		{"cpu", videoCaps{HEVCSoftware: true}, "Decodes on the CPU"},
+		{"cpu", videoCaps{HEVCSoftware: true}, "Software"},
 	}
 	for _, c := range cases {
 		got := videoHint(c.caps)

@@ -51,6 +51,9 @@ func comboRow(title, subtitle string, options []string, selected int, set func(i
 	return row
 }
 
+// videoSubtitle is the short line under the Video choice; what this computer decodes with has its own row.
+const videoSubtitle = "Uses the Mac's video stream when this computer can decode it. Applies to the next connection."
+
 func (g *gui) generalPage(prefs settings, change func(func(*settings))) *adw.PreferencesPage {
 	page := adw.NewPreferencesPage()
 	page.SetTitle("General")
@@ -81,9 +84,14 @@ func (g *gui) generalPage(prefs settings, change func(func(*settings))) *adw.Pre
 			videoSelected = index
 		}
 	}
-	picture.Add(comboRow("Video", "Uses the Mac's video stream when this computer can decode it, for one display at a time. "+videoHint(g.app.videoCapabilities())+". Applies to the next connection", videoNames, videoSelected, func(index int) {
+	picture.Add(comboRow("Video", videoSubtitle, videoNames, videoSelected, func(index int) {
 		change(func(s *settings) { s.Video = string(videoModes[index]) })
 	}))
+	decoder := adw.NewActionRow()
+	decoder.SetTitle("Decoder")
+	decoder.SetSubtitle(videoHint(g.app.videoCapabilities()))
+	decoder.SetSubtitleSelectable(true)
+	picture.Add(decoder)
 	picture.Add(switchRow("Fit the Mac to the window", "Off shows the screen at its real size and scrolls", prefs.FitWindow, func(on bool) {
 		change(func(s *settings) { s.FitWindow = on })
 	}))

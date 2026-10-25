@@ -140,7 +140,7 @@ func (c videoCaps) any() bool {
 	return c.HEVCVAAPI || c.HEVCSoftware || c.H264VAAPI || c.H264Software
 }
 
-// videoHint is the line under the Video preference that says what this machine can do.
+// videoHint is the subtitle of the Decoder row: what this machine decodes with.
 // emptyParens matches the "()" a VA-API driver prints after its version when it has no build detail.
 var emptyParens = regexp.MustCompile(`\s*\(\s*\)`)
 
@@ -155,13 +155,13 @@ func videoHint(caps videoCaps) string {
 		return "No HEVC decoder was found. In the Flatpak it comes with org.freedesktop.Platform.codecs-extra"
 	case caps.HEVCVAAPI || caps.H264VAAPI:
 		if name := driverLabel(caps.Driver); name != "" {
-			return "Decodes on the GPU: " + name
+			return "GPU: " + name
 		}
-		return "Decodes on the GPU"
+		return "GPU"
 	case caps.Error != "":
-		return "Decodes on the CPU, there is no VA-API decoder here (" + caps.Error + ")"
+		return "Software, there is no VA-API decoder here (" + caps.Error + ")"
 	}
-	return "Decodes on the CPU"
+	return "Software"
 }
 
 // softwareRenderLimit is the picture size, in pixels, up to which a window drawn by the CPU still
