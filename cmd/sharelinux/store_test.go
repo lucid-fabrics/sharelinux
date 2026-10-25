@@ -161,3 +161,43 @@ func TestConfigDirectoryMigratesTheOldName(t *testing.T) {
 		t.Fatal("a second call keeps the folder")
 	}
 }
+
+func TestStoreSaveKeepsWhatTheHomeScreenLearned(t *testing.T) {
+	s := newStore(filepath.Join(t.TempDir(), "connections.json"), memorySecrets{})
+	conn := savedConnection{User: "me", Host: "mac", Port: 5900, Model: "MacBookPro18,2", Last: &lastSession{Width: 2560, Height: 1600, Codec: "HEVC"}}
+	if err := s.Save(conn, ""); err != nil {
+		t.Fatal(err)
+	}
+	// A sign-in saves a fresh record that knows nothing of the model or the last session.
+	if err := s.Save(savedConnection{User: "me", Host: "mac", Port: 5900, Mode: "control"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	items, _ := s.List()
+	if len(items) != 1 || items[0].Model != "MacBookPro18,2" || items[0].Last == nil || items[0].Last.Width != 2560 || items[0].Mode != "control" {
+		t.Fatalf("%+v", items)
+	}
+}
+
+func TestStoreUpdate(t *testing.T) {
+	secrets := memorySecrets{}
+	s := newStore(filepath.Join(t.TempDir(), "connections.json"), secrets)
+	conn := savedConnection{User: "me", Host: "mac", Port: 5900}
+	if err := s.Save(conn, "pw"); err != nil {
+		t.Fatal(err)
+	}
+	found, err := s.Update(conn.target(), func(c *savedConnection) { c.Model = "iMac20,1" })
+	if err != nil || !found {
+		t.Fatal(found, err)
+	}
+	items, _ := s.List()
+	if items[0].Model != "iMac20,1" {
+		t.Fatalf("%+v", items)
+	}
+	if secrets[conn.target().ID()] != "pw" {
+		t.Fatal("the password must stay")
+	}
+	found, err = s.Update(target{Host: "other", Port: 5900}, func(*savedConnection) { t.Fatal("called") })
+	if err != nil || found {
+		t.Fatal("an unknown Mac is not updated", found, err)
+	}
+}

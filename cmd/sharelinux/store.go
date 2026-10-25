@@ -43,6 +43,11 @@ type savedConnection struct {
 	// LastUsed is when a session to this Mac last connected. It is zero for a
 	// connection saved by an older version.
 	LastUsed time.Time `json:"last_used,omitempty"`
+	// Model is the model identifier the Mac announced on the network, such as
+	// "MacBookPro18,2". It picks the picture on the Mac's card.
+	Model string `json:"model,omitempty"`
+	// Last describes the most recent session, for the home screen.
+	Last *lastSession `json:"last,omitempty"`
 }
 
 func (c savedConnection) target() target {
@@ -205,6 +210,14 @@ func (s *store) Save(connection savedConnection, password string) error {
 		connection.Name = connection.target().Address()
 	}
 	if index >= 0 {
+		// What the home screen learned about the Mac is not part of what a
+		// sign-in edits, so an edit keeps it.
+		if connection.Model == "" {
+			connection.Model = connections[index].Model
+		}
+		if connection.Last == nil {
+			connection.Last = connections[index].Last
+		}
 		connections[index] = connection
 	} else {
 		connections = append(connections, connection)
@@ -295,4 +308,24 @@ func (c *savedConnection) apply(opts *options) error {
 	}
 	opts.VNC = opts.VNC || c.VNC
 	return err
+}
+
+// Update changes the saved connection with the same address and user in place,
+// without touching its password. It reports false when there is no such connection.
+func (s *store) Update(t target, change func(*savedConnection)) (bool, error) {
+	s.access.Lock()
+	defer s.access.Unlock()
+	connections, err := s.load()
+	if err != nil {
+		return false, err
+	}
+	id := t.ID()
+	index := slices.IndexFunc(connections, func(other savedConnection) bool {
+		return other.target().ID() == id
+	})
+	if index < 0 {
+		return false, nil
+	}
+	change(&connections[index])
+	return true, s.write(connections)
 }

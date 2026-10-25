@@ -26,6 +26,9 @@ type discoveredMac struct {
 	Host      string
 	Addresses []string
 	Port      int
+	// Model is the identifier the Mac announces with its device info, such as
+	// "MacBookPro18,2". It is empty when the Mac did not announce one.
+	Model string
 }
 
 // unescapeLabel undoes the DNS escaping of a service instance name: a
@@ -208,7 +211,8 @@ func isIPv4(address string) bool {
 }
 
 // scanMacs browses once and returns what answered within scanWindow, calling
-// onFound for each new Mac as soon as it answers.
+// onFound for each new Mac as soon as it answers. The model each Mac announces
+// next to Screen Sharing is read in the same window.
 func scanMacs(ctx context.Context, onFound func(discoveredMac)) ([]discoveredMac, error) {
 	ctx, cancel := context.WithTimeout(ctx, scanWindow)
 	defer cancel()
@@ -229,8 +233,37 @@ func scanMacs(ctx context.Context, onFound func(discoveredMac)) ([]discoveredMac
 			}
 		}
 	}()
+	infos := make(chan *zeroconf.ServiceEntry)
+	models := map[string]string{}
+	infoBrowsed := make(chan struct{})
+	infoDone := make(chan struct{})
+	go func() {
+		defer close(infoDone)
+		for {
+			select {
+			case entry, open := <-infos:
+				if !open {
+					return
+				}
+				if model := modelFromText(entry.Text); model != "" {
+					models[strings.ToLower(strings.TrimSpace(unescapeLabel(entry.Instance)))] = model
+				}
+			case <-infoBrowsed:
+				return
+			}
+		}
+	}()
+	// The model is a nicety: a Mac that does not answer here is still listed.
+	go func() {
+		defer close(infoBrowsed)
+		_ = zeroconf.Browse(ctx, deviceInfoService, "local.", infos)
+	}()
 	err := zeroconf.Browse(ctx, rfbService, "local.", entries)
 	<-done
+	<-infoDone
+	for index := range found {
+		found[index].Model = models[strings.ToLower(found[index].Name)]
+	}
 	if err != nil && ctx.Err() == nil {
 		return found, E.Cause(err, "look for Macs on the network")
 	}
