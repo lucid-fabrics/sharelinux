@@ -3,6 +3,7 @@ package main
 import (
 	"github.com/nekohasekai/open-screen-sharing/internal/rfb"
 	"github.com/nekohasekai/open-screen-sharing/internal/rfb/media"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -111,5 +112,53 @@ func TestSummarizeSession(t *testing.T) {
 	}
 	if got := summarizeSession(1280, 800, videoStats{}, rfb.EncodingZRLE, false); got.Codec != "ZRLE" || got.Width != 1280 {
 		t.Fatalf("%+v", got)
+	}
+}
+
+func TestWriteThumbnailIsPrivateAndTightensFolder(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "thumbnails")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "a.png")
+	if err := writeThumbnail(path, []byte("one")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeThumbnail(path, []byte("two")); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("file mode %v, %v", info, err)
+	}
+	dir, _ := os.Stat(root)
+	if dir.Mode().Perm() != 0o700 {
+		t.Fatalf("an existing folder is tightened, got %v", dir.Mode().Perm())
+	}
+	if got, _ := os.ReadFile(path); string(got) != "two" {
+		t.Fatalf("content %q", got)
+	}
+	entries, _ := os.ReadDir(root)
+	if len(entries) != 1 {
+		t.Fatalf("no temporary file is left: %v", entries)
+	}
+}
+
+func TestThumbnailOnlyForSavedMac(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "thumbnails", "a.png")
+	if err := writeThumbnail(path, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if !thumbnailAllowed(true, path) {
+		t.Fatal("a saved Mac keeps its picture")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal("a saved Mac's file stays", err)
+	}
+	if thumbnailAllowed(false, path) {
+		t.Fatal("an unsaved Mac gets none")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("a stale file of an unsaved Mac is deleted", err)
 	}
 }

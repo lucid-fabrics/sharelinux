@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -30,6 +31,9 @@ func main() {
 		fatal(err)
 	}
 	connections := newStore(path, keyringSecrets{})
+	if cache, cacheErr := os.UserCacheDir(); cacheErr == nil {
+		connections.withCache(filepath.Join(cache, configName))
+	}
 	if opts.List {
 		listConnections(connections)
 		return

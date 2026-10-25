@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -53,6 +54,54 @@ func (l lastSession) chips() []chip {
 func thumbnailPath(cacheDir, id string) string {
 	sum := sha256.Sum256([]byte(id))
 	return filepath.Join(cacheDir, "thumbnails", hex.EncodeToString(sum[:8])+".png")
+}
+
+// writeThumbnail keeps a PNG as the last frame of a Mac. The file is private to
+// the user (0600, in a 0700 folder) and appears all at once, so a reader never
+// sees half a picture.
+func writeThumbnail(path string, data []byte) error {
+	directory := filepath.Dir(path)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return err
+	}
+	// MkdirAll leaves the mode of a folder that already exists.
+	if err := os.Chmod(directory, 0o700); err != nil {
+		return err
+	}
+	temporary, err := os.CreateTemp(directory, ".thumb-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(temporary.Name())
+	_, err = temporary.Write(data)
+	if err != nil {
+		temporary.Close()
+		return err
+	}
+	if err = temporary.Chmod(0o600); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err = temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporary.Name(), path)
+}
+
+// thumbnailAllowed says whether a last frame may be kept for a Mac. Only a saved
+// Mac gets one; for any other the stale file, if there is one, is deleted.
+func thumbnailAllowed(saved bool, path string) bool {
+	if !saved {
+		removeThumbnail(path)
+	}
+	return saved
+}
+
+// removeThumbnail deletes the last frame of a Mac. A missing file is fine.
+func removeThumbnail(path string) {
+	if path != "" {
+		_ = os.Remove(path)
+	}
 }
 
 // lastFrameText is the badge over the last frame, such as "LAST FRAME, 2 MIN AGO".

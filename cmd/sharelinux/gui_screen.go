@@ -269,10 +269,35 @@ func (s *screenView) stopWatching() {
 	}
 }
 
-// savePNG writes the picture as it is drawn now to a PNG file, scaled down to at most
-// maxWidth pixels wide. It reports false when nothing could be copied.
-func (s *screenView) savePNG(path string, maxWidth int) bool {
-	cpath := C.CString(path)
-	defer C.free(unsafe.Pointer(cpath))
-	return C.oss_screen_save_png(s.watch, s.c, cpath, C.int(maxWidth)) != 0
+// snapshot renders the picture as it is drawn now, scaled down to at most maxWidth
+// pixels wide. It must run on the main thread. The result is nil when nothing was
+// drawn; encode it with png, possibly on another thread, and free it with free.
+func (s *screenView) snapshot(maxWidth int) *pictureSnapshot {
+	texture := C.oss_screen_snapshot(s.watch, s.c, C.int(maxWidth))
+	if texture == nil {
+		return nil
+	}
+	return &pictureSnapshot{texture: texture}
+}
+
+// pictureSnapshot is an immutable copy of the picture, safe to use off the main thread.
+type pictureSnapshot struct {
+	texture *C.GdkTexture
+}
+
+// png encodes the snapshot. It does not touch any widget.
+func (p *pictureSnapshot) png() []byte {
+	var length C.gsize
+	data := C.oss_texture_png(p.texture, &length)
+	if data == nil {
+		return nil
+	}
+	defer C.g_free(C.gpointer(unsafe.Pointer(data)))
+	return C.GoBytes(unsafe.Pointer(data), C.int(length))
+}
+
+// free hands the snapshot back.
+func (p *pictureSnapshot) free() {
+	C.g_object_unref(C.gpointer(unsafe.Pointer(p.texture)))
+	p.texture = nil
 }

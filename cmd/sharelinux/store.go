@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -104,8 +105,17 @@ func (keyringSecrets) Delete(id string) error {
 type store struct {
 	path    string
 	secrets secretStore
+	// cacheDir holds the per-Mac last frames (thumbnails/). Removing a Mac
+	// deletes its picture there. Empty means the cache folder is unknown.
+	cacheDir string
 
 	access sync.Mutex
+}
+
+// withCache says where the last frames live, so Remove can delete them.
+func (s *store) withCache(cacheDir string) *store {
+	s.cacheDir = cacheDir
+	return s
 }
 
 func newStore(path string, secrets secretStore) *store {
@@ -258,6 +268,10 @@ func (s *store) Remove(connection savedConnection) error {
 	if err != nil {
 		return err
 	}
+	// The last frame is a picture of that Mac's screen: it goes with the Mac.
+	if s.cacheDir != "" {
+		removeThumbnail(thumbnailPath(s.cacheDir, id))
+	}
 	return s.secrets.Delete(id)
 }
 
@@ -332,6 +346,14 @@ func (s *store) Update(t target, change func(*savedConnection)) (bool, error) {
 	if index < 0 {
 		return false, nil
 	}
+	before := connections[index]
+	if before.Last != nil {
+		last := *before.Last
+		before.Last = &last
+	}
 	change(&connections[index])
+	if reflect.DeepEqual(before, connections[index]) {
+		return true, nil
+	}
 	return true, s.write(connections)
 }

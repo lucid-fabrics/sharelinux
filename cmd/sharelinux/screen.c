@@ -581,16 +581,16 @@ GdkPaintable *oss_screen_watch(GtkWidget *screen) {
 	return gtk_widget_paintable_new(screen);
 }
 
-gboolean oss_screen_save_png(GdkPaintable *watch, GtkWidget *screen, const char *path, int max_width) {
+GdkTexture *oss_screen_snapshot(GdkPaintable *watch, GtkWidget *screen, int max_width) {
 	int width = gtk_widget_get_width(screen);
 	int height = gtk_widget_get_height(screen);
 	GtkNative *native = gtk_widget_get_native(screen);
 	if (watch == NULL || width <= 0 || height <= 0 || native == NULL) {
-		return FALSE;
+		return NULL;
 	}
 	GskRenderer *renderer = gtk_native_get_renderer(native);
 	if (renderer == NULL) {
-		return FALSE;
+		return NULL;
 	}
 	float scale = (width > max_width && max_width > 0) ? (float)max_width / (float)width : 1.0f;
 	GtkSnapshot *snapshot = gtk_snapshot_new();
@@ -598,15 +598,26 @@ gboolean oss_screen_save_png(GdkPaintable *watch, GtkWidget *screen, const char 
 	gdk_paintable_snapshot(watch, snapshot, width, height);
 	GskRenderNode *node = gtk_snapshot_free_to_node(snapshot);
 	if (node == NULL) {
-		return FALSE;
+		return NULL;
 	}
 	graphene_rect_t bounds = GRAPHENE_RECT_INIT(0, 0, width * scale, height * scale);
 	GdkTexture *texture = gsk_renderer_render_texture(renderer, node, &bounds);
 	gsk_render_node_unref(node);
 	if (texture == NULL) {
-		return FALSE;
+		return NULL;
 	}
-	gboolean saved = gdk_texture_save_to_png(texture, path);
-	g_object_unref(texture);
-	return saved;
+	return texture;
+}
+
+guchar *oss_texture_png(GdkTexture *texture, gsize *length) {
+	GBytes *bytes = gdk_texture_save_to_png_bytes(texture);
+	if (bytes == NULL) {
+		return NULL;
+	}
+	gsize size = 0;
+	gconstpointer data = g_bytes_get_data(bytes, &size);
+	guchar *copy = g_memdup2(data, size);
+	g_bytes_unref(bytes);
+	*length = size;
+	return copy;
 }

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zalando/go-keyring"
 )
@@ -199,5 +200,58 @@ func TestStoreUpdate(t *testing.T) {
 	found, err = s.Update(target{Host: "other", Port: 5900}, func(*savedConnection) { t.Fatal("called") })
 	if err != nil || found {
 		t.Fatal("an unknown Mac is not updated", found, err)
+	}
+}
+
+func TestStoreRemoveDeletesThumbnail(t *testing.T) {
+	cache := t.TempDir()
+	s := newStore(filepath.Join(t.TempDir(), "c.json"), memorySecrets{}).withCache(cache)
+	conn := savedConnection{User: "me", Host: "mac", Port: 5900, Mode: "observe"}
+	other := savedConnection{User: "me", Host: "other", Port: 5900, Mode: "observe"}
+	for _, c := range []savedConnection{conn, other} {
+		if err := s.Save(c, "pw"); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeThumbnail(thumbnailPath(cache, c.target().ID()), []byte("png")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Remove(conn); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(thumbnailPath(cache, conn.target().ID())); !os.IsNotExist(err) {
+		t.Fatal("the removed Mac's picture is deleted", err)
+	}
+	if _, err := os.Stat(thumbnailPath(cache, other.target().ID())); err != nil {
+		t.Fatal("another Mac's picture stays", err)
+	}
+}
+
+func TestStoreUpdateSkipsUnchangedWrite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.json")
+	s := newStore(path, memorySecrets{})
+	conn := savedConnection{User: "me", Host: "mac", Port: 5900, Mode: "observe"}
+	if err := s.Save(conn, "pw"); err != nil {
+		t.Fatal(err)
+	}
+	set := func(c *savedConnection) { c.Last = &lastSession{Width: 10, Height: 5} }
+	if found, err := s.Update(conn.target(), set); !found || err != nil {
+		t.Fatal(found, err)
+	}
+	old := time.Unix(1000, 0)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if found, err := s.Update(conn.target(), set); !found || err != nil {
+		t.Fatal(found, err)
+	}
+	info, _ := os.Stat(path)
+	if !info.ModTime().Equal(old) {
+		t.Fatal("an unchanged update rewrote the store")
+	}
+	_, _ = s.Update(conn.target(), func(c *savedConnection) { c.Last = &lastSession{Width: 11} })
+	info, _ = os.Stat(path)
+	if info.ModTime().Equal(old) {
+		t.Fatal("a changed update must write")
 	}
 }

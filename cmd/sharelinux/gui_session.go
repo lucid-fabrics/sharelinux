@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"sync/atomic"
 	"time"
 
 	"github.com/diamondburned/gotk4-adwaita/pkg/adw"
@@ -61,13 +62,15 @@ type sessionView struct {
 	hint            *gtk.Revealer
 	hintHide        coreglib.SourceHandle
 	thumbTimer      coreglib.SourceHandle
-	displayMenu     *gio.Menu
-	actions         *gio.SimpleActionGroup
-	displayAction   *gio.SimpleAction
-	qualityAction   *gio.SimpleAction
-	statsAction     *gio.SimpleAction
-	hdrAction       *gio.SimpleAction
-	muteAction      *gio.SimpleAction
+	// thumbBusy is set while a last frame is being encoded and written.
+	thumbBusy     atomic.Bool
+	displayMenu   *gio.Menu
+	actions       *gio.SimpleActionGroup
+	displayAction *gio.SimpleAction
+	qualityAction *gio.SimpleAction
+	statsAction   *gio.SimpleAction
+	hdrAction     *gio.SimpleAction
+	muteAction    *gio.SimpleAction
 
 	stats      *gtk.Box
 	statValues []*gtk.Label
@@ -1824,7 +1827,7 @@ func (v *sessionView) captureLast() {
 	target := v.live.req.target
 	width, height := v.client.FramebufferSize()
 	summary := summarizeSession(width, height, v.videoStatistics(), v.h.lastEncoding(), v.muted)
-	_, err := v.g.app.store.Update(target, func(c *savedConnection) { c.Last = &summary })
+	saved, err := v.g.app.store.Update(target, func(c *savedConnection) { c.Last = &summary })
 	if err != nil {
 		v.g.app.logger.Debug("note the last session", "error", err)
 	}
@@ -1832,24 +1835,45 @@ func (v *sessionView) captureLast() {
 	if path == "" {
 		return
 	}
-	if err = v.saveThumbnail(path); err != nil {
-		v.g.app.logger.Debug("keep the last frame", "error", err)
+	if thumbnailAllowed(saved, path) {
+		v.saveThumbnail(target, path)
 	}
 }
 
 // thumbnailWidth is the width of the kept last frame, in pixels.
 const thumbnailWidth = 640
 
-// saveThumbnail writes the picture widget as it is drawn now, scaled down, to a PNG file.
-func (v *sessionView) saveThumbnail(path string) error {
+// saveThumbnail keeps the picture widget as it is drawn now, scaled down, as a PNG
+// file. The snapshot is taken here, on the main thread; encoding and writing run
+// on another goroutine so the window never stalls on them.
+func (v *sessionView) saveThumbnail(t target, path string) {
 	if !v.screen.Mapped() {
-		return E.New("the picture is not on screen")
+		return
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return E.Cause(err, "create the thumbnail folder")
+	if !v.thumbBusy.CompareAndSwap(false, true) {
+		return
 	}
-	if !v.screen.savePNG(path, thumbnailWidth) {
-		return E.New("the picture could not be copied")
+	snapshot := v.screen.snapshot(thumbnailWidth)
+	if snapshot == nil {
+		v.thumbBusy.Store(false)
+		return
 	}
-	return nil
+	store, logger := v.g.app.store, v.g.app.logger
+	go func() {
+		defer v.thumbBusy.Store(false)
+		data := snapshot.png()
+		snapshot.free()
+		if data == nil {
+			logger.Debug("keep the last frame", "error", "the picture could not be encoded")
+			return
+		}
+		if err := writeThumbnail(path, data); err != nil {
+			logger.Debug("keep the last frame", "error", err)
+			return
+		}
+		// The Mac may have been removed while this ran: keep nothing of it.
+		if _, found := store.Lookup(t); !found {
+			removeThumbnail(path)
+		}
+	}()
 }
