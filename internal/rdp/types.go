@@ -28,7 +28,7 @@ type Options struct {
 	Clipboard          bool
 	Audio              bool
 	Microphone         bool
-	VerifyCertificate  func(fingerprint string) error
+	VerifyCertificate  func(fingerprint string, authenticated bool) error
 	KeepAlive          bool
 	DisableUDP         bool
 	GraphicsCache      string
