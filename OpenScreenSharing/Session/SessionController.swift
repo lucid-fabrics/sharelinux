@@ -266,7 +266,6 @@ final class SessionController: Identifiable {
             if awaitsResolutionChange != oldValue { pipeline.setWaitsForDisplay(awaitsResolutionChange) }
         }
     }
-    @PerceptionIgnored private var highPerformanceAwaitsDisplay = false
     private(set) var hasPicture = false
     @PerceptionIgnored private var isScrollGliding = false
 
@@ -519,6 +518,7 @@ final class SessionController: Identifiable {
             receivesAudio: receivesAudio,
             sendsAudio: sendsAudio,
             updateRate: screenRefreshRate,
+            awaitsVirtualDisplay: wantsVirtualDisplay,
             networkConfiguration: networkConfiguration,
             keepsAlive: keepsAlive,
             disablesUDP: disablesUDP
@@ -548,18 +548,11 @@ final class SessionController: Identifiable {
         }
         awaitsVirtualDisplay = wantsVirtualDisplay
         virtualDisplayRequests.open()
-        highPerformanceAwaitsDisplay = usesHighPerformance
         requestVirtualDisplay()
-        if !wantsVirtualDisplay {
-            startHighPerformanceWithConnection()
+        if usesHighPerformance {
+            session.startHighPerformanceWithConnection()
         }
         session.connect()
-    }
-
-    private func startHighPerformanceWithConnection() {
-        guard highPerformanceAwaitsDisplay, virtualDisplayRequests.isOpening else { return }
-        highPerformanceAwaitsDisplay = false
-        session?.startHighPerformanceWithConnection()
     }
 
     func abort() {
@@ -624,7 +617,6 @@ final class SessionController: Identifiable {
         sink = nil
         virtualDisplayRequests.reset(sender: nil)
         awaitsVirtualDisplay = false
-        highPerformanceAwaitsDisplay = false
         holdsPointer = false
         remoteDragActive = false
         pointerButtons = []
@@ -1610,7 +1602,6 @@ final class SessionController: Identifiable {
         if holdingPicture, phase == .connected, !virtualDisplayRequests.isIdle {
             awaitsResolutionChange = true
         }
-        startHighPerformanceWithConnection()
     }
 
     func sendClipboardToMac() {
