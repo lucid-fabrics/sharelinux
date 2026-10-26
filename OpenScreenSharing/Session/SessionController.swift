@@ -2811,9 +2811,7 @@ nonisolated final class SessionEventSink: @unchecked Sendable {
         lock.lock()
         let previous = audioPlayer
         audioPlayer = player
-        if !sceneInBackground {
-            player?.start()
-        }
+        player?.setInBackground(sceneInBackground)
         lock.unlock()
         previous?.stop()
     }
