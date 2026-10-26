@@ -11,6 +11,8 @@ final class ScreenWindowTracker {
     private var reportedArea: CGSize?
     private var reportedScale: CGFloat?
     private var matchesWindow = false
+    private(set) var fillsScreen = false
+    private(set) var obstructions = ScreenObstructions()
     private var replacedMinimumSize: CGSize?
     private var turnsLandscape = true
     private var preferredOrientation: UIInterfaceOrientationMask?
@@ -19,22 +21,27 @@ final class ScreenWindowTracker {
     init(view: UIView, report: @escaping (_ area: CGSize, _ scale: CGFloat, _ screen: CGSize) -> Void) {
         self.view = view
         self.report = report
+        if #available(iOS 26, *) {
+            view.cornerConfiguration = .corners(radius: .containerConcentric())
+        }
     }
 
     var screenArea: CGRect? {
         guard let window = view.window else { return nil }
         var area = window.bounds
-        if view.traitCollection.userInterfaceIdiom == .phone {
-            let safeArea = window.safeAreaInsets
+        if !fillsScreen {
             var insets = UIEdgeInsets.zero
-            switch window.windowScene?.interfaceOrientationCompat {
-            case .landscapeLeft, .landscapeRight:
-                insets.left = safeArea.left
-                insets.right = safeArea.right
-            case .portraitUpsideDown: insets.bottom = safeArea.bottom
-            default: insets.top = safeArea.top
+            if view.traitCollection.userInterfaceIdiom == .phone {
+                let safeArea = window.safeAreaInsets
+                switch window.windowScene?.interfaceOrientationCompat {
+                case .landscapeLeft, .landscapeRight:
+                    insets.left = safeArea.left
+                    insets.right = safeArea.right
+                case .portraitUpsideDown: insets.bottom = safeArea.bottom
+                default: insets.top = safeArea.top
+                }
             }
-            area = area.inset(by: insets)
+            area = area.inset(by: obstructions.clearingCorners(insets))
         }
         let visible = view.convert(area, from: window).intersection(view.bounds)
         return visible.isNull || visible.isEmpty ? nil : visible
@@ -58,6 +65,26 @@ final class ScreenWindowTracker {
     }
 
     func geometryDidChange() {
+        let shape = scene.flatMap { DisplayShape(screen: $0.screen, orientation: $0.interfaceOrientationCompat) }
+        var occlusions: [CGRect] = []
+        if #available(iOS 27.1, *) {
+            occlusions = view.reservedRegions(kind: .occlusion).map { $0.frame.inset(by: $0.margins) }
+        } else if let scene, let cutout = shape?.cutout {
+            occlusions = [view.convert(cutout, from: scene.screen.coordinateSpace)]
+        }
+        if #available(iOS 26, *) {
+            obstructions = ScreenObstructions(
+                occlusions: occlusions,
+                topLeft: view.effectiveRadius(corner: .topLeft),
+                topRight: view.effectiveRadius(corner: .topRight),
+                bottomLeft: view.effectiveRadius(corner: .bottomLeft),
+                bottomRight: view.effectiveRadius(corner: .bottomRight)
+            )
+        } else {
+            let radius = windowCoversScreen ? shape?.cornerRadius ?? 0 : 0
+            obstructions = ScreenObstructions(
+                occlusions: occlusions, topLeft: radius, topRight: radius, bottomLeft: radius, bottomRight: radius)
+        }
         guard let scene, let area = screenArea?.size, area.width > 0, area.height > 0 else { return }
         updateOrientation(scene)
         let awaitsOrientation =
@@ -85,6 +112,12 @@ final class ScreenWindowTracker {
         guard orientation != preferredOrientation else { return }
         preferredOrientation = orientation
         geometryDidChange()
+    }
+
+    func setFillsScreen(_ fills: Bool) {
+        guard fills != fillsScreen else { return }
+        fillsScreen = fills
+        view.setNeedsLayout()
     }
 
     func setMatchesWindow(_ matches: Bool) {
@@ -132,18 +165,19 @@ final class ScreenWindowTracker {
         }
     }
 
+    private var windowCoversScreen: Bool {
+        guard let window = view.window, let screen = window.windowScene?.screen.bounds.size else { return false }
+        let size = window.bounds.size
+        return (abs(size.width - screen.width) < 1 && abs(size.height - screen.height) < 1)
+            || (abs(size.width - screen.height) < 1 && abs(size.height - screen.width) < 1)
+    }
+
     private func updateOrientation(_ scene: UIWindowScene) {
-        guard let window = view.window else { return }
         let orientation: UIInterfaceOrientationMask?
         if view.traitCollection.userInterfaceIdiom == .phone {
             orientation = preferredOrientation
         } else if turnsLandscape {
-            let screen = scene.screen.bounds.size
-            let size = window.bounds.size
-            let fillsScreen =
-                (abs(size.width - screen.width) < 1 && abs(size.height - screen.height) < 1)
-                || (abs(size.width - screen.height) < 1 && abs(size.height - screen.width) < 1)
-            orientation = fillsScreen ? .landscape : nil
+            orientation = windowCoversScreen ? .landscape : nil
         } else {
             orientation = nil
         }

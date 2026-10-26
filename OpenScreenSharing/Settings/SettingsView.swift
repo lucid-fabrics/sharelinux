@@ -15,6 +15,15 @@ struct SettingsView: View {
                 } label: {
                     Label("App", systemImage: "app")
                 }
+                #if os(iOS)
+                if AppSettings.offersFullScreen {
+                    NavigationLink {
+                        PictureSettingsView()
+                    } label: {
+                        Label("Picture", systemImage: "rectangle.inset.filled")
+                    }
+                }
+                #endif
                 NavigationLink {
                     KeyboardView()
                 } label: {
@@ -79,6 +88,31 @@ private struct ControlSettingsView: View {
         }
     }
 }
+
+#if os(iOS)
+private struct PictureSettingsView: View {
+    private let settings = AppSettings.shared
+
+    var body: some View {
+        WithPerceptionTracking {
+            Form {
+                Section {
+                    Toggle(isOn: Binding(get: { settings.pictureFillsScreen }, set: { settings.pictureFillsScreen = $0 })) {
+                        Label("Full Screen", systemImage: "arrow.up.left.and.arrow.down.right")
+                    }
+                } header: {
+                    Text("Behavior")
+                } footer: {
+                    Text(
+                        "Extends the picture to the edges of the screen, where parts of it may be hidden by the rounded corners or the camera. When the pointer moves into a hidden part, that part is also shown nearby."
+                    )
+                }
+            }
+            .navigationTitle("Picture")
+        }
+    }
+}
+#endif
 
 private struct AppSettingsView: View {
     @State private var language = AppLanguage.selected
