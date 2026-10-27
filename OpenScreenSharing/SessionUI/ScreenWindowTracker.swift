@@ -16,6 +16,7 @@ final class ScreenWindowTracker {
     private var replacedMinimumSize: CGSize?
     private var turnsLandscape = true
     private var preferredOrientation: UIInterfaceOrientationMask?
+    private var restoredOrientation: UIInterfaceOrientationMask?
     private var awaitsRotation = false
 
     init(view: UIView, report: @escaping (_ area: CGSize, _ scale: CGFloat, _ screen: CGSize) -> Void) {
@@ -140,6 +141,15 @@ final class ScreenWindowTracker {
             self.replacedMinimumSize = nil
         }
         SessionOrientation.update(scene, to: nil)
+        if let restoredOrientation {
+            self.restoredOrientation = nil
+            let device = UIInterfaceOrientationMask(rawValue: 1 << UIDevice.current.orientation.rawValue)
+            UIDevice.current.endGeneratingDeviceOrientationNotifications()
+            if #available(iOS 16, *) {
+                let supported = SessionOrientation.supportedOrientations(for: scene)
+                scene.requestGeometryUpdate(.iOS(interfaceOrientations: supported.contains(device) ? device : restoredOrientation))
+            }
+        }
         self.scene = nil
     }
 
@@ -180,6 +190,10 @@ final class ScreenWindowTracker {
             orientation = windowCoversScreen ? .landscape : nil
         } else {
             orientation = nil
+        }
+        if orientation != nil, restoredOrientation == nil {
+            restoredOrientation = UIInterfaceOrientationMask(rawValue: 1 << scene.interfaceOrientationCompat.rawValue)
+            UIDevice.current.beginGeneratingDeviceOrientationNotifications()
         }
         let requested = SessionOrientation.update(scene, to: orientation) { [weak self] in
             guard let self, self.awaitsRotation else { return }
