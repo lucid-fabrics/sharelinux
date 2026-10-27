@@ -65,17 +65,30 @@ struct ScreenObstructions {
     }
 
     func loupe(for icon: CGRect, in area: CGRect) -> LoupeSpot? {
-        if let occlusion = occlusions.first(where: { $0.intersects(icon) }) {
+        let offset = Self.occlusionGap + PointerLoupeView.borderWidth
+        for occlusion in occlusions {
             let gaps = [occlusion.minX - area.minX, area.maxX - occlusion.maxX, occlusion.minY - area.minY, area.maxY - occlusion.maxY]
-            let offset = Self.occlusionGap + PointerLoupeView.borderWidth
-            var frame = occlusion
+            var source = occlusion
+            let frame: CGRect
             switch gaps.indices.min(by: { gaps[$0] < gaps[$1] }) {
-            case 0: frame.origin.x = occlusion.maxX + offset
-            case 1: frame.origin.x = occlusion.minX - offset - occlusion.width
-            case 2: frame.origin.y = occlusion.maxY + offset
-            default: frame.origin.y = occlusion.minY - offset - occlusion.height
+            case 0:
+                source.origin.x = area.minX
+                source.size.width += gaps[0]
+                frame = source.offsetBy(dx: source.width + offset, dy: 0)
+            case 1:
+                source.size.width += gaps[1]
+                frame = source.offsetBy(dx: -source.width - offset, dy: 0)
+            case 2:
+                source.origin.y = area.minY
+                source.size.height += gaps[2]
+                frame = source.offsetBy(dx: 0, dy: source.height + offset)
+            default:
+                source.size.height += gaps[3]
+                frame = source.offsetBy(dx: 0, dy: -source.height - offset)
             }
-            return LoupeSpot(source: occlusion, frame: frame)
+            if source.intersects(icon) {
+                return LoupeSpot(source: source, frame: frame)
+            }
         }
         for (radius, left, top) in corners {
             let horizontal = left ? max(icon.minX, area.minX) - area.minX : area.maxX - min(icon.maxX, area.maxX)

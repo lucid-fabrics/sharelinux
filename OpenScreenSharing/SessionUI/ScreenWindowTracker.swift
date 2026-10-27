@@ -68,9 +68,7 @@ final class ScreenWindowTracker {
     func geometryDidChange() {
         let shape = scene.flatMap { DisplayShape(screen: $0.screen, orientation: $0.interfaceOrientationCompat) }
         var occlusions: [CGRect] = []
-        if #available(iOS 27.1, *) {
-            occlusions = view.reservedRegions(kind: .occlusion).map { $0.frame.inset(by: $0.margins) }
-        } else if let scene, let cutout = shape?.cutout {
+        if let scene, let cutout = shape?.cutout {
             occlusions = [view.convert(cutout, from: scene.screen.coordinateSpace)]
         }
         if #available(iOS 26, *) {
