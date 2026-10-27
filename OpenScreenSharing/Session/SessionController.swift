@@ -153,6 +153,7 @@ final class SessionController: Identifiable {
     var isToolbarVisible = false
     var isToolbarDocked = false
     var letterbox: Letterbox?
+    var debugInfoInset: CGFloat?
     private(set) var isPointerLockOn = false
     private(set) var isNativeTouchOn = SessionMemory.defaultUsesNativeTouch
     private(set) var isZoomModeOn = false

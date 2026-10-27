@@ -57,6 +57,13 @@ struct ScreenObstructions {
         return cleared
     }
 
+    func topCornerInset(left: Bool, in area: CGRect) -> CGFloat? {
+        let radius = left ? topLeft : topRight
+        let side = CGRect(x: left ? area.minX : area.midX, y: area.minY, width: area.width / 2, height: area.height)
+        guard radius > 0, !occlusions.contains(where: { $0.intersects(side) }) else { return nil }
+        return Self.cornerInset(radius: radius)
+    }
+
     func loupe(for icon: CGRect, in area: CGRect) -> LoupeSpot? {
         if let occlusion = occlusions.first(where: { $0.intersects(icon) }) {
             let gaps = [occlusion.minX - area.minX, area.maxX - occlusion.maxX, occlusion.minY - area.minY, area.maxY - occlusion.maxY]

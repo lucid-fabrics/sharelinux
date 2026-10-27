@@ -187,6 +187,9 @@ final class RemoteScreenUIView: UIView, RemoteScreen {
 
     func setNeedsRender() {
         updateLetterbox()
+        controller.debugInfoInset =
+            windowTracker.fillsScreen
+            ? windowTracker.obstructions.topCornerInset(left: effectiveUserInterfaceLayoutDirection == .rightToLeft, in: bounds) : nil
         presenter.setNeedsRender()
     }
 
