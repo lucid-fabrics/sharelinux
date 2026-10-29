@@ -79,7 +79,7 @@ func (a *app) rfbOptions(req *request, h *handler) rfb.Options {
 	}
 	if req.opts.Virtual != nil || hdr || req.opts.Display != 0 {
 		virtual, display := req.opts.Virtual, req.opts.Display
-		options.Prepare = func(client *rfb.Client) {
+		options.Prepare = func(client *rfb.Client) error {
 			if display != 0 {
 				err := client.SelectDisplay(display)
 				if err != nil {
@@ -98,6 +98,7 @@ func (a *app) rfbOptions(req *request, h *handler) rfb.Options {
 					h.toast("HDR: " + err.Error())
 				}
 			}
+			return nil
 		}
 	}
 	return options
